@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CharacterSheet, ConnectedPlayer, PlayerSlot } from "../lib/types";
+import { uploadPortraitInDev } from "../lib/devUploadPortrait";
 import type { useDmActions } from "../hooks/useGameRoom";
 
 type CharacterSheetProps = {
   sheet: CharacterSheet | null;
   canEdit: boolean;
   onChange: (sheet: CharacterSheet) => void;
+  slotId?: string | null;
   playerSlots?: PlayerSlot[];
   connectedPlayers?: ConnectedPlayer[];
   allSheets?: Record<string, CharacterSheet>;
@@ -17,6 +19,7 @@ type CharacterSheetFormProps = {
   sheet: CharacterSheet;
   canEdit: boolean;
   onChange?: (sheet: CharacterSheet) => void;
+  slotId?: string | null;
   compact?: boolean;
 };
 
@@ -57,7 +60,16 @@ function SheetSection({ title, children }: SheetSectionProps) {
 /// <summary>
 /// Shared character sheet fields for player edit and DM read-only views.
 /// </summary>
-function CharacterSheetForm({ sheet, canEdit, onChange, compact = false }: CharacterSheetFormProps) {
+function CharacterSheetForm({
+  sheet,
+  canEdit,
+  onChange,
+  slotId,
+  compact = false,
+}: CharacterSheetFormProps) {
+  const iconRef = useRef<HTMLInputElement>(null);
+  const [uploadingIcon, setUploadingIcon] = useState(false);
+  const [iconError, setIconError] = useState<string | null>(null);
   const textRows = compact ? 3 : 5;
 
   const update = (partial: Partial<CharacterSheet>) => {
@@ -67,9 +79,62 @@ function CharacterSheetForm({ sheet, canEdit, onChange, compact = false }: Chara
     onChange({ ...sheet, ...partial });
   };
 
+  const handleIconFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !canEdit || !onChange || !slotId) {
+      return;
+    }
+
+    setIconError(null);
+    setUploadingIcon(true);
+    try {
+      const uploaded = await uploadPortraitInDev(slotId, file);
+      update({ iconUrl: uploaded.url });
+    } catch (error) {
+      setIconError(error instanceof Error ? error.message : "Icon upload failed.");
+    } finally {
+      setUploadingIcon(false);
+    }
+  };
+
   return (
     <div className={`character-form${compact ? " character-form-compact" : ""}`}>
       <SheetSection title="Character">
+        <div className="sheet-icon-row">
+          {sheet.iconUrl ? (
+            <img className="sheet-portrait" src={sheet.iconUrl} alt="" />
+          ) : (
+            <div className="sheet-portrait sheet-portrait-empty">No icon</div>
+          )}
+          {canEdit && slotId ? (
+            <div className="sheet-icon-actions">
+              <button
+                type="button"
+                className="btn-compact"
+                disabled={uploadingIcon}
+                onClick={() => iconRef.current?.click()}
+              >
+                {uploadingIcon ? "Uploading…" : sheet.iconUrl ? "Change icon" : "Upload icon"}
+              </button>
+              {sheet.iconUrl ? (
+                <button type="button" className="btn-compact" onClick={() => update({ iconUrl: null })}>
+                  Remove
+                </button>
+              ) : null}
+              <input
+                ref={iconRef}
+                className="file-input-hidden"
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={(event) => {
+                  void handleIconFile(event);
+                }}
+              />
+              {iconError ? <p className="sheet-field-error">{iconError}</p> : null}
+            </div>
+          ) : null}
+        </div>
         <div className="sheet-field-grid">
           <SheetField label="Character name">
             <input
@@ -222,6 +287,7 @@ export function CharacterSheetPanel({
   sheet,
   canEdit,
   onChange,
+  slotId,
   playerSlots,
   connectedPlayers,
   allSheets,
@@ -296,7 +362,12 @@ export function CharacterSheetPanel({
                       )}
                     </div>
                     {playerSheet ? (
-                      <CharacterSheetForm sheet={playerSheet} canEdit={false} compact />
+                      <CharacterSheetForm
+                        sheet={playerSheet}
+                        canEdit={false}
+                        slotId={slot.id}
+                        compact
+                      />
                     ) : (
                       <p className="muted party-sheet-empty">
                         No sheet yet — the player fills this in after joining.
@@ -331,7 +402,12 @@ export function CharacterSheetPanel({
         <h2>Character sheet</h2>
       </header>
       <div className="side-panel-body">
-        <CharacterSheetForm sheet={sheet} canEdit={canEdit} onChange={onChange} />
+        <CharacterSheetForm
+          sheet={sheet}
+          canEdit={canEdit}
+          onChange={onChange}
+          slotId={slotId}
+        />
       </div>
     </div>
   );

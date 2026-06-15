@@ -22,6 +22,11 @@ type UploadPortraitBody = {
   dataUrl: string;
 };
 
+type UploadTokenImageBody = {
+  tokenId: string;
+  dataUrl: string;
+};
+
 /// <summary>
 /// Decodes a data URL into a binary buffer and file extension.
 /// </summary>
@@ -87,6 +92,22 @@ export async function writePortraitToDisk(
   const filename = `${slotId}.${ext}`;
   await writeFile(join(portraitsDir, filename), buffer);
   return `/portraits/${filename}`;
+}
+
+/// <summary>
+/// Writes a token image data URL to public/tokens and returns its served URL path.
+/// </summary>
+export async function writeTokenImageToDisk(
+  rootDir: string,
+  tokenId: string,
+  dataUrl: string,
+): Promise<string> {
+  const tokensDir = join(rootDir, "public", "tokens");
+  await mkdir(tokensDir, { recursive: true });
+  const { buffer, ext } = dataUrlToFile(dataUrl);
+  const filename = `${tokenId}.${ext}`;
+  await writeFile(join(tokensDir, filename), buffer);
+  return `/tokens/${filename}`;
 }
 
 /// <summary>
@@ -207,6 +228,36 @@ export function devCampaignSavePlugin(): Plugin {
             }
 
             const url = await writePortraitToDisk(server.config.root, body.slotId, body.dataUrl);
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: true, url }));
+          } catch (error) {
+            res.statusCode = 500;
+            res.end(
+              JSON.stringify({
+                error: error instanceof Error ? error.message : "Upload failed.",
+              }),
+            );
+          }
+        })();
+      });
+
+      server.middlewares.use("/__dev/upload-token-image", (req, res, next) => {
+        if (req.method !== "POST") {
+          next();
+          return;
+        }
+
+        void (async () => {
+          try {
+            const raw = await readRequestBody(req);
+            const body = JSON.parse(raw) as UploadTokenImageBody;
+            if (!body?.tokenId || !body?.dataUrl) {
+              res.statusCode = 400;
+              res.end(JSON.stringify({ error: "Invalid upload payload." }));
+              return;
+            }
+
+            const url = await writeTokenImageToDisk(server.config.root, body.tokenId, body.dataUrl);
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify({ ok: true, url }));
           } catch (error) {

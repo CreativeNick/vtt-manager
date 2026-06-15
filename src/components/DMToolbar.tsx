@@ -1,7 +1,8 @@
-import type { GameState, Token } from "../lib/types";
-import { TOKEN_COLORS } from "../lib/types";
+import { useRef, useState } from "react";
+import type { GameState } from "../lib/types";
 import type { useDmActions } from "../hooks/useGameRoom";
 import type { FogBrushMode } from "../lib/fogCanvas";
+import { AddTokenPopover } from "./AddTokenPopover";
 
 type DmToolbarProps = {
   state: GameState;
@@ -29,25 +30,11 @@ export function DMToolbar({
   fogBrushMode,
   onFogBrushModeChange,
 }: DmToolbarProps) {
+  const [tokenPopoverOpen, setTokenPopoverOpen] = useState(false);
+  const tokenAnchorRef = useRef<HTMLDivElement>(null);
   const activeScene = state.scenes.find((scene) => scene.id === state.activeSceneId);
   const sceneTokens = state.tokens.filter((token) => token.sceneId === state.activeSceneId);
   const fogAvailable = activeScene?.fogEnabled ?? false;
-
-  const handleAddToken = () => {
-    if (!activeScene) {
-      return;
-    }
-    const token: Token = {
-      id: `token-${crypto.randomUUID().slice(0, 8)}`,
-      sceneId: activeScene.id,
-      x: 200,
-      y: 200,
-      label: "Token",
-      color: TOKEN_COLORS[state.tokens.length % TOKEN_COLORS.length],
-      ownerPlayerId: null,
-    };
-    dm.addToken(token);
-  };
 
   return (
     <footer className="dm-toolbar">
@@ -69,9 +56,23 @@ export function DMToolbar({
         <>
           <div className="toolbar-group">
             <span className="toolbar-label">Play</span>
-            <button type="button" onClick={handleAddToken}>
-              + Token
-            </button>
+            <div className="token-add-anchor" ref={tokenAnchorRef}>
+              <button
+                type="button"
+                className={tokenPopoverOpen ? "active" : ""}
+                onClick={() => setTokenPopoverOpen((open) => !open)}
+              >
+                + Token
+              </button>
+              {tokenPopoverOpen ? (
+                <AddTokenPopover
+                  state={state}
+                  dm={dm}
+                  anchorRef={tokenAnchorRef}
+                  onClose={() => setTokenPopoverOpen(false)}
+                />
+              ) : null}
+            </div>
             {fogAvailable ? (
               <>
                 <button

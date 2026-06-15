@@ -25,5 +25,10 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-konva": "^19.2.5"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1",
+    "miniflare": "^4.20250710.0",
+    "undici": "^6.24.0"
   }
 }

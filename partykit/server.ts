@@ -5,6 +5,7 @@ import {
   createPlayerSlot,
   normalizeCharacterSheet,
   normalizeGameState,
+  normalizeToken,
   type ClientMessage,
   type ConnectedPlayer,
   type GameState,
@@ -369,7 +370,7 @@ export default class GameServer implements Party.Server {
         break;
       }
       case "ADD_TOKEN":
-        this.state.tokens.push(parsed.token);
+        this.state.tokens.push(normalizeToken(parsed.token));
         this.broadcastState();
         break;
       case "MOVE_TOKEN": {
@@ -383,7 +384,7 @@ export default class GameServer implements Party.Server {
       }
       case "UPDATE_TOKEN":
         this.state.tokens = this.state.tokens.map((token) =>
-          token.id === parsed.token.id ? parsed.token : token,
+          token.id === parsed.token.id ? normalizeToken(parsed.token) : token,
         );
         this.broadcastState();
         break;

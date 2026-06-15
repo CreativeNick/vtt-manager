@@ -139,6 +139,7 @@ export default function App() {
       sheet={sheet}
       canEdit={canEdit}
       onChange={updateSheet}
+      slotId={room.yourPlayerId}
       playerSlots={state?.playerSlots}
       connectedPlayers={state?.connectedPlayers}
       allSheets={state?.characterSheets}

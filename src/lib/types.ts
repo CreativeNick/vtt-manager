@@ -32,6 +32,8 @@ export type Scene = {
   backgroundColor: string;
 };
 
+export type TokenKind = "player" | "enemy";
+
 export type Token = {
   id: string;
   sceneId: string;
@@ -39,6 +41,8 @@ export type Token = {
   y: number;
   label: string;
   color: string;
+  kind: TokenKind;
+  imageUrl: string | null;
   ownerPlayerId: string | null;
 };
 
@@ -60,6 +64,7 @@ export type CharacterSheet = {
   hair: string;
   backstoryPersonality: string;
   notes: string;
+  iconUrl: string | null;
 };
 
 type LegacyCharacterSheet = Partial<CharacterSheet> & {
@@ -159,6 +164,22 @@ export const TOKEN_COLORS = [
   "#ecf0f1",
 ];
 
+export const TOKEN_PLAYER_COLOR = "#c9a227";
+export const TOKEN_ENEMY_COLOR = "#c45c5c";
+
+/// <summary>
+/// Ensures tokens include kind and image fields from older persisted rooms.
+/// </summary>
+export function normalizeToken(token: Token): Token {
+  const kind = token.kind ?? (token.ownerPlayerId ? "player" : "enemy");
+  return {
+    ...token,
+    kind,
+    imageUrl: token.imageUrl ?? null,
+    color: token.color || (kind === "enemy" ? TOKEN_ENEMY_COLOR : TOKEN_PLAYER_COLOR),
+  };
+}
+
 export function createDefaultSheet(name: string): CharacterSheet {
   return {
     characterName: name,
@@ -178,6 +199,7 @@ export function createDefaultSheet(name: string): CharacterSheet {
     hair: "",
     backstoryPersonality: "",
     notes: "",
+    iconUrl: null,
   };
 }
 
@@ -235,6 +257,7 @@ export function normalizeCharacterSheet(
     hair: sheet.hair ?? defaults.hair,
     backstoryPersonality: legacyStory || defaults.backstoryPersonality,
     notes: sheet.notes ?? defaults.notes,
+    iconUrl: sheet.iconUrl ?? sheet.portraitUrl ?? null,
   };
 }
 
@@ -284,6 +307,7 @@ export function normalizeGameState(state: GameState): GameState {
     ...state,
     playerSlots,
     characterSheets,
+    tokens: (state.tokens ?? []).map((token) => normalizeToken(token)),
   };
 }
 

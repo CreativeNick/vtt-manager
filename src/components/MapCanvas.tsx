@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Circle, Group, Image, Layer, Line, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type Konva from "konva";
-import { DEFAULT_SCENE_BACKGROUND, DEFAULT_VIEWPORT, type GameState, type MapLayer, type Viewport } from "../lib/types";
-import { canPlayerSeeScene } from "../lib/types";
+import { DEFAULT_SCENE_BACKGROUND, DEFAULT_VIEWPORT, type GameState, type MapLayer, type Token, type Viewport } from "../lib/types";
+import { canPlayerSeeScene, TOKEN_ENEMY_COLOR, TOKEN_PLAYER_COLOR } from "../lib/types";
 import type { useDmActions } from "../hooks/useGameRoom";
 import {
   fillFog,
@@ -112,6 +112,66 @@ function FogOverlay({ fogDataUrl, mapWidth, mapHeight }: FogOverlayProps) {
       height={mapHeight}
       listening={false}
     />
+  );
+}
+
+const TOKEN_RADIUS = 24;
+
+type MapTokenProps = {
+  token: Token;
+};
+
+/// <summary>
+/// Renders a map token as a colored disc or circular portrait with a name label.
+/// </summary>
+function MapToken({ token }: MapTokenProps) {
+  const [image, setImage] = useState<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (!token.imageUrl) {
+      setImage(null);
+      return;
+    }
+    const img = new window.Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => setImage(img);
+    img.src = token.imageUrl;
+  }, [token.imageUrl]);
+
+  const borderColor = token.kind === "enemy" ? TOKEN_ENEMY_COLOR : TOKEN_PLAYER_COLOR;
+
+  return (
+    <>
+      {image ? (
+        <Group
+          clipFunc={(ctx) => {
+            ctx.arc(0, 0, TOKEN_RADIUS, 0, Math.PI * 2);
+          }}
+        >
+          <Image
+            image={image}
+            x={-TOKEN_RADIUS}
+            y={-TOKEN_RADIUS}
+            width={TOKEN_RADIUS * 2}
+            height={TOKEN_RADIUS * 2}
+          />
+        </Group>
+      ) : (
+        <Circle radius={TOKEN_RADIUS - 2} fill={token.color} stroke={borderColor} strokeWidth={3} />
+      )}
+      {image ? (
+        <Circle radius={TOKEN_RADIUS} stroke={borderColor} strokeWidth={3} listening={false} />
+      ) : null}
+      <Text
+        text={token.label}
+        fontSize={12}
+        fill="#f0e6d2"
+        width={72}
+        offsetX={36}
+        offsetY={TOKEN_RADIUS + 14}
+        align="center"
+      />
+    </>
   );
 }
 
@@ -616,16 +676,7 @@ export function MapCanvas({
                   dm.moveToken(token.id, event.target.x(), event.target.y());
                 }}
               >
-                <Circle radius={22} fill={token.color} stroke="#111" strokeWidth={2} />
-                <Text
-                  text={token.label}
-                  fontSize={12}
-                  fill="#111"
-                  width={60}
-                  offsetX={30}
-                  offsetY={-34}
-                  align="center"
-                />
+                <MapToken token={token} />
               </Group>
             ))}
             {ping ? (
