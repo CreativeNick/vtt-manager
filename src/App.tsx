@@ -141,7 +141,20 @@ export default function App() {
 
         const sidebarPanel = isDm ? (
           dmView === "main" ? (
-            <SceneAccessPanel state={state} dm={dm} />
+            <div className="dm-main-sidebar">
+              <SceneAccessPanel state={state} dm={dm} />
+              <CharacterSheetPanel
+                sheet={null}
+                canEdit={false}
+                onChange={() => {}}
+                playerSlots={state.playerSlots}
+                connectedPlayers={state.connectedPlayers}
+                allSheets={state.characterSheets}
+                isDm={isDm}
+                dm={dm}
+                showSlotManagement={false}
+              />
+            </div>
           ) : dmView === "players" ? (
             <CharacterSheetPanel
               sheet={sheet}

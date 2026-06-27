@@ -60,6 +60,7 @@ export default class GameServer implements Party.Server {
       }
     }
     this.clearStaleDm();
+    await this.persistState();
   }
 
   /// <summary>
@@ -90,21 +91,22 @@ export default class GameServer implements Party.Server {
   /// <summary>
   /// Persists durable game data without ephemeral connection fields.
   /// </summary>
-  persistState() {
-    void this.room.storage.put("state", {
+  async persistState() {
+    await this.room.storage.put("state", {
       ...this.state,
       dmClientId: null,
       connectedPlayers: [],
+      publicDiceLog: (this.state.publicDiceLog ?? []).slice(-MAX_PUBLIC_DICE_LOG),
     });
   }
 
   /// <summary>
   /// Broadcasts full game state to every client with per-connection role metadata.
   /// </summary>
-  broadcastState() {
+  async broadcastState() {
     this.clearStaleDm();
     this.state = normalizeGameState(this.state);
-    this.persistState();
+    await this.persistState();
     for (const connection of this.room.getConnections()) {
       const meta = this.clients.get(connection.id);
       this.sendTo(connection, {
@@ -209,7 +211,7 @@ export default class GameServer implements Party.Server {
     this.state.viewport = this.pendingViewport;
     this.pendingViewport = null;
     this.lastViewportBroadcast = Date.now();
-    this.broadcastState();
+    void this.broadcastState();
   }
 
   onConnect(connection: Party.Connection) {
@@ -231,7 +233,7 @@ export default class GameServer implements Party.Server {
     }
 
     this.syncConnectedPlayers();
-    this.broadcastState();
+    void this.broadcastState();
   }
 
   onMessage(message: string, sender: Party.Connection) {
@@ -295,7 +297,7 @@ export default class GameServer implements Party.Server {
         role: meta.role,
         playerId: meta.playerId!,
       });
-      this.broadcastState();
+      void this.broadcastState();
       return;
     }
 
@@ -309,11 +311,14 @@ export default class GameServer implements Party.Server {
         this.sendTo(sender, { type: "ERROR", message: "Only players can update character sheets." });
         return;
       }
+      const slotName =
+        this.state.playerSlots.find((slot) => slot.id === meta.playerId)?.name ?? "Player";
+      const existing = this.state.characterSheets[meta.playerId];
       this.state.characterSheets[meta.playerId] = normalizeCharacterSheet(
-        parsed.sheet,
-        this.state.playerSlots.find((slot) => slot.id === meta.playerId)?.name ?? "Player",
+        existing ? { ...existing, ...parsed.sheet } : parsed.sheet,
+        slotName,
       );
-      this.broadcastState();
+      void this.broadcastState();
       return;
     }
 
@@ -342,7 +347,7 @@ export default class GameServer implements Party.Server {
 
         const log = this.state.publicDiceLog ?? [];
         this.state.publicDiceLog = [...log, roll].slice(-MAX_PUBLIC_DICE_LOG);
-        this.broadcastState();
+        void this.broadcastState();
       } catch (error) {
         const message = error instanceof Error ? error.message : "Invalid dice expression.";
         this.sendTo(sender, { type: "ERROR", message });
@@ -363,12 +368,12 @@ export default class GameServer implements Party.Server {
         if (this.state.scenes.some((scene) => scene.id === parsed.sceneId)) {
           this.state.activeSceneId = parsed.sceneId;
           this.state.ping = null;
-          this.broadcastState();
+          void this.broadcastState();
         }
         break;
       case "ADD_SCENE":
         this.state.scenes.push(normalizeScene(parsed.scene));
-        this.broadcastState();
+        void this.broadcastState();
         break;
       case "UPDATE_SCENE": {
         const payloadSize = JSON.stringify(parsed.scene).length;
@@ -381,7 +386,7 @@ export default class GameServer implements Party.Server {
           return;
         }
         this.applySceneUpdate(parsed.scene);
-        this.broadcastState();
+        void this.broadcastState();
         break;
       }
       case "REMOVE_SCENE": {
@@ -398,19 +403,19 @@ export default class GameServer implements Party.Server {
         if (this.state.activeSceneId === parsed.sceneId) {
           this.state.activeSceneId = this.state.scenes[0].id;
         }
-        this.broadcastState();
+        void this.broadcastState();
         break;
       }
       case "ADD_TOKEN":
         this.state.tokens.push(normalizeToken(parsed.token));
-        this.broadcastState();
+        void this.broadcastState();
         break;
       case "MOVE_TOKEN": {
         const token = this.state.tokens.find((item) => item.id === parsed.tokenId);
         if (token) {
           token.x = parsed.x;
           token.y = parsed.y;
-          this.broadcastState();
+          void this.broadcastState();
         }
         break;
       }
@@ -418,11 +423,11 @@ export default class GameServer implements Party.Server {
         this.state.tokens = this.state.tokens.map((token) =>
           token.id === parsed.token.id ? normalizeToken(parsed.token) : token,
         );
-        this.broadcastState();
+        void this.broadcastState();
         break;
       case "REMOVE_TOKEN":
         this.state.tokens = this.state.tokens.filter((token) => token.id !== parsed.tokenId);
-        this.broadcastState();
+        void this.broadcastState();
         break;
       case "SET_PING":
         this.state.ping = {
@@ -430,7 +435,7 @@ export default class GameServer implements Party.Server {
           y: parsed.y,
           sceneId: this.state.activeSceneId,
         };
-        this.broadcastState();
+        void this.broadcastState();
         setTimeout(() => {
           if (
             this.state.ping?.x === parsed.x &&
@@ -438,19 +443,19 @@ export default class GameServer implements Party.Server {
             this.state.ping?.sceneId === this.state.activeSceneId
           ) {
             this.state.ping = null;
-            this.broadcastState();
+            void this.broadcastState();
           }
         }, 3000);
         break;
       case "CLEAR_PING":
         this.state.ping = null;
-        this.broadcastState();
+        void this.broadcastState();
         break;
       case "UPDATE_FOG":
         this.state.scenes = this.state.scenes.map((scene) =>
           scene.id === parsed.sceneId ? { ...scene, fogDataUrl: parsed.fogDataUrl } : scene,
         );
-        this.broadcastState();
+        void this.broadcastState();
         break;
       case "IMPORT_CAMPAIGN": {
         const manifest = parsed.manifest;
@@ -465,7 +470,7 @@ export default class GameServer implements Party.Server {
           this.state.activeSceneId = this.state.scenes[0].id;
         }
         this.state.ping = null;
-        this.broadcastState();
+        void this.broadcastState();
         break;
       }
       case "ADD_PLAYER_SLOT": {
@@ -475,7 +480,7 @@ export default class GameServer implements Party.Server {
         );
         this.state.playerSlots.push(slot);
         this.state.characterSheets[slot.id] = createDefaultSheet(slot.name);
-        this.broadcastState();
+        void this.broadcastState();
         break;
       }
       case "UPDATE_PLAYER_SLOT": {
@@ -495,7 +500,7 @@ export default class GameServer implements Party.Server {
             clientMeta.displayName = parsed.slot.name;
           }
         }
-        this.broadcastState();
+        void this.broadcastState();
         break;
       }
       case "REMOVE_PLAYER_SLOT": {
@@ -513,7 +518,7 @@ export default class GameServer implements Party.Server {
         this.state.tokens = this.state.tokens.map((token) =>
           token.ownerPlayerId === parsed.slotId ? { ...token, ownerPlayerId: null } : token,
         );
-        this.broadcastState();
+        void this.broadcastState();
         break;
       }
       default:

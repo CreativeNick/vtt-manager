@@ -265,6 +265,13 @@ export function removeMapLayer(scene: Scene, layerId: string): Scene {
 }
 
 /// <summary>
+/// Returns whether two scenes have identical persisted fields.
+/// </summary>
+export function scenesEqual(a: Scene, b: Scene): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/// <summary>
 /// Creates an empty scene with default dimensions.
 /// </summary>
 export function createEmptyScene(name: string): Scene {

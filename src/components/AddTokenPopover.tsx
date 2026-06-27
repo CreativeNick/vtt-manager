@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { GameState, Token, TokenKind } from "../lib/types";
 import { TOKEN_ENEMY_COLOR, TOKEN_PLAYER_COLOR } from "../lib/types";
-import { uploadTokenImageInDev } from "../lib/devUploadTokenImage";
+import { uploadTokenImage } from "../lib/uploadAsset";
 import type { useDmActions } from "../hooks/useGameRoom";
 
 type AddTokenPopoverProps = {
@@ -81,7 +81,7 @@ export function AddTokenPopover({ state, dm, anchorRef, onClose }: AddTokenPopov
     setUploadError(null);
     setUploading(true);
     try {
-      const uploaded = await uploadTokenImageInDev(tokenIdRef.current, file);
+      const uploaded = await uploadTokenImage(tokenIdRef.current, file);
       setImageUrl(uploaded.url);
     } catch (uploadFailure) {
       setUploadError(

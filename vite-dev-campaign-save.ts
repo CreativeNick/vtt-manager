@@ -2,6 +2,7 @@ import type { Plugin, ViteDevServer } from "vite";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CampaignManifest } from "./src/lib/campaignManifest";
+import { parseImageDataUrl } from "./src/lib/imageDataUrl";
 import type { Scene } from "./src/lib/types";
 
 type SaveRequestBody = {
@@ -30,23 +31,9 @@ type UploadTokenImageBody = {
 /// <summary>
 /// Decodes a data URL into a binary buffer and file extension.
 /// </summary>
-export function dataUrlToFile(dataUrl: string): { buffer: Buffer; ext: string } {
-  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) {
-    throw new Error("Invalid image data URL.");
-  }
-  const mime = match[1];
-  const ext =
-    mime === "image/jpeg"
-      ? "jpg"
-      : mime === "image/webp"
-        ? "webp"
-        : mime === "image/gif"
-          ? "gif"
-          : mime === "image/svg+xml"
-            ? "svg"
-            : "png";
-  return { buffer: Buffer.from(match[2], "base64"), ext };
+function dataUrlToFile(dataUrl: string): { buffer: Buffer; ext: string } {
+  const { bytes, ext } = parseImageDataUrl(dataUrl);
+  return { buffer: Buffer.from(bytes), ext };
 }
 
 /// <summary>

@@ -381,6 +381,38 @@ code {
   display: flex;
 }
 
+.dm-main-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.dm-main-sidebar .scene-access-panel {
+  flex-shrink: 0;
+}
+
+.dm-main-sidebar .party-panel-sheets-only {
+  flex: 1;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+.party-card-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.party-card-heading h3 {
+  margin: 0;
+  font-size: 0.85rem;
+  font-family: var(--font-display);
+  color: var(--accent-bright);
+}
+
 .players-layout {
   padding: 0;
 }

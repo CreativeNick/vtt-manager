@@ -239,6 +239,32 @@ function mergeLegacyStoryFields(sheet: LegacyCharacterSheet): string {
 }
 
 /// <summary>
+/// Returns whether two character sheets have the same field values.
+/// </summary>
+export function characterSheetsEqual(a: CharacterSheet, b: CharacterSheet): boolean {
+  return (
+    a.characterName === b.characterName &&
+    a.playerName === b.playerName &&
+    a.characterClass === b.characterClass &&
+    a.subclass === b.subclass &&
+    a.level === b.level &&
+    a.xp === b.xp &&
+    a.race === b.race &&
+    a.alignment === b.alignment &&
+    a.size === b.size &&
+    a.age === b.age &&
+    a.height === b.height &&
+    a.weight === b.weight &&
+    a.eyes === b.eyes &&
+    a.skin === b.skin &&
+    a.hair === b.hair &&
+    a.backstoryPersonality === b.backstoryPersonality &&
+    a.notes === b.notes &&
+    a.iconUrl === b.iconUrl
+  );
+}
+
+/// <summary>
 /// Merges legacy and partial character sheets into the current schema.
 /// </summary>
 export function normalizeCharacterSheet(
@@ -254,13 +280,13 @@ export function normalizeCharacterSheet(
   const legacyStory = mergeLegacyStoryFields(sheet);
 
   return {
-    characterName: legacyName?.trim() || defaults.characterName,
+    characterName: sheet.characterName ?? legacyName?.trim() ?? defaults.characterName,
     playerName: sheet.playerName ?? defaults.playerName,
     characterClass: sheet.characterClass ?? defaults.characterClass,
     subclass: sheet.subclass ?? defaults.subclass,
     level: typeof sheet.level === "number" && sheet.level > 0 ? sheet.level : defaults.level,
     xp: typeof sheet.xp === "number" && sheet.xp >= 0 ? sheet.xp : defaults.xp,
-    race: sheet.race?.trim() || sheet.species?.trim() || defaults.race,
+    race: sheet.race ?? sheet.species?.trim() ?? defaults.race,
     alignment: sheet.alignment ?? defaults.alignment,
     size: sheet.size ?? defaults.size,
     age: sheet.age ?? defaults.age,
@@ -269,7 +295,8 @@ export function normalizeCharacterSheet(
     eyes: sheet.eyes ?? defaults.eyes,
     skin: sheet.skin ?? defaults.skin,
     hair: sheet.hair ?? defaults.hair,
-    backstoryPersonality: legacyStory || defaults.backstoryPersonality,
+    backstoryPersonality:
+      sheet.backstoryPersonality ?? (legacyStory || defaults.backstoryPersonality),
     notes: sheet.notes ?? defaults.notes,
     iconUrl: sheet.iconUrl ?? sheet.portraitUrl ?? null,
   };

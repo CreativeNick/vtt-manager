@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   DEFAULT_SCENE_BACKGROUND,
   SCENE_BACKGROUND_PRESETS,
@@ -7,8 +7,9 @@ import {
   type Viewport,
 } from "../lib/types";
 import type { useDmActions } from "../hooks/useGameRoom";
+import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 import { saveCampaignToDisk } from "../lib/devSaveCampaign";
-import { uploadMapImageInDev } from "../lib/devUploadMapImage";
+import { uploadMapImage } from "../lib/uploadAsset";
 import { createFullFogDataUrl } from "../lib/fogCanvas";
 import {
   addImageLayerToScene,
@@ -16,6 +17,7 @@ import {
   normalizeScene,
   prepareImageFromFile,
   removeMapLayer,
+  scenesEqual,
 } from "../lib/sceneUtils";
 
 type SceneSettingsPanelProps = {
@@ -44,11 +46,58 @@ export function SceneSettingsPanel({
   const [editingSceneId, setEditingSceneId] = useState(state.activeSceneId);
 
   const rawScene = state.scenes.find((scene) => scene.id === editingSceneId);
-  const scene = rawScene ? normalizeScene(rawScene) : undefined;
+  const serverScene = rawScene ? normalizeScene(rawScene) : undefined;
+  const [sceneDraft, setSceneDraft] = useState(serverScene);
+  const lastSentSceneRef = useRef(serverScene);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  const { debounced: debouncedPersistScene, flush: flushSceneDraft } = useDebouncedCallback(
+    (next: Scene) => {
+      lastSentSceneRef.current = next;
+      dm.updateScene(next);
+    },
+    400,
+  );
+
+  useEffect(() => {
+    if (!serverScene) {
+      setSceneDraft(undefined);
+      lastSentSceneRef.current = undefined;
+      return;
+    }
+    setSceneDraft((current) =>
+      current && lastSentSceneRef.current && scenesEqual(current, lastSentSceneRef.current)
+        ? serverScene
+        : (current ?? serverScene),
+    );
+    lastSentSceneRef.current = serverScene;
+  }, [serverScene]);
+
+  useEffect(() => {
+    const nextRaw = stateRef.current.scenes.find((item) => item.id === editingSceneId);
+    if (!nextRaw) {
+      return;
+    }
+    const next = normalizeScene(nextRaw);
+    flushSceneDraft();
+    setSceneDraft(next);
+    lastSentSceneRef.current = next;
+  }, [editingSceneId, flushSceneDraft]);
 
   const updateScene = (next: Scene) => {
+    setSceneDraft(next);
+    debouncedPersistScene(next);
+  };
+
+  const updateSceneNow = (next: Scene) => {
+    flushSceneDraft();
+    setSceneDraft(next);
+    lastSentSceneRef.current = next;
     dm.updateScene(next);
   };
+
+  const scene = sceneDraft;
 
   const handleAddScene = () => {
     const newScene = createEmptyScene(`Scene ${state.scenes.length + 1}`);
@@ -61,6 +110,7 @@ export function SceneSettingsPanel({
     if (state.scenes.length <= 1 || !scene) {
       return;
     }
+    flushSceneDraft();
     dm.removeScene(scene.id);
     const remaining = state.scenes.filter((item) => item.id !== scene.id);
     setEditingSceneId(remaining[0]?.id ?? state.activeSceneId);
@@ -79,8 +129,8 @@ export function SceneSettingsPanel({
     try {
       const label = file.name.replace(/\.[^.]+$/, "");
       if (import.meta.env.DEV) {
-        const uploaded = await uploadMapImageInDev(scene.id, file);
-        updateScene(
+        const uploaded = await uploadMapImage(scene.id, file);
+        updateSceneNow(
           addImageLayerToScene(
             scene,
             uploaded.url,
@@ -92,7 +142,7 @@ export function SceneSettingsPanel({
         );
       } else {
         const { dataUrl, width, height } = await prepareImageFromFile(file);
-        updateScene(addImageLayerToScene(scene, dataUrl, width, height, label));
+        updateSceneNow(addImageLayerToScene(scene, dataUrl, width, height, label));
       }
     } catch (error) {
       setUploadError(
@@ -107,7 +157,7 @@ export function SceneSettingsPanel({
     if (!scene) {
       return;
     }
-    updateScene({
+    updateSceneNow({
       ...scene,
       fogEnabled: enabled,
       fogDataUrl: enabled
@@ -120,7 +170,7 @@ export function SceneSettingsPanel({
     if (!scene) {
       return;
     }
-    updateScene({
+    updateSceneNow({
       ...scene,
       fogDataUrl: createFullFogDataUrl(scene.width, scene.height),
     });
@@ -130,6 +180,7 @@ export function SceneSettingsPanel({
     setSaveStatus(null);
     setSaving(true);
     try {
+      flushSceneDraft();
       const manifest = await saveCampaignToDisk(state);
       dm.importCampaign(manifest);
       setSaveStatus("Saved to public/campaign/scenes.json and public/maps/");
@@ -289,7 +340,7 @@ export function SceneSettingsPanel({
                         <button
                           type="button"
                           className="danger"
-                          onClick={() => updateScene(removeMapLayer(scene, layer.id))}
+                          onClick={() => updateSceneNow(removeMapLayer(scene, layer.id))}
                         >
                           Remove
                         </button>
