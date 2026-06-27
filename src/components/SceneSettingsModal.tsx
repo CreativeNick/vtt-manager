@@ -9,6 +9,7 @@ import {
 import type { useDmActions } from "../hooks/useGameRoom";
 import { saveCampaignToDisk } from "../lib/devSaveCampaign";
 import { uploadMapImageInDev } from "../lib/devUploadMapImage";
+import { createFullFogDataUrl } from "../lib/fogCanvas";
 import {
   addImageLayerToScene,
   createEmptyScene,
@@ -109,7 +110,9 @@ export function SceneSettingsPanel({
     updateScene({
       ...scene,
       fogEnabled: enabled,
-      fogDataUrl: enabled ? scene.fogDataUrl : null,
+      fogDataUrl: enabled
+        ? (scene.fogDataUrl ?? createFullFogDataUrl(scene.width, scene.height))
+        : null,
     });
   };
 
@@ -117,7 +120,10 @@ export function SceneSettingsPanel({
     if (!scene) {
       return;
     }
-    updateScene({ ...scene, fogDataUrl: null });
+    updateScene({
+      ...scene,
+      fogDataUrl: createFullFogDataUrl(scene.width, scene.height),
+    });
   };
 
   const handleSaveToDisk = async () => {

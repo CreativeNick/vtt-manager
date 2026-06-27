@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 type ResizableSplitProps = {
   main: React.ReactNode;
+  middle?: React.ReactNode;
   sidebar: React.ReactNode;
   storageKey?: string;
   defaultWidth?: number;
@@ -18,6 +19,7 @@ const MAX_WIDTH = 560;
 /// </summary>
 export function ResizableSplit({
   main,
+  middle,
   sidebar,
   storageKey = "cm-sidebar-width",
   defaultWidth = DEFAULT_WIDTH,
@@ -78,6 +80,7 @@ export function ResizableSplit({
   return (
     <div className="resizable-split" ref={containerRef}>
       <div className="resizable-main">{main}</div>
+      {middle ? <aside className="dice-rail">{middle}</aside> : null}
       <div
         className="resize-handle"
         role="separator"

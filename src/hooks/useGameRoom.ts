@@ -3,6 +3,7 @@ import PartySocket from "partysocket";
 import type {
   CharacterSheet,
   ClientMessage,
+  DiceRoll,
   GameState,
   JoinMessage,
   PlayerSlot,
@@ -42,8 +43,10 @@ export type GameRoom = {
   yourClientId: string | null;
   yourRole: Role | null;
   yourPlayerId: string | null;
+  privateDiceLog: DiceRoll[];
   send: (message: ClientMessage) => void;
   join: (params: JoinParams) => void;
+  rollDice: (expression: string, options?: { private?: boolean }) => void;
 };
 
 export type RoomLobby = {
@@ -127,6 +130,7 @@ export function useGameRoom(roomId: string | null): GameRoom {
   const [yourClientId, setYourClientId] = useState<string | null>(null);
   const [yourRole, setYourRole] = useState<Role | null>(null);
   const [yourPlayerId, setYourPlayerId] = useState<string | null>(null);
+  const [privateDiceLog, setPrivateDiceLog] = useState<DiceRoll[]>([]);
   const socketRef = useRef<PartySocket | null>(null);
   const pendingJoinRef = useRef<JoinMessage | null>(null);
 
@@ -136,6 +140,13 @@ export function useGameRoom(roomId: string | null): GameRoom {
       socket.send(JSON.stringify(message));
     }
   }, []);
+
+  const rollDice = useCallback(
+    (expression: string, options?: { private?: boolean }) => {
+      send({ type: "ROLL_DICE", expression, private: options?.private });
+    },
+    [send],
+  );
 
   const join = useCallback(
     (params: JoinParams) => {
@@ -173,6 +184,7 @@ export function useGameRoom(roomId: string | null): GameRoom {
 
     setStatus("connecting");
     setError(null);
+    setPrivateDiceLog([]);
 
     const socket = new PartySocket({
       host: getPartyKitHost(),
@@ -204,6 +216,8 @@ export function useGameRoom(roomId: string | null): GameRoom {
         setYourPlayerId(message.playerId);
         setStatus("joined");
         setError(null);
+      } else if (message.type === "DM_DICE_ROLL") {
+        setPrivateDiceLog((current) => [...current, message.roll].slice(-50));
       } else if (message.type === "ERROR") {
         setError(message.message);
         setStatus("connected");
@@ -236,8 +250,10 @@ export function useGameRoom(roomId: string | null): GameRoom {
     yourClientId,
     yourRole,
     yourPlayerId,
+    privateDiceLog,
     send,
     join,
+    rollDice,
   };
 }
 

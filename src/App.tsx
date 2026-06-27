@@ -4,11 +4,13 @@ import { MapCanvas } from "./components/MapCanvas";
 import { DMToolbar } from "./components/DMToolbar";
 import { SceneSettingsPanel } from "./components/SceneSettingsModal";
 import { SceneAccessPanel } from "./components/SceneAccessPanel";
+import { PlayerSceneToolbar } from "./components/PlayerSceneToolbar";
+import { DicePanel } from "./components/DicePanel";
 import { CharacterSheetPanel } from "./components/CharacterSheet";
 import { ResizableSplit } from "./components/ResizableSplit";
 import { useDmActions, useGameRoom, usePlayerSheet, type JoinParams } from "./hooks/useGameRoom";
 import type { FogBrushMode } from "./lib/fogCanvas";
-import { DEFAULT_VIEWPORT, type Viewport } from "./lib/types";
+import { DEFAULT_VIEWPORT, resolvePlayerViewingSceneId, type Viewport } from "./lib/types";
 
 type SessionParams = JoinParams & {
   roomId: string;
@@ -30,6 +32,7 @@ export default function App() {
     null,
   );
   const [viewCommandId, setViewCommandId] = useState(0);
+  const [playerViewingSceneId, setPlayerViewingSceneId] = useState<string | null>(null);
   const room = useGameRoom(session?.roomId ?? null);
   const dm = useDmActions(room);
   const { sheet, updateSheet, canEdit } = usePlayerSheet(room);
@@ -59,6 +62,22 @@ export default function App() {
     }
   }, [dmView]);
 
+  const { state, yourRole, status, error } = room;
+  const isDm = yourRole === "dm";
+
+  useEffect(() => {
+    if (isDm || !state || !room.yourPlayerId) {
+      return;
+    }
+    setPlayerViewingSceneId((current) =>
+      resolvePlayerViewingSceneId(state, room.yourPlayerId!, current),
+    );
+  }, [isDm, state, room.yourPlayerId]);
+
+  const mapSceneId = isDm
+    ? (state?.activeSceneId ?? "")
+    : (playerViewingSceneId ?? state?.activeSceneId ?? "");
+
   const handleViewCommand = (type: "fit" | "reset") => {
     const id = viewCommandId + 1;
     setViewCommandId(id);
@@ -69,8 +88,6 @@ export default function App() {
     return <JoinScreen onJoin={setSession} />;
   }
 
-  const { state, yourRole, status, error } = room;
-  const isDm = yourRole === "dm";
   const sceneEditMode = isDm && dmView === "scenes";
   const toolbarMode = dmView === "main" ? "play" : "main";
   const playControls = isDm && dmView === "main";
@@ -81,72 +98,108 @@ export default function App() {
       ? session.displayName
       : (state?.playerSlots.find((slot) => slot.id === session.slotId)?.name ?? "Player");
 
-  const mapSection = (
-    <section className="map-section">
-      <MapCanvas
-        state={state!}
-        isDm={isDm}
-        dm={dm}
-        playerSlotId={room.yourPlayerId}
-        fogMode={fogMode && playControls}
-        fogPreview={fogPreview && isDm}
-        fogBrushMode={fogBrushMode}
-        sceneEditMode={sceneEditMode}
-        viewCommand={viewCommand}
-        onSettingsViewportChange={setSettingsViewport}
-      />
-      {isDm ? (
-        <DMToolbar
-          state={state!}
-          dm={dm}
-          mode={toolbarMode}
-          fogMode={fogMode}
-          onFogModeChange={setFogMode}
-          fogPreview={fogPreview}
-          onFogPreviewChange={setFogPreview}
-          fogBrushMode={fogBrushMode}
-          onFogBrushModeChange={setFogBrushMode}
-        />
-      ) : null}
-    </section>
-  );
+  const gameContent =
+    state && status === "joined" ? (
+      (() => {
+        const mapSection = (
+          <section className="map-section">
+            <MapCanvas
+              state={state}
+              sceneId={mapSceneId}
+              isDm={isDm}
+              dm={dm}
+              playerSlotId={room.yourPlayerId}
+              fogMode={fogMode && playControls}
+              fogPreview={fogPreview && isDm}
+              fogBrushMode={fogBrushMode}
+              sceneEditMode={sceneEditMode}
+              viewCommand={viewCommand}
+              onSettingsViewportChange={setSettingsViewport}
+            />
+            {isDm ? (
+              <DMToolbar
+                state={state}
+                dm={dm}
+                mode={toolbarMode}
+                fogMode={fogMode}
+                onFogModeChange={setFogMode}
+                fogPreview={fogPreview}
+                onFogPreviewChange={setFogPreview}
+                fogBrushMode={fogBrushMode}
+                onFogBrushModeChange={setFogBrushMode}
+              />
+            ) : (
+              <PlayerSceneToolbar
+                state={state}
+                playerSlotId={room.yourPlayerId!}
+                viewingSceneId={playerViewingSceneId}
+                onViewingSceneChange={setPlayerViewingSceneId}
+              />
+            )}
+          </section>
+        );
 
-  const sidebar = isDm ? (
-    dmView === "main" ? (
-      <SceneAccessPanel state={state!} dm={dm} />
-    ) : dmView === "players" ? (
-      <CharacterSheetPanel
-        sheet={sheet}
-        canEdit={canEdit}
-        onChange={updateSheet}
-        playerSlots={state?.playerSlots}
-        connectedPlayers={state?.connectedPlayers}
-        allSheets={state?.characterSheets}
-        isDm={isDm}
-        dm={dm}
-      />
-    ) : (
-      <SceneSettingsPanel
-        state={state!}
-        dm={dm}
-        viewport={settingsViewport}
-        onFitView={() => handleViewCommand("fit")}
-        onResetView={() => handleViewCommand("reset")}
-      />
-    )
-  ) : (
-    <CharacterSheetPanel
-      sheet={sheet}
-      canEdit={canEdit}
-      onChange={updateSheet}
-      slotId={room.yourPlayerId}
-      playerSlots={state?.playerSlots}
-      connectedPlayers={state?.connectedPlayers}
-      allSheets={state?.characterSheets}
-      isDm={isDm}
-      dm={dm}
-    />
-  );
+        const sidebarPanel = isDm ? (
+          dmView === "main" ? (
+            <SceneAccessPanel state={state} dm={dm} />
+          ) : dmView === "players" ? (
+            <CharacterSheetPanel
+              sheet={sheet}
+              canEdit={canEdit}
+              onChange={updateSheet}
+              playerSlots={state.playerSlots}
+              connectedPlayers={state.connectedPlayers}
+              allSheets={state.characterSheets}
+              isDm={isDm}
+              dm={dm}
+            />
+          ) : (
+            <SceneSettingsPanel
+              state={state}
+              dm={dm}
+              viewport={settingsViewport}
+              onFitView={() => handleViewCommand("fit")}
+              onResetView={() => handleViewCommand("reset")}
+            />
+          )
+        ) : (
+          <CharacterSheetPanel
+            sheet={sheet}
+            canEdit={canEdit}
+            onChange={updateSheet}
+            slotId={room.yourPlayerId}
+            playerSlots={state.playerSlots}
+            connectedPlayers={state.connectedPlayers}
+            allSheets={state.characterSheets}
+            isDm={isDm}
+            dm={dm}
+          />
+        );
+
+        const dicePanel = (
+          <DicePanel
+            isDm={isDm}
+            yourPlayerId={room.yourPlayerId}
+            publicRolls={state.publicDiceLog}
+            privateRolls={room.privateDiceLog}
+            onRoll={room.rollDice}
+          />
+        );
+
+        return (
+          <main className={`game-layout${dmView === "players" && isDm ? " players-layout" : ""}`}>
+            {showMap ? (
+              <ResizableSplit main={mapSection} middle={dicePanel} sidebar={sidebarPanel} />
+            ) : (
+              <div className="layout-with-dice-rail">
+                <aside className="dice-rail">{dicePanel}</aside>
+                {sidebarPanel}
+              </div>
+            )}
+          </main>
+        );
+      })()
+    ) : null;
 
   return (
     <div className="app">
@@ -204,14 +257,8 @@ export default function App() {
             Back to join screen
           </button>
         </div>
-      ) : state && status === "joined" ? (
-        <main className={`game-layout${dmView === "players" && isDm ? " players-layout" : ""}`}>
-          {showMap ? (
-            <ResizableSplit main={mapSection} sidebar={sidebar} />
-          ) : (
-            sidebar
-          )}
-        </main>
+      ) : gameContent ? (
+        gameContent
       ) : (
         <div className="loading">Connecting to room...</div>
       )}

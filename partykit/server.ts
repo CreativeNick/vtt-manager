@@ -8,12 +8,14 @@ import {
   normalizeToken,
   type ClientMessage,
   type ConnectedPlayer,
+  type DiceRoll,
   type GameState,
   type Role,
   type Scene,
   type ServerMessage,
 } from "../src/lib/types";
 import { normalizeScene } from "../src/lib/sceneUtils";
+import { rollDiceExpression } from "../src/lib/dice";
 import { loadCampaignFromDisk } from "./loadCampaign";
 
 type ClientMeta = {
@@ -25,6 +27,7 @@ type ClientMeta = {
 
 const ROOM_KEY = "room-key";
 const VIEWPORT_THROTTLE_MS = 66;
+const MAX_PUBLIC_DICE_LOG = 50;
 
 export default class GameServer implements Party.Server {
   state: GameState;
@@ -314,6 +317,39 @@ export default class GameServer implements Party.Server {
       return;
     }
 
+    if (parsed.type === "ROLL_DICE") {
+      try {
+        const result = rollDiceExpression(parsed.expression);
+        const roll: DiceRoll = {
+          id: `roll-${crypto.randomUUID().slice(0, 8)}`,
+          rollerName: meta.displayName?.trim() || "Unknown",
+          rollerId: meta.playerId ?? "unknown",
+          expression: result.expression,
+          rolls: result.rolls,
+          modifier: result.modifier,
+          total: result.total,
+          timestamp: Date.now(),
+        };
+
+        if (parsed.private) {
+          if (!this.isDm(sender.id)) {
+            this.sendTo(sender, { type: "ERROR", message: "Only the DM can make secret rolls." });
+            return;
+          }
+          this.sendTo(sender, { type: "DM_DICE_ROLL", roll });
+          return;
+        }
+
+        const log = this.state.publicDiceLog ?? [];
+        this.state.publicDiceLog = [...log, roll].slice(-MAX_PUBLIC_DICE_LOG);
+        this.broadcastState();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Invalid dice expression.";
+        this.sendTo(sender, { type: "ERROR", message });
+      }
+      return;
+    }
+
     if (!this.isDm(sender.id)) {
       this.sendTo(sender, { type: "ERROR", message: "Only the DM can control the map." });
       return;
@@ -332,10 +368,6 @@ export default class GameServer implements Party.Server {
         break;
       case "ADD_SCENE":
         this.state.scenes.push(normalizeScene(parsed.scene));
-        this.state.playerSlots = this.state.playerSlots.map((slot) => ({
-          ...slot,
-          visibleSceneIds: [...new Set([...slot.visibleSceneIds, parsed.scene.id])],
-        }));
         this.broadcastState();
         break;
       case "UPDATE_SCENE": {

@@ -16,6 +16,7 @@ import { moveMapLayer, normalizeScene, fitViewportToScene } from "../lib/sceneUt
 
 type MapCanvasProps = {
   state: GameState;
+  sceneId: string;
   isDm: boolean;
   playerSlotId?: string | null;
   dm: ReturnType<typeof useDmActions>;
@@ -81,13 +82,22 @@ type FogOverlayProps = {
   fogDataUrl: string | null;
   mapWidth: number;
   mapHeight: number;
+  opacity?: number;
+  playerOpaque?: boolean;
 };
 
 /// <summary>
 /// Renders the fog mask over the map so players (and DM preview) only see revealed areas.
 /// </summary>
-function FogOverlay({ fogDataUrl, mapWidth, mapHeight }: FogOverlayProps) {
+function FogOverlay({
+  fogDataUrl,
+  mapWidth,
+  mapHeight,
+  opacity = 1,
+  playerOpaque = false,
+}: FogOverlayProps) {
   const [fogImage, setFogImage] = useState<HTMLImageElement | null>(null);
+  const overlayOpacity = playerOpaque ? 1 : opacity;
 
   useEffect(() => {
     if (!fogDataUrl) {
@@ -100,7 +110,17 @@ function FogOverlay({ fogDataUrl, mapWidth, mapHeight }: FogOverlayProps) {
   }, [fogDataUrl]);
 
   if (!fogImage) {
-    return <Rect x={0} y={0} width={mapWidth} height={mapHeight} fill="rgba(0,0,0,0.92)" listening={false} />;
+    return (
+      <Rect
+        x={0}
+        y={0}
+        width={mapWidth}
+        height={mapHeight}
+        fill="#000000"
+        opacity={overlayOpacity}
+        listening={false}
+      />
+    );
   }
 
   return (
@@ -110,6 +130,7 @@ function FogOverlay({ fogDataUrl, mapWidth, mapHeight }: FogOverlayProps) {
       y={0}
       width={mapWidth}
       height={mapHeight}
+      opacity={overlayOpacity}
       listening={false}
     />
   );
@@ -238,10 +259,11 @@ function isOnDraggableNode(event: KonvaEventObject<PointerEvent>) {
 }
 
 /// <summary>
-/// Konva canvas for the shared battle map with DM viewport sync, tokens, grid, and fog.
+/// Konva canvas for the shared battle map; DM drives shared scene state, players view locally.
 /// </summary>
 export function MapCanvas({
   state,
+  sceneId,
   isDm,
   playerSlotId,
   dm,
@@ -272,9 +294,9 @@ export function MapCanvas({
   const dmSceneIdRef = useRef<string | null>(null);
   const dmSettingsModeRef = useRef(false);
 
-  const rawScene = state.scenes.find((scene) => scene.id === state.activeSceneId);
+  const rawScene = state.scenes.find((scene) => scene.id === sceneId);
   const activeScene = rawScene ? normalizeScene(rawScene) : undefined;
-  const sceneTokens = state.tokens.filter((token) => token.sceneId === state.activeSceneId);
+  const sceneTokens = state.tokens.filter((token) => token.sceneId === sceneId);
   const mapWidth = activeScene?.width ?? 800;
   const mapHeight = activeScene?.height ?? 600;
   const sceneBackground = activeScene?.backgroundColor ?? DEFAULT_SCENE_BACKGROUND;
@@ -282,7 +304,11 @@ export function MapCanvas({
   const showFog = Boolean(
     activeScene?.fogEnabled && (!isDm || (fogPreview && !sceneEditMode)),
   );
+  const dmFogPreviewOpacity = 0.5;
+  const fogOverlayOpacity = isDm && fogPreview && !sceneEditMode ? dmFogPreviewOpacity : 1;
   const playerShowFog = Boolean(activeScene?.fogEnabled);
+  const fogActiveForView = isDm ? showFog : playerShowFog;
+  const canvasBackground = fogActiveForView ? "#000000" : sceneBackground;
   const fogDataUrl = isDm ? (localFogDataUrl ?? activeScene?.fogDataUrl ?? null) : (activeScene?.fogDataUrl ?? null);
   const canPan = isDm || !isDm;
   const canZoom = isDm || !isDm;
@@ -291,9 +317,7 @@ export function MapCanvas({
       ? state.playerSlots.find((slot) => slot.id === playerSlotId)
       : undefined;
   const sceneHidden =
-    !isDm &&
-    playerSlot &&
-    !canPlayerSeeScene(playerSlot, state.activeSceneId);
+    !isDm && playerSlot && !canPlayerSeeScene(playerSlot, sceneId);
 
   useEffect(() => {
     if (!isDm) {
@@ -336,7 +360,7 @@ export function MapCanvas({
   useEffect(() => {
     playerInitializedRef.current = false;
     setSelectedLayerId(null);
-  }, [state.activeSceneId]);
+  }, [sceneId]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -593,8 +617,7 @@ export function MapCanvas({
     isPaintingFog.current = false;
   };
 
-  const ping =
-    state.ping && state.ping.sceneId === state.activeSceneId ? state.ping : null;
+  const ping = state.ping && state.ping.sceneId === sceneId ? state.ping : null;
 
   const fogBadgeText =
     fogBrushMode === "reveal"
@@ -605,7 +628,7 @@ export function MapCanvas({
     <div
       ref={containerRef}
       className={`map-canvas ${isDm ? "dm" : "player"} ${fogMode ? "fog-mode" : ""} ${sceneEditMode ? "scene-edit" : ""}`}
-      style={{ backgroundColor: sceneBackground }}
+      style={{ backgroundColor: canvasBackground }}
       onContextMenu={(event) => event.preventDefault()}
       onMouseDown={(event) => {
         if (event.button === 1) {
@@ -664,7 +687,13 @@ export function MapCanvas({
               <SceneGrid width={mapWidth} height={mapHeight} gridSize={activeScene.gridSize} />
             ) : null}
             {(isDm ? showFog : playerShowFog) && activeScene ? (
-              <FogOverlay fogDataUrl={fogDataUrl} mapWidth={mapWidth} mapHeight={mapHeight} />
+              <FogOverlay
+                fogDataUrl={fogDataUrl}
+                mapWidth={mapWidth}
+                mapHeight={mapHeight}
+                opacity={fogOverlayOpacity}
+                playerOpaque={!isDm}
+              />
             ) : null}
             {sceneTokens.map((token) => (
               <Group
@@ -717,7 +746,7 @@ export function MapCanvas({
       ) : null}
       {!isDm && !sceneHidden ? <div className="player-badge">Pan & zoom freely · scroll or drag</div> : null}
       {isDm && fogPreview && !sceneEditMode && activeScene?.fogEnabled ? (
-        <div className="fog-badge">Fog preview on — players see this</div>
+        <div className="fog-badge">Fog preview on — semi-transparent for you; players see full fog</div>
       ) : null}
       {isDm && !fogPreview && !sceneEditMode && activeScene?.fogEnabled ? (
         <div className="fog-badge xray-badge">X-ray on — fog hidden for you only</div>

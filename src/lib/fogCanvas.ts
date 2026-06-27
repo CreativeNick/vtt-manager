@@ -91,3 +91,14 @@ export function paintFogBrush(
 export function fogCanvasToDataUrl(canvas: HTMLCanvasElement): string {
   return canvas.toDataURL("image/png");
 }
+
+/// <summary>
+/// Builds a fully fogged opaque mask for the given map dimensions.
+/// </summary>
+export function createFullFogDataUrl(width: number, height: number): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  fillFog(canvas);
+  return fogCanvasToDataUrl(canvas);
+}

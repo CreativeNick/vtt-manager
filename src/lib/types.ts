@@ -98,6 +98,17 @@ export type ConnectedPlayer = {
   displayName: string;
 };
 
+export type DiceRoll = {
+  id: string;
+  rollerName: string;
+  rollerId: string;
+  expression: string;
+  rolls: number[];
+  modifier: number;
+  total: number;
+  timestamp: number;
+};
+
 export type GameState = {
   roomId: string;
   dmClientId: string | null;
@@ -109,6 +120,7 @@ export type GameState = {
   characterSheets: Record<string, CharacterSheet>;
   connectedPlayers: ConnectedPlayer[];
   ping: { x: number; y: number; sceneId: string } | null;
+  publicDiceLog: DiceRoll[];
 };
 
 export type JoinMessage =
@@ -133,12 +145,14 @@ export type ClientMessage =
   | { type: "IMPORT_CAMPAIGN"; manifest: CampaignManifest }
   | { type: "ADD_PLAYER_SLOT"; name: string }
   | { type: "UPDATE_PLAYER_SLOT"; slot: PlayerSlot }
-  | { type: "REMOVE_PLAYER_SLOT"; slotId: string };
+  | { type: "REMOVE_PLAYER_SLOT"; slotId: string }
+  | { type: "ROLL_DICE"; expression: string; private?: boolean };
 
 export type ServerMessage =
   | { type: "STATE"; state: GameState; yourClientId: string; yourRole: Role | null }
   | { type: "ERROR"; message: string }
-  | { type: "JOINED"; role: Role; playerId: string };
+  | { type: "JOINED"; role: Role; playerId: string }
+  | { type: "DM_DICE_ROLL"; roll: DiceRoll };
 
 export const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, scale: 1 };
 
@@ -294,6 +308,38 @@ export function canPlayerSeeScene(slot: PlayerSlot, sceneId: string): boolean {
 }
 
 /// <summary>
+/// Returns scenes a player slot is allowed to view.
+/// </summary>
+export function getVisibleScenesForPlayer(state: GameState, slotId: string): Scene[] {
+  const slot = state.playerSlots.find((item) => item.id === slotId);
+  if (!slot) {
+    return [];
+  }
+  return state.scenes.filter((scene) => canPlayerSeeScene(slot, scene.id));
+}
+
+/// <summary>
+/// Picks a valid player viewing scene, preserving their choice when still allowed.
+/// </summary>
+export function resolvePlayerViewingSceneId(
+  state: GameState,
+  slotId: string,
+  current: string | null,
+): string | null {
+  const visibleScenes = getVisibleScenesForPlayer(state, slotId);
+  if (visibleScenes.length === 0) {
+    return null;
+  }
+  if (current && visibleScenes.some((scene) => scene.id === current)) {
+    return current;
+  }
+  if (visibleScenes.some((scene) => scene.id === state.activeSceneId)) {
+    return state.activeSceneId;
+  }
+  return visibleScenes[0].id;
+}
+
+/// <summary>
 /// Ensures game state includes the playerSlots array from older persisted rooms.
 /// </summary>
 export function normalizeGameState(state: GameState): GameState {
@@ -308,6 +354,7 @@ export function normalizeGameState(state: GameState): GameState {
     playerSlots,
     characterSheets,
     tokens: (state.tokens ?? []).map((token) => normalizeToken(token)),
+    publicDiceLog: state.publicDiceLog ?? [],
   };
 }
 
@@ -375,5 +422,6 @@ export function createInitialState(roomId: string): GameState {
     characterSheets: {},
     connectedPlayers: [],
     ping: null,
+    publicDiceLog: [],
   };
 }
