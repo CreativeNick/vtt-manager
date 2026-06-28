@@ -65,6 +65,13 @@ export async function uploadTokenImage(tokenId: string, file: File): Promise<{ u
   return { url: payload.url! };
 }
 
+export async function uploadCampaignIcon(roomId: string, file: File): Promise<{ url: string }> {
+  const { dataUrl } = await readImageFromFile(file);
+  const path = import.meta.env.DEV ? "/__dev/upload-campaign-icon" : "/api/upload-campaign-icon";
+  const payload = await postUpload(path, { roomId, dataUrl });
+  return { url: payload.url! };
+}
+
 /// <summary>
 /// Uploads a map layer image and returns its URL plus layer metadata.
 /// </summary>

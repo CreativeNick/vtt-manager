@@ -120,6 +120,92 @@ export function useRoomLobby(roomId: string, enabled: boolean): RoomLobby {
   return { status, error, state, availableSlots };
 }
 
+export type CampaignPlayerCount = {
+  count: number | null;
+  loading: boolean;
+};
+
+/// <summary>
+/// Counts connected player slots in a room lobby, excluding the dungeon master.
+/// </summary>
+function lobbyPlayerCount(state: GameState): number {
+  return state.connectedPlayers.filter((player) => player.playerId !== "dm").length;
+}
+
+/// <summary>
+/// Opens lightweight lobby sockets for each room and tracks live player counts.
+/// </summary>
+export function useCampaignPlayerCounts(roomIds: string[]): Record<string, CampaignPlayerCount> {
+  const stableRoomIds = useMemo(() => {
+    const ids = roomIds.map((id) => id.trim()).filter(Boolean);
+    return [...new Set(ids)].sort();
+  }, [roomIds]);
+
+  const roomKey = stableRoomIds.join("|");
+  const [counts, setCounts] = useState<Record<string, CampaignPlayerCount>>({});
+
+  useEffect(() => {
+    if (stableRoomIds.length === 0) {
+      setCounts({});
+      return;
+    }
+
+    setCounts(
+      Object.fromEntries(
+        stableRoomIds.map((id) => [id, { count: null, loading: true }]),
+      ),
+    );
+
+    const sockets = stableRoomIds.map((roomId) => {
+      const socket = new PartySocket({
+        host: getPartyKitHost(),
+        room: roomId,
+        party: PARTYKIT_PARTY,
+      });
+
+      socket.addEventListener("message", (event) => {
+        const message = JSON.parse(event.data as string) as ServerMessage;
+        if (message.type === "STATE") {
+          setCounts((prev) => ({
+            ...prev,
+            [roomId]: { count: lobbyPlayerCount(message.state), loading: false },
+          }));
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        setCounts((prev) => ({
+          ...prev,
+          [roomId]: {
+            count: prev[roomId]?.count ?? null,
+            loading: false,
+          },
+        }));
+      });
+
+      socket.addEventListener("error", () => {
+        setCounts((prev) => ({
+          ...prev,
+          [roomId]: {
+            count: prev[roomId]?.count ?? null,
+            loading: false,
+          },
+        }));
+      });
+
+      return socket;
+    });
+
+    return () => {
+      for (const socket of sockets) {
+        socket.close();
+      }
+    };
+  }, [roomKey, stableRoomIds]);
+
+  return counts;
+}
+
 /// <summary>
 /// Manages the PartyKit WebSocket connection and authoritative game state for a room.
 /// </summary>

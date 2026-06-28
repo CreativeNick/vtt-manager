@@ -28,6 +28,11 @@ type UploadTokenImageBody = {
   dataUrl: string;
 };
 
+type UploadCampaignIconBody = {
+  roomId: string;
+  dataUrl: string;
+};
+
 /// <summary>
 /// Decodes a data URL into a binary buffer and file extension.
 /// </summary>
@@ -95,6 +100,22 @@ export async function writeTokenImageToDisk(
   const filename = `${tokenId}.${ext}`;
   await writeFile(join(tokensDir, filename), buffer);
   return `/tokens/${filename}`;
+}
+
+/// <summary>
+/// Writes a campaign icon data URL to public/campaign-icons and returns its served URL path.
+/// </summary>
+export async function writeCampaignIconToDisk(
+  rootDir: string,
+  roomId: string,
+  dataUrl: string,
+): Promise<string> {
+  const iconsDir = join(rootDir, "public", "campaign-icons");
+  await mkdir(iconsDir, { recursive: true });
+  const { buffer, ext } = dataUrlToFile(dataUrl);
+  const filename = `${roomId}.${ext}`;
+  await writeFile(join(iconsDir, filename), buffer);
+  return `/campaign-icons/${filename}`;
 }
 
 /// <summary>
@@ -245,6 +266,36 @@ export function devCampaignSavePlugin(): Plugin {
             }
 
             const url = await writeTokenImageToDisk(server.config.root, body.tokenId, body.dataUrl);
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: true, url }));
+          } catch (error) {
+            res.statusCode = 500;
+            res.end(
+              JSON.stringify({
+                error: error instanceof Error ? error.message : "Upload failed.",
+              }),
+            );
+          }
+        })();
+      });
+
+      server.middlewares.use("/__dev/upload-campaign-icon", (req, res, next) => {
+        if (req.method !== "POST") {
+          next();
+          return;
+        }
+
+        void (async () => {
+          try {
+            const raw = await readRequestBody(req);
+            const body = JSON.parse(raw) as UploadCampaignIconBody;
+            if (!body?.roomId || !body?.dataUrl) {
+              res.statusCode = 400;
+              res.end(JSON.stringify({ error: "Invalid upload payload." }));
+              return;
+            }
+
+            const url = await writeCampaignIconToDisk(server.config.root, body.roomId, body.dataUrl);
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify({ ok: true, url }));
           } catch (error) {
