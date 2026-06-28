@@ -1,7 +1,14 @@
 import type { Plugin, ViteDevServer } from "vite";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CampaignManifest } from "./src/lib/campaignManifest";
+import {
+  parseRegistryFile,
+  serializeRegistryFile,
+  upsertRegistryEntry,
+  DEFAULT_CAMPAIGN_REGISTRY,
+  type CampaignRegistryEntry,
+} from "./src/lib/campaignRegistry";
 import { parseImageDataUrl } from "./src/lib/imageDataUrl";
 import type { Scene } from "./src/lib/types";
 
@@ -32,6 +39,45 @@ type UploadCampaignIconBody = {
   roomId: string;
   dataUrl: string;
 };
+
+type CampaignRoomBody = {
+  roomId?: string;
+  name?: string;
+  iconUrl?: string | null;
+};
+
+/// <summary>
+/// Returns the path to the shared campaign registry JSON file.
+/// </summary>
+function campaignRegistryPath(rootDir: string): string {
+  return join(rootDir, "public", "campaign", "rooms.json");
+}
+
+/// <summary>
+/// Reads the shared campaign registry from disk for local development.
+/// </summary>
+async function readRegistryFromDisk(rootDir: string): Promise<CampaignRegistryEntry[]> {
+  try {
+    const raw = await readFile(campaignRegistryPath(rootDir), "utf8");
+    return parseRegistryFile(raw);
+  } catch {
+    const fallback = [...DEFAULT_CAMPAIGN_REGISTRY];
+    await writeRegistryToDisk(rootDir, fallback);
+    return fallback;
+  }
+}
+
+/// <summary>
+/// Writes the shared campaign registry to disk for local development.
+/// </summary>
+async function writeRegistryToDisk(
+  rootDir: string,
+  rooms: CampaignRegistryEntry[],
+): Promise<void> {
+  const filePath = campaignRegistryPath(rootDir);
+  await mkdir(join(rootDir, "public", "campaign"), { recursive: true });
+  await writeFile(filePath, serializeRegistryFile(rooms));
+}
 
 /// <summary>
 /// Decodes a data URL into a binary buffer and file extension.
@@ -307,6 +353,64 @@ export function devCampaignSavePlugin(): Plugin {
             );
           }
         })();
+      });
+
+      server.middlewares.use("/__dev/campaign-rooms", (req, res, next) => {
+        if (req.method === "GET") {
+          void (async () => {
+            try {
+              const rooms = await readRegistryFromDisk(server.config.root);
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ rooms }));
+            } catch (error) {
+              res.statusCode = 500;
+              res.end(
+                JSON.stringify({
+                  error: error instanceof Error ? error.message : "Could not load campaign rooms.",
+                }),
+              );
+            }
+          })();
+          return;
+        }
+
+        if (req.method === "POST") {
+          void (async () => {
+            try {
+              const raw = await readRequestBody(req);
+              const body = JSON.parse(raw) as CampaignRoomBody;
+              const roomId = body.roomId?.trim();
+              const name = body.name?.trim();
+              if (!roomId || !name) {
+                res.statusCode = 400;
+                res.end(JSON.stringify({ error: "roomId and name are required." }));
+                return;
+              }
+
+              const rooms = await readRegistryFromDisk(server.config.root);
+              const nextRooms = upsertRegistryEntry(rooms, {
+                roomId,
+                name,
+                iconUrl: body.iconUrl ?? null,
+                createdAt: Date.now(),
+              });
+              await writeRegistryToDisk(server.config.root, nextRooms);
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ rooms: nextRooms }));
+            } catch (error) {
+              res.statusCode = 500;
+              res.end(
+                JSON.stringify({
+                  error:
+                    error instanceof Error ? error.message : "Could not register campaign room.",
+                }),
+              );
+            }
+          })();
+          return;
+        }
+
+        next();
       });
 
       server.middlewares.use("/__dev/save-campaign", (req, res, next) => {

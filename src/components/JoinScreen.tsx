@@ -3,6 +3,11 @@ import { createPortal } from "react-dom";
 import type { JoinParams } from "../hooks/useGameRoom";
 import { useCampaignPlayerCounts, useRoomLobby } from "../hooks/useGameRoom";
 import {
+  loadMergedCampaigns,
+  mergeRegistryWithLocal,
+  registerCampaignRoom,
+} from "../lib/campaignRegistry";
+import {
   ensureDefaultCampaigns,
   formatCampaignName,
   generateRoomId,
@@ -247,6 +252,25 @@ export function JoinScreen({ onJoin }: JoinScreenProps) {
     } satisfies SavedCampaign);
 
   useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const merged = await loadMergedCampaigns();
+        if (!cancelled && merged.length > 0) {
+          setCampaigns(merged);
+        }
+      } catch {
+        // Keep the local fallback list when the shared registry is unavailable.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const url = new URL(window.location.href);
     url.searchParams.set("room", roomId);
     url.searchParams.delete("key");
@@ -327,7 +351,13 @@ export function JoinScreen({ onJoin }: JoinScreenProps) {
         iconUrl = uploaded.url;
       }
 
-      const next = upsertSavedCampaign(roomIdForCampaign, { name: trimmedName, iconUrl });
+      const registryRooms = await registerCampaignRoom({
+        roomId: roomIdForCampaign,
+        name: trimmedName,
+        iconUrl,
+      });
+      const local = upsertSavedCampaign(roomIdForCampaign, { name: trimmedName, iconUrl });
+      const next = mergeRegistryWithLocal(registryRooms, local);
       setCampaigns(next);
       setRoomId(roomIdForCampaign);
       setCampaignName(trimmedName);
