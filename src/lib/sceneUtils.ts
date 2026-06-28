@@ -351,7 +351,14 @@ export function gridSizeForMapHeight(mapHeightPx: number): number {
 }
 
 /// <summary>
-/// Token radius for a creature occupying half of one grid cell (1.5 ft when one cell is one yard).
+/// Token diameter in world pixels (half of one grid cell).
+/// </summary>
+export function tokenDiameterForGridSize(gridSize: number): number {
+  return gridSize / 2;
+}
+
+/// <summary>
+/// Token radius in world pixels (half of one grid cell diameter).
 /// </summary>
 export function tokenRadiusForGridSize(gridSize: number): number {
   return gridSize / 4;

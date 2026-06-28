@@ -6,6 +6,7 @@ import {
   normalizeCharacterSheet,
   normalizeGameState,
   normalizeToken,
+  syncPlayerTokenFromState,
   type ClientMessage,
   type ConnectedPlayer,
   type DiceRoll,
@@ -15,6 +16,12 @@ import {
   type ServerMessage,
 } from "../src/lib/types";
 import { normalizeScene } from "../src/lib/sceneUtils";
+import {
+  ANNOTATION_DURATION_MS,
+  annotationPathLength,
+  isValidAnnotationPoints,
+  trimAnnotationPoints,
+} from "../src/lib/mapAnnotation";
 import { rollDiceExpression } from "../src/lib/dice";
 import { loadCampaignFromDisk } from "./loadCampaign";
 
@@ -28,10 +35,13 @@ type ClientMeta = {
 const ROOM_KEY = "room-key";
 const VIEWPORT_THROTTLE_MS = 66;
 const MAX_PUBLIC_DICE_LOG = 50;
+const MAX_ACTIVE_ANNOTATIONS_PER_PLAYER = 4;
+const ANNOTATION_FORCED_FADE_MS = 600;
 
 export default class GameServer implements Party.Server {
   state: GameState;
   clients = new Map<string, ClientMeta>();
+  annotationRemovalTimers = new Map<string, ReturnType<typeof setTimeout>>();
   lastViewportBroadcast = 0;
   pendingViewport: GameState["viewport"] | null = null;
   viewportTimer: ReturnType<typeof setTimeout> | null = null;
@@ -214,6 +224,34 @@ export default class GameServer implements Party.Server {
     void this.broadcastState();
   }
 
+  /// <summary>
+  /// Removes one annotation by id and only broadcasts when state actually changed.
+  /// </summary>
+  removeAnnotationById(annotationId: string) {
+    const before = this.state.annotations?.length ?? 0;
+    this.state.annotations = (this.state.annotations ?? []).filter(
+      (item) => item.id !== annotationId,
+    );
+    this.annotationRemovalTimers.delete(annotationId);
+    if ((this.state.annotations?.length ?? 0) !== before) {
+      void this.broadcastState();
+    }
+  }
+
+  /// <summary>
+  /// Schedules annotation expiry, replacing any existing timer for that annotation id.
+  /// </summary>
+  scheduleAnnotationRemoval(annotationId: string, delayMs: number) {
+    const existingTimer = this.annotationRemovalTimers.get(annotationId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
+      this.removeAnnotationById(annotationId);
+    }, delayMs);
+    this.annotationRemovalTimers.set(annotationId, timer);
+  }
+
   onConnect(connection: Party.Connection) {
     this.clients.set(connection.id, {
       role: null,
@@ -236,6 +274,9 @@ export default class GameServer implements Party.Server {
     void this.broadcastState();
   }
 
+  /// <summary>
+  /// Handles inbound client actions, validates role permissions, and mutates room state.
+  /// </summary>
   onMessage(message: string, sender: Party.Connection) {
     let parsed: ClientMessage;
     try {
@@ -318,7 +359,75 @@ export default class GameServer implements Party.Server {
         existing ? { ...existing, ...parsed.sheet } : parsed.sheet,
         slotName,
       );
+      this.state.tokens = this.state.tokens.map((token) =>
+        token.ownerPlayerId === meta.playerId
+          ? syncPlayerTokenFromState(token, this.state)
+          : token,
+      );
       void this.broadcastState();
+      return;
+    }
+
+    if (parsed.type === "MOVE_TOKEN") {
+      if (meta.role === "player" && meta.playerId) {
+        const token = this.state.tokens.find((item) => item.id === parsed.tokenId);
+        if (!token || token.ownerPlayerId !== meta.playerId) {
+          this.sendTo(sender, { type: "ERROR", message: "You can only move your own token." });
+          return;
+        }
+        token.x = parsed.x;
+        token.y = parsed.y;
+        void this.broadcastState();
+        return;
+      }
+    }
+
+    if (parsed.type === "ADD_ANNOTATION") {
+      if (!meta.playerId) {
+        return;
+      }
+      const points = parsed.points;
+      if (!isValidAnnotationPoints(points)) {
+        return;
+      }
+      const trimmedPoints = trimAnnotationPoints(points);
+      if (annotationPathLength(trimmedPoints) < 8) {
+        return;
+      }
+      if (!this.state.scenes.some((scene) => scene.id === parsed.sceneId)) {
+        return;
+      }
+      const now = Date.now();
+      const playerAnnotations = (this.state.annotations ?? [])
+        .filter((item) => item.playerId === meta.playerId)
+        .sort((a, b) => a.createdAt - b.createdAt);
+      const overflowCount =
+        playerAnnotations.length - (MAX_ACTIVE_ANNOTATIONS_PER_PLAYER - 1);
+      if (overflowCount > 0) {
+        const forcedCreatedAt =
+          now - (ANNOTATION_DURATION_MS - ANNOTATION_FORCED_FADE_MS);
+        for (let index = 0; index < overflowCount; index += 1) {
+          const stale = playerAnnotations[index];
+          if (!stale) {
+            continue;
+          }
+          stale.createdAt = forcedCreatedAt;
+          this.scheduleAnnotationRemoval(stale.id, ANNOTATION_FORCED_FADE_MS);
+        }
+      }
+      const annotation = {
+        id: `ann-${crypto.randomUUID().slice(0, 8)}`,
+        sceneId: parsed.sceneId,
+        playerId: meta.playerId,
+        playerName: meta.displayName?.trim() || "Player",
+        color: parsed.color || "#fcd34d",
+        points: trimmedPoints,
+        createdAt: now,
+      };
+      const existing = this.state.annotations ?? [];
+      this.state.annotations = [...existing, annotation].slice(-24);
+      void this.broadcastState();
+      this.scheduleAnnotationRemoval(annotation.id, ANNOTATION_DURATION_MS);
       return;
     }
 
@@ -407,7 +516,9 @@ export default class GameServer implements Party.Server {
         break;
       }
       case "ADD_TOKEN":
-        this.state.tokens.push(normalizeToken(parsed.token));
+        this.state.tokens.push(
+          syncPlayerTokenFromState(normalizeToken(parsed.token), this.state),
+        );
         void this.broadcastState();
         break;
       case "MOVE_TOKEN": {

@@ -361,6 +361,8 @@ export function useDmActions(room: GameRoom) {
       removeToken: (tokenId: string) => send({ type: "REMOVE_TOKEN", tokenId }),
       setPing: (x: number, y: number) => send({ type: "SET_PING", x, y }),
       clearPing: () => send({ type: "CLEAR_PING" }),
+      addAnnotation: (sceneId: string, points: number[], color: string) =>
+        send({ type: "ADD_ANNOTATION", sceneId, points, color }),
       updateFog: (sceneId: string, fogDataUrl: string) =>
         send({ type: "UPDATE_FOG", sceneId, fogDataUrl }),
       importCampaign: (manifest: CampaignManifest) =>

@@ -1,4 +1,8 @@
 import type { CampaignManifest } from "./campaignManifest";
+import type { MapAnnotation } from "./mapAnnotation";
+
+export type { MapAnnotation } from "./mapAnnotation";
+export { ANNOTATION_DURATION_MS } from "./mapAnnotation";
 
 export type Role = "dm" | "player";
 
@@ -125,6 +129,7 @@ export type GameState = {
   characterSheets: Record<string, CharacterSheet>;
   connectedPlayers: ConnectedPlayer[];
   ping: { x: number; y: number; sceneId: string } | null;
+  annotations: MapAnnotation[];
   publicDiceLog: DiceRoll[];
 };
 
@@ -146,6 +151,12 @@ export type ClientMessage =
   | { type: "UPDATE_MY_SHEET"; sheet: CharacterSheet }
   | { type: "SET_PING"; x: number; y: number }
   | { type: "CLEAR_PING" }
+  | {
+      type: "ADD_ANNOTATION";
+      sceneId: string;
+      points: number[];
+      color: string;
+    }
   | { type: "UPDATE_FOG"; sceneId: string; fogDataUrl: string }
   | { type: "IMPORT_CAMPAIGN"; manifest: CampaignManifest }
   | { type: "ADD_PLAYER_SLOT"; name: string }
@@ -185,6 +196,34 @@ export const TOKEN_COLORS = [
 
 export const TOKEN_PLAYER_COLOR = "#c9a227";
 export const TOKEN_ENEMY_COLOR = "#c45c5c";
+
+/// <summary>
+/// Returns a distinct token color for a player slot.
+/// </summary>
+export function playerTokenColorForSlot(slotId: string, slots: PlayerSlot[]): string {
+  const index = slots.findIndex((slot) => slot.id === slotId);
+  const safeIndex = index < 0 ? 0 : index;
+  return TOKEN_COLORS[safeIndex % TOKEN_COLORS.length] ?? TOKEN_PLAYER_COLOR;
+}
+
+/// <summary>
+/// Syncs a player-owned token label, portrait, and color from slot and sheet data.
+/// </summary>
+export function syncPlayerTokenFromState(token: Token, state: GameState): Token {
+  const normalized = normalizeToken(token);
+  if (normalized.kind !== "player" || !normalized.ownerPlayerId) {
+    return normalized;
+  }
+
+  const slot = state.playerSlots.find((item) => item.id === normalized.ownerPlayerId);
+  const sheet = state.characterSheets[normalized.ownerPlayerId];
+  return {
+    ...normalized,
+    color: playerTokenColorForSlot(normalized.ownerPlayerId, state.playerSlots),
+    label: sheet?.characterName?.trim() || slot?.name || normalized.label,
+    imageUrl: sheet?.iconUrl ?? normalized.imageUrl,
+  };
+}
 
 /// <summary>
 /// Ensures tokens include kind and image fields from older persisted rooms.
@@ -385,7 +424,10 @@ export function normalizeGameState(state: GameState): GameState {
     ...state,
     playerSlots,
     characterSheets,
-    tokens: (state.tokens ?? []).map((token) => normalizeToken(token)),
+    tokens: (state.tokens ?? []).map((token) =>
+      syncPlayerTokenFromState(token, { ...state, playerSlots, characterSheets }),
+    ),
+    annotations: state.annotations ?? [],
     publicDiceLog: state.publicDiceLog ?? [],
   };
 }
@@ -460,6 +502,7 @@ export function createInitialState(roomId: string): GameState {
     characterSheets: {},
     connectedPlayers: [],
     ping: null,
+    annotations: [],
     publicDiceLog: [],
   };
 }

@@ -10,7 +10,7 @@ import { CharacterSheetPanel } from "./components/CharacterSheet";
 import { ResizableSplit } from "./components/ResizableSplit";
 import { useDmActions, useGameRoom, usePlayerSheet, type JoinParams } from "./hooks/useGameRoom";
 import type { FogBrushMode } from "./lib/fogCanvas";
-import { DEFAULT_VIEWPORT, resolvePlayerViewingSceneId, type Viewport } from "./lib/types";
+import { DEFAULT_VIEWPORT, playerTokenColorForSlot, resolvePlayerViewingSceneId, type Viewport } from "./lib/types";
 import { clearSessionViewportsForRoom } from "./lib/sessionViewportMemory";
 
 type SessionParams = JoinParams & {
@@ -111,6 +111,17 @@ export default function App() {
               isDm={isDm}
               dm={dm}
               playerSlotId={room.yourPlayerId}
+              onMoveToken={(tokenId, x, y) =>
+                room.send({ type: "MOVE_TOKEN", tokenId, x, y })
+              }
+              onAddAnnotation={(sceneId, points, color) =>
+                dm.addAnnotation(sceneId, points, color)
+              }
+              annotationColor={
+                isDm
+                  ? "#fcd34d"
+                  : playerTokenColorForSlot(room.yourPlayerId!, state.playerSlots)
+              }
               fogMode={fogMode && playControls}
               fogPreview={fogPreview && isDm}
               fogBrushMode={fogBrushMode}

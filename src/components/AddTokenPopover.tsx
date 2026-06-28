@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { GameState, Token, TokenKind } from "../lib/types";
-import { TOKEN_ENEMY_COLOR, TOKEN_PLAYER_COLOR } from "../lib/types";
+import { playerTokenColorForSlot, TOKEN_ENEMY_COLOR } from "../lib/types";
 import { uploadTokenImage } from "../lib/uploadAsset";
 import type { useDmActions } from "../hooks/useGameRoom";
 
@@ -113,11 +113,14 @@ export function AddTokenPopover({ state, dm, anchorRef, onClose }: AddTokenPopov
     const token: Token = {
       id: tokenIdRef.current,
       sceneId: activeScene.id,
-      x: activeScene.width / 2,
-      y: activeScene.height / 2,
+      x: activeScene.centerX ?? activeScene.width / 2,
+      y: activeScene.centerY ?? activeScene.height / 2,
       label: trimmedLabel,
       kind,
-      color: kind === "enemy" ? TOKEN_ENEMY_COLOR : TOKEN_PLAYER_COLOR,
+      color:
+        kind === "enemy"
+          ? TOKEN_ENEMY_COLOR
+          : playerTokenColorForSlot(ownerPlayerId!, state.playerSlots),
       imageUrl,
       ownerPlayerId: kind === "player" ? ownerPlayerId : null,
     };

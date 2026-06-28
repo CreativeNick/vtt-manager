@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Circle, Group, Image, Layer, Line, Rect, Stage, Text } from "react-konva";
+import { Arrow, Circle, Group, Image, Layer, Line, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type Konva from "konva";
 import { DEFAULT_SCENE_BACKGROUND, DEFAULT_VIEWPORT, type GameState, type MapLayer, type Token, type Viewport } from "../lib/types";
-import { canPlayerSeeScene, TOKEN_ENEMY_COLOR, TOKEN_PLAYER_COLOR } from "../lib/types";
+import { canPlayerSeeScene } from "../lib/types";
 import type { useDmActions } from "../hooks/useGameRoom";
 import {
   fillFog,
@@ -20,7 +20,7 @@ import {
   moveMapLayer,
   moveSceneCenter,
   normalizeScene,
-  tokenRadiusForGridSize,
+  tokenDiameterForGridSize,
   viewportForNormalizedScene,
 } from "../lib/sceneUtils";
 import {
@@ -28,6 +28,13 @@ import {
   saveSessionViewport,
   type SessionViewportMode,
 } from "../lib/sessionViewportMemory";
+import {
+  ANNOTATION_MIN_LENGTH,
+  annotationOpacity,
+  annotationPathLength,
+  appendAnnotationSample,
+  trimAnnotationPoints,
+} from "../lib/mapAnnotation";
 
 type MapCanvasProps = {
   state: GameState;
@@ -35,6 +42,9 @@ type MapCanvasProps = {
   isDm: boolean;
   playerSlotId?: string | null;
   dm: ReturnType<typeof useDmActions>;
+  onMoveToken?: (tokenId: string, x: number, y: number) => void;
+  onAddAnnotation?: (sceneId: string, points: number[], color: string) => void;
+  annotationColor?: string;
   fogMode: boolean;
   fogPreview: boolean;
   fogBrushMode: FogBrushMode;
@@ -272,15 +282,16 @@ function FogOverlay({
 type MapTokenProps = {
   token: Token;
   gridSize: number;
+  showHoverOutline: boolean;
 };
 
 /// <summary>
-/// Renders a map token as a colored disc or circular portrait with a name label.
+/// Renders a map token sized to exactly half of one grid cell.
 /// </summary>
-function MapToken({ token, gridSize }: MapTokenProps) {
+function MapToken({ token, gridSize, showHoverOutline }: MapTokenProps) {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const tokenRadius = tokenRadiusForGridSize(gridSize);
-  const tokenStroke = Math.max(2, Math.round(gridSize / 18));
+  const tokenDiameter = tokenDiameterForGridSize(gridSize);
+  const tokenRadius = tokenDiameter / 2;
   const labelFontSize = Math.max(10, Math.round(gridSize / 4.5));
   const labelWidth = Math.max(72, gridSize * 1.5);
 
@@ -306,12 +317,29 @@ function MapToken({ token, gridSize }: MapTokenProps) {
     };
   }, [token.imageUrl]);
 
-  const borderColor = token.kind === "enemy" ? TOKEN_ENEMY_COLOR : TOKEN_PLAYER_COLOR;
+  const tokenOutlineColor = "rgba(8, 6, 5, 0.95)";
+  const tokenOutlineWidth = Math.max(1, Math.round(labelFontSize * 0.22));
+  const ringRadius = tokenRadius - tokenOutlineWidth / 2;
+  const labelGap = 2;
+  const labelY = tokenRadius + labelGap;
+  const tightLabelWidth = Math.min(
+    labelWidth,
+    Math.ceil(token.label.length * labelFontSize * 0.58) + tokenOutlineWidth * 2 + 4,
+  );
 
   return (
     <>
+      {showHoverOutline ? (
+        <Circle
+          radius={tokenRadius + 3}
+          stroke="#ffffff"
+          strokeWidth={2}
+          listening={false}
+        />
+      ) : null}
       {image ? (
         <Group
+          listening={false}
           clipFunc={(ctx) => {
             ctx.arc(0, 0, tokenRadius, 0, Math.PI * 2);
           }}
@@ -320,34 +348,141 @@ function MapToken({ token, gridSize }: MapTokenProps) {
             image={image}
             x={-tokenRadius}
             y={-tokenRadius}
-            width={tokenRadius * 2}
-            height={tokenRadius * 2}
+            width={tokenDiameter}
+            height={tokenDiameter}
+            listening={false}
+          />
+          <Circle
+            radius={ringRadius}
+            stroke={tokenOutlineColor}
+            strokeWidth={tokenOutlineWidth}
+            listening={false}
           />
         </Group>
       ) : (
-        <Circle
-          radius={tokenRadius - 2}
-          fill={token.color}
-          stroke={borderColor}
-          strokeWidth={tokenStroke}
-        />
+        <>
+          <Circle radius={tokenRadius} fill={token.color} listening={false} />
+          <Circle
+            radius={ringRadius}
+            stroke={tokenOutlineColor}
+            strokeWidth={tokenOutlineWidth}
+            listening={false}
+          />
+        </>
       )}
-      {image ? (
-        <Circle
-          radius={tokenRadius}
-          stroke={borderColor}
-          strokeWidth={tokenStroke}
-          listening={false}
-        />
-      ) : null}
       <Text
         text={token.label}
+        x={-tightLabelWidth / 2}
+        y={labelY}
+        width={tightLabelWidth}
         fontSize={labelFontSize}
         fill="#f0e6d2"
-        width={labelWidth}
-        offsetX={labelWidth / 2}
-        offsetY={tokenRadius + labelFontSize + 2}
+        stroke={tokenOutlineColor}
+        strokeWidth={tokenOutlineWidth}
+        fillAfterStrokeEnabled
         align="center"
+        ellipsis
+        listening={false}
+      />
+    </>
+  );
+}
+
+type MapTokenNodeProps = {
+  token: Token;
+  gridSize: number;
+  draggable: boolean;
+  onDragEnd: (x: number, y: number) => void;
+};
+
+/// <summary>
+/// Wraps a map token with drag handling and hover feedback for draggable tokens.
+/// </summary>
+function MapTokenNode({ token, gridSize, draggable, onDragEnd }: MapTokenNodeProps) {
+  const [hovered, setHovered] = useState(false);
+  const tokenRadius = tokenDiameterForGridSize(gridSize) / 2;
+
+  const setMapCursor = (event: KonvaEventObject<MouseEvent>, cursor: string) => {
+    const stage = event.target.getStage();
+    if (stage) {
+      stage.container().style.cursor = cursor;
+    }
+  };
+
+  return (
+    <Group
+      x={token.x}
+      y={token.y}
+      draggable={draggable}
+      onMouseEnter={(event) => {
+        if (!draggable) {
+          return;
+        }
+        setHovered(true);
+        setMapCursor(event, "grab");
+      }}
+      onMouseLeave={(event) => {
+        setHovered(false);
+        if (draggable) {
+          setMapCursor(event, "");
+        }
+      }}
+      onDragStart={(event) => {
+        if (draggable) {
+          setMapCursor(event, "grabbing");
+        }
+      }}
+      onDragEnd={(event) => {
+        if (draggable) {
+          setMapCursor(event, "grab");
+        }
+        onDragEnd(event.target.x(), event.target.y());
+      }}
+    >
+      <Circle radius={tokenRadius} fill="rgba(0,0,0,0.001)" />
+      <MapToken token={token} gridSize={gridSize} showHoverOutline={hovered && draggable} />
+    </Group>
+  );
+}
+
+type MapAnnotationArrowProps = {
+  points: number[];
+  opacity: number;
+};
+
+/// <summary>
+/// Renders a freehand annotation arrow on the map canvas.
+/// </summary>
+function MapAnnotationArrow({ points, opacity }: MapAnnotationArrowProps) {
+  return (
+    <>
+      <Arrow
+        points={points}
+        tension={0.5}
+        lineCap="round"
+        lineJoin="round"
+        stroke="rgba(8, 6, 5, 0.95)"
+        fill="rgba(8, 6, 5, 0.95)"
+        strokeWidth={6}
+        pointerLength={14}
+        pointerWidth={12}
+        opacity={opacity}
+        dash={[10, 6]}
+        listening={false}
+      />
+      <Arrow
+        points={points}
+        tension={0.5}
+        lineCap="round"
+        lineJoin="round"
+        stroke="#f0e6d2"
+        fill="#f0e6d2"
+        strokeWidth={3}
+        pointerLength={12}
+        pointerWidth={10}
+        opacity={opacity}
+        dash={[10, 6]}
+        listening={false}
       />
     </>
   );
@@ -355,6 +490,8 @@ function MapToken({ token, gridSize }: MapTokenProps) {
 
 const FOG_SYNC_MS = 50;
 const BRUSH_RADIUS = 48;
+const ANNOTATION_COMMIT_GRACE_MS = 500;
+const ANNOTATION_MATCH_TOLERANCE = 2;
 
 type SceneGridProps = {
   width: number;
@@ -437,6 +574,27 @@ function isOnDraggableNode(event: KonvaEventObject<PointerEvent>) {
 }
 
 /// <summary>
+/// Returns true when two annotation polylines share the same endpoints within tolerance.
+/// </summary>
+function annotationsMatch(a: number[], b: number[], tolerance = ANNOTATION_MATCH_TOLERANCE) {
+  if (a.length < 4 || b.length < 4) {
+    return false;
+  }
+  const dxStart = Math.abs(a[0] - b[0]);
+  const dyStart = Math.abs(a[1] - b[1]);
+  const axEnd = a[a.length - 2];
+  const ayEnd = a[a.length - 1];
+  const bxEnd = b[b.length - 2];
+  const byEnd = b[b.length - 1];
+  return (
+    dxStart <= tolerance &&
+    dyStart <= tolerance &&
+    Math.abs(axEnd - bxEnd) <= tolerance &&
+    Math.abs(ayEnd - byEnd) <= tolerance
+  );
+}
+
+/// <summary>
 /// Konva canvas for the shared battle map; DM drives shared scene state, players view locally.
 /// </summary>
 export function MapCanvas({
@@ -451,6 +609,9 @@ export function MapCanvas({
   sceneEditMode,
   viewCommand,
   onSettingsViewportChange,
+  onMoveToken,
+  onAddAnnotation,
+  annotationColor = "#fcd34d",
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 600 });
@@ -458,8 +619,12 @@ export function MapCanvas({
   const [localFogDataUrl, setLocalFogDataUrl] = useState<string | null>(null);
   const [fogReady, setFogReady] = useState(false);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [draftAnnotation, setDraftAnnotation] = useState<number[] | null>(null);
+  const [fadeClock, setFadeClock] = useState(() => Date.now());
   const isPanning = useRef(false);
   const isPaintingFog = useRef(false);
+  const isDrawingAnnotation = useRef(false);
+  const annotationPoints = useRef<number[]>([]);
   const lastPointer = useRef({ x: 0, y: 0 });
   const fogCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fogInitKeyRef = useRef("");
@@ -467,6 +632,8 @@ export function MapCanvas({
   const settingsViewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFogSceneIdRef = useRef<string | null>(null);
   const sceneNavRef = useRef<string | null>(null);
+  const pendingAnnotationCommitRef = useRef(false);
+  const annotationCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewportRef = useRef<Viewport>(localViewport);
   viewportRef.current = localViewport;
   const roomId = state.roomId;
@@ -504,6 +671,26 @@ export function MapCanvas({
       : undefined;
   const sceneHidden =
     !isDm && playerSlot && !canPlayerSeeScene(playerSlot, sceneId);
+
+  const sceneAnnotations = useMemo(
+    () =>
+      (state.annotations ?? []).filter(
+        (annotation) =>
+          annotation.sceneId === sceneId && annotationOpacity(annotation.createdAt, fadeClock) > 0,
+      ),
+    [fadeClock, sceneId, state.annotations],
+  );
+
+  const canAnnotate = Boolean(onAddAnnotation) && !sceneEditMode && !(isDm && fogMode);
+  const localAnnotationOwnerId = isDm ? "dm" : (playerSlotId ?? null);
+
+  useEffect(() => {
+    if (sceneAnnotations.length === 0 && !draftAnnotation) {
+      return;
+    }
+    const timer = setInterval(() => setFadeClock(Date.now()), 50);
+    return () => clearInterval(timer);
+  }, [draftAnnotation, sceneAnnotations.length]);
 
   const gridBounds = useMemo(() => {
     const gridSize = activeScene?.gridSize ?? 50;
@@ -646,8 +833,36 @@ export function MapCanvas({
       if (settingsViewportTimerRef.current) {
         clearTimeout(settingsViewportTimerRef.current);
       }
+      if (annotationCommitTimerRef.current) {
+        clearTimeout(annotationCommitTimerRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      !pendingAnnotationCommitRef.current ||
+      !draftAnnotation ||
+      !localAnnotationOwnerId
+    ) {
+      return;
+    }
+    const committed = sceneAnnotations.some(
+      (annotation) =>
+        annotation.playerId === localAnnotationOwnerId &&
+        annotation.sceneId === sceneId &&
+        annotationsMatch(annotation.points, draftAnnotation),
+    );
+    if (!committed) {
+      return;
+    }
+    pendingAnnotationCommitRef.current = false;
+    if (annotationCommitTimerRef.current) {
+      clearTimeout(annotationCommitTimerRef.current);
+      annotationCommitTimerRef.current = null;
+    }
+    setDraftAnnotation(null);
+  }, [draftAnnotation, localAnnotationOwnerId, sceneAnnotations, sceneId]);
 
   const saveSettingsViewport = useCallback(
     (next: Viewport) => {
@@ -692,10 +907,10 @@ export function MapCanvas({
 
   const setViewport = useCallback(
     (next: Viewport) => {
-      const resolved =
-        !isDm && !sceneEditMode && activeScene
-          ? clampPlayerViewport(next, activeScene, size.width, size.height)
-          : next;
+      let resolved = next;
+      if (!isDm && !sceneEditMode && activeScene) {
+        resolved = clampPlayerViewport(resolved, activeScene, size.width, size.height);
+      }
       viewportRef.current = resolved;
       setLocalViewport(resolved);
       persistSessionViewport(resolved);
@@ -828,6 +1043,25 @@ export function MapCanvas({
       return;
     }
 
+    if (
+      canAnnotate &&
+      event.evt.button === 0 &&
+      event.evt.shiftKey &&
+      !isOnDraggableNode(event)
+    ) {
+      event.evt.preventDefault();
+      const world = screenToWorld(pointer.x, pointer.y);
+      isDrawingAnnotation.current = true;
+      pendingAnnotationCommitRef.current = false;
+      if (annotationCommitTimerRef.current) {
+        clearTimeout(annotationCommitTimerRef.current);
+        annotationCommitTimerRef.current = null;
+      }
+      annotationPoints.current = [world.x, world.y];
+      setDraftAnnotation([world.x, world.y]);
+      return;
+    }
+
     if (canPan && event.evt.button === 0 && !isOnDraggableNode(event)) {
       isPanning.current = true;
       lastPointer.current = pointer;
@@ -844,6 +1078,16 @@ export function MapCanvas({
     const stage = event.target.getStage();
     const pointer = stage?.getPointerPosition();
     if (!pointer) {
+      return;
+    }
+
+    if (isDrawingAnnotation.current && (event.evt.buttons & 1) !== 0) {
+      const world = screenToWorld(pointer.x, pointer.y);
+      const next = appendAnnotationSample(annotationPoints.current, world.x, world.y);
+      if (next.length !== annotationPoints.current.length) {
+        annotationPoints.current = trimAnnotationPoints(next);
+        setDraftAnnotation(annotationPoints.current);
+      }
       return;
     }
 
@@ -865,7 +1109,36 @@ export function MapCanvas({
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (event?: KonvaEventObject<PointerEvent>) => {
+    if (isDrawingAnnotation.current) {
+      const stage = event?.target.getStage();
+      const pointer = stage?.getPointerPosition();
+      if (pointer && activeScene && onAddAnnotation) {
+        const world = screenToWorld(pointer.x, pointer.y);
+        const points = trimAnnotationPoints(
+          appendAnnotationSample(annotationPoints.current, world.x, world.y),
+        );
+        if (annotationPathLength(points) >= ANNOTATION_MIN_LENGTH) {
+          onAddAnnotation(activeScene.id, points, annotationColor);
+          pendingAnnotationCommitRef.current = true;
+          if (annotationCommitTimerRef.current) {
+            clearTimeout(annotationCommitTimerRef.current);
+          }
+          annotationCommitTimerRef.current = setTimeout(() => {
+            pendingAnnotationCommitRef.current = false;
+            setDraftAnnotation(null);
+            annotationCommitTimerRef.current = null;
+          }, ANNOTATION_COMMIT_GRACE_MS);
+        } else {
+          setDraftAnnotation(null);
+        }
+      } else {
+        setDraftAnnotation(null);
+      }
+      isDrawingAnnotation.current = false;
+      annotationPoints.current = [];
+    }
+
     if (isPaintingFog.current && activeScene && fogCanvasRef.current) {
       dm.updateFog(activeScene.id, fogCanvasToDataUrl(fogCanvasRef.current));
     }
@@ -968,19 +1241,27 @@ export function MapCanvas({
                 playerOpaque={!isDm}
               />
             ) : null}
-            {sceneTokens.map((token) => (
-              <Group
-                key={token.id}
-                x={token.x}
-                y={token.y}
-                draggable={isDm && !fogMode && !sceneEditMode}
-                onDragEnd={(event) => {
-                  dm.moveToken(token.id, event.target.x(), event.target.y());
-                }}
-              >
-                <MapToken token={token} gridSize={activeScene?.gridSize ?? 50} />
-              </Group>
-            ))}
+            {sceneTokens.map((token) => {
+              const isOwnToken = !isDm && token.ownerPlayerId === playerSlotId;
+              const canDragToken =
+                (isDm && !fogMode && !sceneEditMode) || (isOwnToken && !sceneEditMode);
+
+              return (
+                <MapTokenNode
+                  key={token.id}
+                  token={token}
+                  gridSize={activeScene?.gridSize ?? 50}
+                  draggable={canDragToken}
+                  onDragEnd={(x, y) => {
+                    if (isDm) {
+                      dm.moveToken(token.id, x, y);
+                      return;
+                    }
+                    onMoveToken?.(token.id, x, y);
+                  }}
+                />
+              );
+            })}
             {ping ? (
               <Circle
                 x={ping.x}
@@ -990,6 +1271,19 @@ export function MapCanvas({
                 strokeWidth={3}
                 fill="rgba(255,235,59,0.25)"
                 listening={false}
+              />
+            ) : null}
+            {sceneAnnotations.map((annotation) => (
+              <MapAnnotationArrow
+                key={annotation.id}
+                points={annotation.points}
+                opacity={annotationOpacity(annotation.createdAt, fadeClock)}
+              />
+            ))}
+            {draftAnnotation && draftAnnotation.length >= 4 ? (
+              <MapAnnotationArrow
+                points={draftAnnotation}
+                opacity={0.85}
               />
             ) : null}
             {isDm && sceneEditMode ? (
@@ -1017,7 +1311,14 @@ export function MapCanvas({
           <span className="map-scale-caption">1 yard</span>
         </div>
       ) : null}
-      {!isDm && !sceneHidden ? <div className="player-badge">Pan & zoom freely · scroll or drag</div> : null}
+      {!isDm && !sceneHidden ? (
+        <div className="player-badge">
+          Drag to pan · scroll to zoom · drag your token · Shift+drag to annotate
+        </div>
+      ) : null}
+      {isDm && canAnnotate ? (
+        <div className="player-badge">Shift+drag to annotate · right-click to ping</div>
+      ) : null}
       {isDm && fogPreview && !sceneEditMode && activeScene?.fogEnabled ? (
         <div className="fog-badge">Fog preview on — semi-transparent for you; players see full fog</div>
       ) : null}
