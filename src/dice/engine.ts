@@ -8,54 +8,48 @@ import {
   relabelD4Vertex,
   relabelDieFace,
   type DieGeometry,
-} from "./diceGeometry";
+} from "./geometry";
 import {
   quantize,
   type DiceImpact,
   type DiceTrack,
   type DieSpec,
   type DieThrowState,
-  type DieTransform,
   type Quat,
   type Vec3,
   type WorldPoint,
-} from "./diceProtocol";
+} from "../lib/dice3d";
 
 /// <summary>
-/// Three.js + Rapier dice engine. Display dice are plain meshes; the only physics runs
-/// in a hidden pre-simulation that records the exact motion (a DiceTrack). Every client
-/// replays that track, so the tumble/landing is identical everywhere, and the die's
-/// landing face is relabeled to the server's value so it lands on its number with no
-/// post-settle rotation.
+/// Three.js + Rapier dice engine, adapted from the debugged v1 core (git e23a632).
+/// Display dice are plain meshes; the only physics runs in a hidden pre-simulation that
+/// records the exact motion (a DiceTrack). Every client replays that track, so the
+/// tumble/landing is identical everywhere, and the die's landing face is relabeled to
+/// the server's value so it lands on its number with no post-settle rotation.
 ///
-/// Dice are anchored to the shared map: each roll's dice live in a THREE.Group placed at
-/// the roll's map/world tray center and scaled by `k` (physics units -> map units), and
-/// the orthographic camera is driven purely by the live map viewport. So every client
-/// renders the dice at the same map location at any window size/zoom, and the physics box
-/// is a fixed window-independent size, keeping the recorded track identical and bounded.
-/// All compute is client-side; nothing here touches the network or Cloudflare.
+/// v2 changes: dice are **world-anchored but screen-sized** — each roll's THREE.Group
+/// sits at the throw's map/world trayCenter (so every client sees the tumble at the same
+/// board spot and dice stay put while panning), while the group's scale is re-derived
+/// from this client's live zoom so a die always renders at a constant pixel size. The
+/// camera is driven purely by this client's live viewport. The v1 pane clipping and
+/// per-client zoom-cancel scale are gone (full-window canvas under the dock).
 /// </summary>
 
 const DIE_SCALE = 0.95; // physics radius of a die (physics units)
-// The dice tumble in a fixed, shared physics box (half-extents). It's identical on every
-// client (so the recorded track is window-independent), and each client fits it to a
-// fraction of its OWN map pane — so dice are a consistent on-screen size that adapts to any
-// window/monitor and does NOT change with map zoom.
-const AREA_HALF_W = 7.5;
-const AREA_HALF_H = 5.5;
-// The roll box is fit into this fraction of the (smaller-constrained) window dimension. Using
-// the full window (not the map pane) keeps the dice the same size for the DM and players even
-// though the DM's map pane is smaller (extra DM UI).
-const REGION_WINDOW_FRACTION = 0.6;
-// The window-proportional fit is eased toward this reference (px per AREA_HALF unit) so dice
-// don't grow/shrink too fast with window size. RESPONSE 1 = fully window-proportional, 0 =
-// fixed size; lower keeps dice closer to the reference on small/large windows.
-const FIT_REFERENCE_PX = 30;
-const FIT_WINDOW_RESPONSE = 0.4;
-// Orthographic camera height + far plane, in die radii (scale with `k` so clipping holds at
-// any zoom). Camera is top-down; height doesn't affect apparent (ortho) size.
-const CAMERA_HEIGHT_UNITS = 30;
-const CAMERA_FAR_UNITS = 60;
+// Fixed physics box half-extents (physics units) — identical on every client so the
+// recorded track replays the same everywhere.
+const AREA_HALF_W = 9;
+const AREA_HALF_H = 6.5;
+/** On-screen die diameter in CSS px — constant regardless of map zoom. */
+export const DIE_SCREEN_PX = 77;
+/** A die's diameter in physics units (radius 1 geometry × DIE_SCALE mesh scale). */
+const DIE_WIDTH_UNITS = 2 * DIE_SCALE;
+// Multi-die grabs: dice within KEEP keep their relative offset from the cursor; dice
+// farther away glide to a compact ring right next to the grabbed die.
+const GATHER_KEEP_DIST = 3.2;
+const GATHER_RING_R = 2.4;
+const CAMERA_HEIGHT = 2000;
+const CAMERA_FAR = 4000;
 const WALL_HEIGHT = 8;
 const GRAVITY = -34;
 const FIXED_DT = 1 / 60;
@@ -84,21 +78,17 @@ interface DieInstance {
   mesh: THREE.Group;
   /** Flat [px,py,pz,qx,qy,qz,qw] per frame, set for track-playback dice. */
   samples?: number[];
-  /** Target transform a remote-motion die eases toward (for smooth live shake). */
-  targetPos?: THREE.Vector3;
-  targetQuat?: THREE.Quaternion;
   /** Number a blank custom die reveals once it lands (faded onto the up face). */
   revealLabel?: string;
 }
 
-type RollMode = "armed" | "thrown" | "remote-motion" | "track";
+type RollMode = "armed" | "thrown" | "track";
 
 interface RollInstance {
   rollId: string;
   dice: DieInstance[];
-  /** Wrapper placed at the roll's map/world tray center, scaled by `k`; dice are children. */
+  /** Wrapper placed at the throw's map/world trayCenter, scaled to screen-constant size. */
   group: THREE.Group;
-  /** Map/world coordinates this roll's tray is anchored to. */
   trayCenter: WorldPoint;
   mode: RollMode;
   local: boolean;
@@ -106,7 +96,6 @@ interface RollInstance {
   trackStart: number | null;
   nextImpact: number;
   settled: boolean;
-  /** When the custom-die number reveal/fade-in started, or null. */
   revealStart: number | null;
   revealDecals: THREE.Mesh[];
   fadeStart: number | null;
@@ -114,19 +103,17 @@ interface RollInstance {
 }
 
 export interface DiceEngineCallbacks {
-  /** Local drag/shake samples + roller cursor (normalized 0..1 within the map pane). */
-  onMotion?: (rollId: string, transforms: DieTransform[], cursor: WorldPoint) => void;
-  /** Local throw released; send this recorded track to the server. */
-  onRelease?: (rollId: string, track: DiceTrack) => void;
+  /**
+   * Local throw released; send this recorded track to the server. `trayCenter` is the
+   * final world anchor (the release point for drags), which every client centers on.
+   */
+  onRelease?: (rollId: string, track: DiceTrack, trayCenter: WorldPoint) => void;
   /** A die-on-surface impact, strength ~ relative speed, for sound effects. */
   onImpact?: (strength: number) => void;
   /** A roll finished playing back its track. */
   onSettled?: (rollId: string) => void;
 }
 
-const MOTION_THROTTLE_MS = 33; // ~30 live drag/shake updates per second
-const MOTION_SMOOTH_TAU = 0.05; // remote-motion easing time constant (seconds)
-const MOTION_SNAP_EPS = 0.0004; // squared distance below which a die is "caught up"
 const SPIN_AXIS = new THREE.Vector3(1, 0.4, 0.2).normalize();
 
 export class DiceEngine {
@@ -134,29 +121,22 @@ export class DiceEngine {
   private scene: THREE.Scene;
   private camera: THREE.OrthographicCamera;
   private container: HTMLElement;
-  private playEl: HTMLElement | null = null;
   private resizeObserver: ResizeObserver;
 
-  // Map pane rectangle in window px (the camera + clip are derived from it).
-  private area = { left: 0, top: 0, width: 1, height: 1 };
-  // Live map viewport (Konva): screen px = viewport.{x,y} + world * scale (pane-relative).
+  // Live map viewport (Konva): screen px = viewport.{x,y} + world * scale.
   private mapViewport = { x: 0, y: 0, scale: 1 };
-  // Physics units -> map/world units. Recomputed from the pane + zoom so the dice are a
-  // fixed on-screen size at any zoom (see recomputeScale).
-  private k = 1;
 
   private rolls = new Map<string, RollInstance>();
-  private fadeWaiters = new Map<string, Array<() => void>>();
 
   private rafId: number | null = null;
-  private lastFrameTime = 0;
   private disposed = false;
 
   private drag: {
     rollId: string;
-    offsets: Map<string, THREE.Vector3>;
+    /** Per die: where it is relative to the cursor now, and where it is easing to. */
+    offsets: Map<string, { cur: THREE.Vector3; target: THREE.Vector3 }>;
     samples: { t: number; x: number; z: number }[];
-    lastMotionSent: number;
+    lastClient: { x: number; y: number };
   } | null = null;
 
   private callbacks: DiceEngineCallbacks;
@@ -166,7 +146,7 @@ export class DiceEngine {
     this.callbacks = callbacks;
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.domElement.style.width = "100%";
     this.renderer.domElement.style.height = "100%";
@@ -174,7 +154,7 @@ export class DiceEngine {
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 1000);
+    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, CAMERA_FAR);
     this.camera.up.set(0, 0, -1);
 
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.85));
@@ -195,138 +175,63 @@ export class DiceEngine {
   }
 
   /// <summary>
-  /// Sets the element whose rectangle confines the dice (the map pane). Pass null to use
-  /// the whole canvas.
+  /// Updates this client's live map viewport. Dice stay anchored in world space (they
+  /// sit on the board), but each roll's group rescales so dice keep a constant on-screen
+  /// size at any zoom.
   /// </summary>
-  setPlayArea(element: HTMLElement | null) {
-    if (this.playEl === element) {
-      return;
-    }
-    if (this.playEl) {
-      this.resizeObserver.unobserve(this.playEl);
-    }
-    this.playEl = element;
-    if (element) {
-      this.resizeObserver.observe(element);
-    }
-    this.layout();
-  }
-
-  /// <summary>Recomputes camera + play-area bounds for the current sizes.</summary>
-  refreshLayout() {
-    this.layout();
-  }
-
-  /// <summary>
-  /// Updates the live map viewport. Each roll is re-centered on this client's map pane every
-  /// change, so resting dice stay put on screen (centered, fixed size) instead of tracking the
-  /// map — they don't move when you pan/zoom. Called whenever the map viewport changes.
-  /// </summary>
-  setMapProjection(projection: { viewport: { x: number; y: number; scale: number } }) {
-    const scale = projection.viewport.scale > 0 ? projection.viewport.scale : 1;
-    this.mapViewport = { x: projection.viewport.x, y: projection.viewport.y, scale };
-    this.recomputeScale();
-    const center = this.paneCenterWorld();
-    for (const roll of this.rolls.values()) {
-      roll.trayCenter = center;
-      roll.group.position.set(center[0], 0, center[1]);
-    }
+  setMapProjection(viewport: { x: number; y: number; scale: number }) {
+    const scale = viewport.scale > 0 ? viewport.scale : 1;
+    this.mapViewport = { x: viewport.x, y: viewport.y, scale };
     this.updateCamera();
+    const k = this.worldK();
+    for (const roll of this.rolls.values()) {
+      roll.group.scale.setScalar(k);
+    }
     this.requestRender();
   }
 
-  /// <summary>
-  /// The map pane's center in world coords for the current viewport. Every roll is anchored
-  /// here (per-client), so the dice always sit centered in this viewer's map pane.
-  /// </summary>
-  private paneCenterWorld(): WorldPoint {
-    const scale = this.mapViewport.scale > 0 ? this.mapViewport.scale : 1;
-    return [
-      (this.area.width / 2 - this.mapViewport.x) / scale,
-      (this.area.height / 2 - this.mapViewport.y) / scale,
-    ];
+  /** World units per physics unit so a die renders DIE_SCREEN_PX wide at current zoom. */
+  private worldK(): number {
+    return DIE_SCREEN_PX / (DIE_WIDTH_UNITS * this.mapViewport.scale);
   }
 
-  /// <summary>
-  /// Sizes the physics->screen scale `k` so the shared roll box fits REGION_WINDOW_FRACTION of
-  /// this client's window (aspect-aware) and is independent of zoom. Dividing by the live
-  /// `scale` cancels the camera zoom (die screen px = DIE_SCALE*k*scale depends only on the
-  /// window), and the shared AREA_HALF box keeps the recorded tumble window-independent.
-  /// </summary>
-  private recomputeScale() {
-    // Size off the full window (this.container), not the map pane — the pane differs between
-    // the DM (extra UI) and players, but the full-window dice canvas is identical for both.
-    const winW = Math.max(this.container.clientWidth, 1);
-    const winH = Math.max(this.container.clientHeight, 1);
+  /** Window pixel → map/world coordinates through this client's viewport. */
+  private screenToWorld(clientX: number, clientY: number): WorldPoint {
     const scale = this.mapViewport.scale > 0 ? this.mapViewport.scale : 1;
-    // Window-proportional fit, then eased toward a reference so dice don't grow/shrink too fast
-    // with window size (e.g. small windows keep dice closer to the reference, not tiny).
-    const windowFit = REGION_WINDOW_FRACTION * Math.min(winW / (2 * AREA_HALF_W), winH / (2 * AREA_HALF_H));
-    const fitPx = FIT_REFERENCE_PX + (windowFit - FIT_REFERENCE_PX) * FIT_WINDOW_RESPONSE;
-    const nextK = fitPx / scale;
-    if (nextK !== this.k) {
-      this.k = nextK;
-      for (const roll of this.rolls.values()) {
-        roll.group.scale.setScalar(this.k);
-      }
-    }
+    return [(clientX - this.mapViewport.x) / scale, (clientY - this.mapViewport.y) / scale];
   }
 
   private layout() {
     const cw = Math.max(this.container.clientWidth, 1);
     const ch = Math.max(this.container.clientHeight, 1);
     this.renderer.setSize(cw, ch, false);
-
-    const crect = this.container.getBoundingClientRect();
-    let arect: { left: number; top: number; width: number; height: number } = crect;
-    if (this.playEl) {
-      const r = this.playEl.getBoundingClientRect();
-      if (r.width > 20 && r.height > 20) {
-        arect = r;
-      }
-    }
-    this.area = { left: arect.left, top: arect.top, width: arect.width, height: arect.height };
-    this.applyClip(crect);
-    this.recomputeScale();
     this.updateCamera();
     this.requestRender();
   }
 
   /// <summary>
-  /// Aims the top-down orthographic camera so a map/world point (x,y) renders at the same
-  /// pane pixel Konva uses: screen = paneOrigin + viewport.{x,y} + world * scale. The Three
+  /// Aims the top-down orthographic camera so a map/world point (x,y) renders at the
+  /// same window pixel Konva uses: screen = viewport.{x,y} + world * scale. The Three
   /// scene is in map/world units (X = world x, Z = world y).
   /// </summary>
   private updateCamera() {
     const cw = Math.max(this.container.clientWidth, 1);
     const ch = Math.max(this.container.clientHeight, 1);
     const scale = this.mapViewport.scale;
-    const effX = this.area.left + this.mapViewport.x; // px where world x=0 lands
-    const effY = this.area.top + this.mapViewport.y;
     const halfW = cw / (2 * scale);
     const halfH = ch / (2 * scale);
     this.camera.left = -halfW;
     this.camera.right = halfW;
     this.camera.top = halfH;
     this.camera.bottom = -halfH;
-    const camX = (cw / 2 - effX) / scale;
-    const camZ = (ch / 2 - effY) / scale;
-    const camY = CAMERA_HEIGHT_UNITS * this.k;
-    this.camera.position.set(camX, camY, camZ);
+    const camX = (cw / 2 - this.mapViewport.x) / scale;
+    const camZ = (ch / 2 - this.mapViewport.y) / scale;
+    this.camera.position.set(camX, CAMERA_HEIGHT, camZ);
     this.camera.up.set(0, 0, -1);
     this.camera.lookAt(camX, 0, camZ);
     this.camera.near = 1;
-    this.camera.far = CAMERA_FAR_UNITS * this.k;
+    this.camera.far = CAMERA_FAR;
     this.camera.updateProjectionMatrix();
-  }
-
-  /// <summary>Clips the full-window canvas to the map pane so dice never cover the panels.</summary>
-  private applyClip(crect: { left: number; top: number; right: number; bottom: number }) {
-    const top = Math.max(0, this.area.top - crect.top);
-    const left = Math.max(0, this.area.left - crect.left);
-    const right = Math.max(0, crect.right - (this.area.left + this.area.width));
-    const bottom = Math.max(0, crect.bottom - (this.area.top + this.area.height));
-    this.container.style.clipPath = `inset(${top}px ${right}px ${bottom}px ${left}px)`;
   }
 
   private handleVisibility = () => {
@@ -338,20 +243,15 @@ export class DiceEngine {
     }
   };
 
-  /// <summary>Maps a window pointer to a roll's physics-floor coords via its tray center.</summary>
-  private pointerToPhysics(clientX: number, clientY: number, trayCenter: WorldPoint): { x: number; z: number } {
-    const scale = this.mapViewport.scale > 0 ? this.mapViewport.scale : 1;
-    const worldX = (clientX - this.area.left - this.mapViewport.x) / scale;
-    const worldY = (clientY - this.area.top - this.mapViewport.y) / scale;
-    return { x: (worldX - trayCenter[0]) / this.k, z: (worldY - trayCenter[1]) / this.k };
-  }
-
-  /// <summary>Roller cursor normalized 0..1 within the map pane (projected per-viewer's pane).</summary>
-  private cursorNorm(clientX: number, clientY: number): WorldPoint {
-    return [
-      clamp((clientX - this.area.left) / Math.max(this.area.width, 1), 0, 1),
-      clamp((clientY - this.area.top) / Math.max(this.area.height, 1), 0, 1),
-    ];
+  /// <summary>Maps a window pointer to a roll's physics-floor coords via its anchor + scale.</summary>
+  private pointerToPhysics(
+    clientX: number,
+    clientY: number,
+    trayCenter: WorldPoint,
+  ): { x: number; z: number } {
+    const [worldX, worldY] = this.screenToWorld(clientX, clientY);
+    const k = this.worldK();
+    return { x: (worldX - trayCenter[0]) / k, z: (worldY - trayCenter[1]) / k };
   }
 
   private areaClamp(x: number, z: number): { x: number; z: number } {
@@ -369,11 +269,11 @@ export class DiceEngine {
     return { spec, geom, mesh };
   }
 
-  /// <summary>Wraps a roll's dice in a tray group centered at the pane center (`center`).</summary>
+  /// <summary>Wraps a roll's dice in a group anchored at its world trayCenter.</summary>
   private makeGroup(dice: DieInstance[], trayCenter: WorldPoint): THREE.Group {
     const group = new THREE.Group();
     group.position.set(trayCenter[0], 0, trayCenter[1]);
-    group.scale.setScalar(this.k);
+    group.scale.setScalar(this.worldK());
     dice.forEach((die) => group.add(die.mesh));
     this.scene.add(group);
     return group;
@@ -381,8 +281,8 @@ export class DiceEngine {
 
   // ---- Arming + local pointer interaction ----
 
-  /// <summary>Places a roll's dice centered in the map pane ready to be grabbed or thrown.</summary>
-  arm(rollId: string, specs: DieSpec[]) {
+  /// <summary>Places a roll's dice at the throw anchor, ready to be grabbed or thrown.</summary>
+  arm(rollId: string, specs: DieSpec[], trayCenter: WorldPoint) {
     this.clearRoll(rollId);
     const dice = specs.map((spec) => this.createDie(spec));
     const spread = DIE_SCALE * 2.4;
@@ -392,32 +292,45 @@ export class DiceEngine {
       die.mesh.position.set(pos.x, DIE_SCALE * 1.6, pos.z);
       die.mesh.quaternion.copy(randomQuat());
     });
-    const center = this.paneCenterWorld();
-    const group = this.makeGroup(dice, center);
-    this.rolls.set(rollId, this.newRoll(rollId, dice, "armed", true, group, center));
+    const group = this.makeGroup(dice, trayCenter);
+    this.rolls.set(rollId, this.newRoll(rollId, dice, "armed", true, group, trayCenter));
     this.requestRender();
+  }
+
+  /// <summary>
+  /// Starts a grab straight out of the dice tray: dice spawn at their tray screen
+  /// positions/orientations (seamless lift) and immediately follow the cursor. The roll
+  /// is anchored under the cursor and re-anchored to wherever the throw is released.
+  /// </summary>
+  beginTrayGrab(
+    rollId: string,
+    specs: DieSpec[],
+    poses: { screen: [number, number]; quat: Quat }[],
+    clientX: number,
+    clientY: number,
+  ) {
+    this.clearRoll(rollId);
+    const trayCenter = this.screenToWorld(clientX, clientY);
+    const dice = specs.map((spec) => this.createDie(spec));
+    dice.forEach((die, i) => {
+      const pose = poses[i];
+      const p = pose
+        ? this.pointerToPhysics(pose.screen[0], pose.screen[1], trayCenter)
+        : { x: 0, z: 0 };
+      die.mesh.position.set(p.x, DIE_SCALE * 2.2, p.z);
+      if (pose) {
+        die.mesh.quaternion.set(pose.quat[0], pose.quat[1], pose.quat[2], pose.quat[3]);
+      } else {
+        die.mesh.quaternion.copy(randomQuat());
+      }
+    });
+    const group = this.makeGroup(dice, trayCenter);
+    this.rolls.set(rollId, this.newRoll(rollId, dice, "armed", true, group, trayCenter));
+    this.beginDrag(rollId, clientX, clientY);
   }
 
   isArmed(rollId: string): boolean {
     return this.rolls.get(rollId)?.mode === "armed";
-  }
-
-  /// <summary>Whether a screen point lies over one of a roll's armed dice.</summary>
-  hitTestArmed(rollId: string, clientX: number, clientY: number): boolean {
-    const roll = this.rolls.get(rollId);
-    if (!roll) {
-      return false;
-    }
-    const scale = this.mapViewport.scale;
-    const grabRadius = DIE_SCALE * this.k * scale * 1.7;
-    const tc = roll.trayCenter;
-    return roll.dice.some((die) => {
-      const worldX = tc[0] + this.k * die.mesh.position.x;
-      const worldY = tc[1] + this.k * die.mesh.position.z;
-      const screenX = this.area.left + this.mapViewport.x + worldX * scale;
-      const screenY = this.area.top + this.mapViewport.y + worldY * scale;
-      return Math.hypot(clientX - screenX, clientY - screenY) < grabRadius;
-    });
   }
 
   beginDrag(rollId: string, clientX: number, clientY: number) {
@@ -426,11 +339,36 @@ export class DiceEngine {
       return;
     }
     const world = this.pointerToPhysics(clientX, clientY, roll.trayCenter);
-    const offsets = new Map<string, THREE.Vector3>();
-    roll.dice.forEach((d) => {
-      offsets.set(d.spec.id, new THREE.Vector3(d.mesh.position.x - world.x, 0, d.mesh.position.z - world.z));
+    // Dice near the cursor ride along at their current offset; dice farther than
+    // GATHER_KEEP_DIST glide onto a compact ring around the grabbed one, so a scattered
+    // multi-die pickup collects itself in your hand.
+    const byDistance = roll.dice
+      .map((d) => ({
+        die: d,
+        off: new THREE.Vector3(d.mesh.position.x - world.x, 0, d.mesh.position.z - world.z),
+      }))
+      .sort((a, b) => a.off.length() - b.off.length());
+    const offsets = new Map<string, { cur: THREE.Vector3; target: THREE.Vector3 }>();
+    let ringIndex = 0;
+    byDistance.forEach((entry, i) => {
+      let target: THREE.Vector3;
+      if (i === 0 || entry.off.length() <= GATHER_KEEP_DIST) {
+        target = entry.off.clone();
+      } else {
+        const ring = Math.floor(ringIndex / 6);
+        const angle = ((ringIndex % 6) / 6) * Math.PI * 2 + 0.6;
+        const r = GATHER_RING_R + ring * DIE_WIDTH_UNITS;
+        target = new THREE.Vector3(Math.cos(angle) * r, 0, Math.sin(angle) * r);
+        ringIndex += 1;
+      }
+      offsets.set(entry.die.spec.id, { cur: entry.off.clone(), target });
     });
-    this.drag = { rollId, offsets, samples: [{ t: performance.now(), x: world.x, z: world.z }], lastMotionSent: 0 };
+    this.drag = {
+      rollId,
+      offsets,
+      samples: [{ t: performance.now(), x: world.x, z: world.z }],
+      lastClient: { x: clientX, y: clientY },
+    };
     this.requestRender();
   }
 
@@ -448,19 +386,30 @@ export class DiceEngine {
     if (this.drag.samples.length > 6) {
       this.drag.samples.shift();
     }
+    this.drag.lastClient = { x: clientX, y: clientY };
+    this.requestRender();
+  }
+
+  /// <summary>Animates held dice each frame: follow the cursor, ease gathered offsets in.</summary>
+  private animateDrag(now: number) {
+    if (!this.drag) {
+      return;
+    }
+    const roll = this.rolls.get(this.drag.rollId);
+    if (!roll) {
+      return;
+    }
+    const world = this.pointerToPhysics(this.drag.lastClient.x, this.drag.lastClient.y, roll.trayCenter);
     const wobble = Math.sin(now / 40) * 0.15;
     roll.dice.forEach((d) => {
-      const off = this.drag!.offsets.get(d.spec.id)!;
-      const target = this.areaClamp(world.x + off.x, world.z + off.z);
-      d.mesh.position.set(target.x, DIE_SCALE * 2.2 + wobble, target.z);
-      d.mesh.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(SPIN_AXIS, 0.08));
+      const off = this.drag!.offsets.get(d.spec.id);
+      if (!off) {
+        return;
+      }
+      off.cur.lerp(off.target, 0.18);
+      d.mesh.position.set(world.x + off.cur.x, DIE_SCALE * 2.2 + wobble, world.z + off.cur.z);
+      d.mesh.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(SPIN_AXIS, 0.06));
     });
-
-    if (now - this.drag.lastMotionSent > MOTION_THROTTLE_MS) {
-      this.drag.lastMotionSent = now;
-      this.callbacks.onMotion?.(this.drag.rollId, this.snapshotTransforms(roll), this.cursorNorm(clientX, clientY));
-    }
-    this.requestRender();
   }
 
   endDrag(clientX: number, clientY: number) {
@@ -468,14 +417,34 @@ export class DiceEngine {
       return;
     }
     const roll = this.rolls.get(this.drag.rollId);
-    const world = this.pointerToPhysics(clientX, clientY, roll?.trayCenter ?? [0, 0]);
+    const world = roll ? this.pointerToPhysics(clientX, clientY, roll.trayCenter) : { x: 0, z: 0 };
     this.drag.samples.push({ t: performance.now(), x: world.x, z: world.z });
     const vel = this.releaseVelocity(this.drag.samples);
     this.drag = null;
     if (!roll || roll.mode !== "armed") {
       return;
     }
+    // Re-anchor the roll to the release point so the dice tumble and land where the
+    // throw actually happened (the physics box is centered on the anchor).
+    this.reanchor(roll, this.screenToWorld(clientX, clientY));
     this.release(roll, vel.vx, vel.vz);
+  }
+
+  /// <summary>Moves a roll's world anchor, keeping every die at the same world position.</summary>
+  private reanchor(roll: RollInstance, next: WorldPoint) {
+    const k = this.worldK();
+    const dx = (roll.trayCenter[0] - next[0]) / k;
+    const dz = (roll.trayCenter[1] - next[1]) / k;
+    roll.dice.forEach((d) => {
+      const p = this.areaClamp(d.mesh.position.x + dx, d.mesh.position.z + dz);
+      d.mesh.position.set(p.x, d.mesh.position.y, p.z);
+    });
+    roll.trayCenter = next;
+    roll.group.position.set(next[0], 0, next[1]);
+  }
+
+  isDragging(): boolean {
+    return this.drag !== null;
   }
 
   /// <summary>Throws the armed dice for the user without a drag gesture.</summary>
@@ -495,58 +464,64 @@ export class DiceEngine {
     this.release(roll, Math.cos(angle) * speed, Math.sin(angle) * speed);
   }
 
-  /// <summary>
-  /// Resolves the armed dice with a quick, low-energy "spin to value": dice rest at the tray
-  /// and give a short gentle tumble, so the pre-sim settles in a few frames and the landing
-  /// face is relabeled to the server's value almost immediately (used for Instant rolls).
-  /// </summary>
-  quickThrow(rollId: string) {
-    const roll = this.rolls.get(rollId);
-    if (!roll || roll.mode !== "armed") {
-      return;
-    }
-    const spread = DIE_SCALE * 2.4;
-    const startX = -((roll.dice.length - 1) * spread) / 2;
-    roll.dice.forEach((die, i) => {
-      const pos = this.areaClamp(startX + i * spread, 0);
-      die.mesh.position.set(pos.x, DIE_SCALE * 1.2, pos.z);
-    });
-    this.release(roll, 0, 0, true);
-  }
-
   /// <summary>Pre-simulates the throw, records the exact track, and emits it.</summary>
-  private release(roll: RollInstance, vx: number, vz: number, gentle = false) {
-    const states = this.buildReleaseStates(roll, vx, vz, gentle);
+  private release(roll: RollInstance, vx: number, vz: number) {
+    this.biasAnchorForward(roll, vx, vz);
+    const states = this.buildReleaseStates(roll, vx, vz);
     roll.mode = "thrown"; // freeze armed dice until the authoritative DICE_THROW arrives
     const track = this.presimulate(roll.dice.map((d) => d.spec), states);
-    this.callbacks.onRelease?.(roll.rollId, track);
+    this.callbacks.onRelease?.(roll.rollId, track, roll.trayCenter);
   }
 
-  private buildReleaseStates(roll: RollInstance, vx: number, vz: number, gentle: boolean): DieThrowState[] {
+  /// <summary>
+  /// Slides the physics box forward along the throw direction (dice end up near the
+  /// trailing wall) so a thrown die has runway to land and roll out instead of slamming
+  /// into the invisible wall just ahead and bouncing straight back — the #1 "feels
+  /// wrong" artifact. World positions are unchanged; only the anchor moves.
+  /// </summary>
+  private biasAnchorForward(roll: RollInstance, vx: number, vz: number) {
+    const speed = Math.hypot(vx, vz);
+    if (speed < 0.01) {
+      return;
+    }
+    const m = DIE_SCALE + 0.6;
+    const d = Math.min(speed * 0.32, AREA_HALF_W - m);
+    const ox = clamp((vx / speed) * d, -(AREA_HALF_W - m), AREA_HALF_W - m);
+    const oz = clamp((vz / speed) * d, -(AREA_HALF_H - m), AREA_HALF_H - m);
+    const k = this.worldK();
+    this.reanchor(roll, [roll.trayCenter[0] + ox * k, roll.trayCenter[1] + oz * k]);
+  }
+
+  private buildReleaseStates(roll: RollInstance, vx: number, vz: number): DieThrowState[] {
     const cap = 26;
     const cvx = clamp(vx, -cap, cap);
     const cvz = clamp(vz, -cap, cap);
+    const speed = Math.hypot(cvx, cvz);
+    // Natural forward tumble: spin about the horizontal axis perpendicular to travel
+    // (topspin, ω = up × v̂), so friction rolls the die onward on touchdown. Fully
+    // random spin gave half of all throws backspin, which brakes hard and kicks the
+    // die *backwards* the moment it lands.
+    const tumble = Math.min(5 + speed * 0.85, 24);
+    const axisX = speed > 0.01 ? cvz / speed : 0;
+    const axisZ = speed > 0.01 ? -cvx / speed : 0;
     return roll.dice.map((d) => {
       const p = d.mesh.position;
       const q = d.mesh.quaternion;
-      // Gentle (Instant): barely any travel, a small spin so it visibly rotates to its value.
-      const lin: Vec3 = gentle
-        ? [(Math.random() - 0.5) * 1.2, 0, (Math.random() - 0.5) * 1.2]
-        : [cvx + (Math.random() - 0.5) * 2, 1.5, cvz + (Math.random() - 0.5) * 2];
-      const spin = gentle ? 16 : 22;
+      const lin: Vec3 = [cvx + (Math.random() - 0.5) * 2, 1.5, cvz + (Math.random() - 0.5) * 2];
+      const jitter = () => (Math.random() - 0.5) * 7;
       return {
         id: d.spec.id,
         p: [p.x, p.y, p.z] as Vec3,
         q: [q.x, q.y, q.z, q.w] as Quat,
         lin,
-        ang: [(Math.random() - 0.5) * spin, (Math.random() - 0.5) * spin, (Math.random() - 0.5) * spin] as Vec3,
+        ang: [axisX * tumble + jitter(), jitter(), axisZ * tumble + jitter()] as Vec3,
       };
     });
   }
 
   private releaseVelocity(samples: { t: number; x: number; z: number }[]): { vx: number; vz: number } {
     if (samples.length < 2) {
-      return { vx: 0, vz: 8 };
+      return { vx: 0, vz: -7 };
     }
     const last = samples[samples.length - 1];
     const first = samples[0];
@@ -554,8 +529,14 @@ export class DiceEngine {
     const vx = ((last.x - first.x) / dt) * 0.9;
     const vz = ((last.z - first.z) / dt) * 0.9;
     const speed = Math.hypot(vx, vz);
+    if (speed < 0.8) {
+      // A plain click (no fling): lob the dice "up" the screen, onto the board.
+      return { vx: 0, vz: -7 };
+    }
     if (speed < 6) {
-      return { vx, vz: vz + 6 };
+      // Keep the gesture's direction but give it enough energy to tumble.
+      const boost = 6 / speed;
+      return { vx: vx * boost, vz: vz * boost };
     }
     return { vx, vz };
   }
@@ -579,9 +560,11 @@ export class DiceEngine {
     const t = 0.5;
     const hw = AREA_HALF_W;
     const hh = AREA_HALF_H;
+    // Dead walls: a rare wall contact should absorb the die, not ping-pong it back
+    // across the table.
     const wall = (hx: number, hy: number, hz: number, x: number, z: number) =>
       world.createCollider(
-        RAPIER.ColliderDesc.cuboid(hx, hy, hz).setTranslation(x, WALL_HEIGHT, z).setRestitution(0.4),
+        RAPIER.ColliderDesc.cuboid(hx, hy, hz).setTranslation(x, WALL_HEIGHT, z).setRestitution(0.18),
         wallBody,
       );
     wall(t, WALL_HEIGHT, hh + 2 * t, -hw - t, 0);
@@ -679,7 +662,8 @@ export class DiceEngine {
     track: DiceTrack,
     faceValues: number[],
     local: boolean,
-    blank = false,
+    blank: boolean,
+    trayCenter: WorldPoint,
   ) {
     this.clearRoll(rollId);
     const byId = new Map(track.dice.map((d) => [d.id, d.samples]));
@@ -702,52 +686,12 @@ export class DiceEngine {
       }
       return die;
     });
-    const center = this.paneCenterWorld();
-    const group = this.makeGroup(dice, center);
-    const roll = this.newRoll(rollId, dice, "track", local, group, center);
+    const group = this.makeGroup(dice, trayCenter);
+    const roll = this.newRoll(rollId, dice, "track", local, group, trayCenter);
     roll.track = track;
     roll.trackStart = performance.now();
     this.rolls.set(rollId, roll);
     this.applyTrackFrame(roll, 0);
-    this.requestRender();
-  }
-
-  /// <summary>Shows another player's live drag/shake before they release.</summary>
-  applyRemoteMotion(
-    rollId: string,
-    specs: DieSpec[],
-    transforms: DieTransform[],
-    blank = false,
-  ) {
-    let roll = this.rolls.get(rollId);
-    if (!roll) {
-      const dice = specs.map((spec) => this.createDie(spec));
-      if (blank) {
-        // DM secret roll: show the shake but never the numbers.
-        dice.forEach((die) => hideDieNumbers(die.mesh));
-      }
-      const center = this.paneCenterWorld();
-      const group = this.makeGroup(dice, center);
-      roll = this.newRoll(rollId, dice, "remote-motion", false, group, center);
-      this.rolls.set(rollId, roll);
-    }
-    if (roll.mode === "track") {
-      return; // already thrown
-    }
-    const byId = new Map(transforms.map((t) => [t.id, t]));
-    roll.dice.forEach((die) => {
-      const t = byId.get(die.spec.id);
-      if (!t) return;
-      // Record the target; the frame loop eases the mesh toward it for a smooth shake.
-      // The very first sample snaps so a die doesn't glide in from the origin.
-      const first = !die.targetPos;
-      die.targetPos = (die.targetPos ?? new THREE.Vector3()).set(t.p[0], t.p[1], t.p[2]);
-      die.targetQuat = (die.targetQuat ?? new THREE.Quaternion()).set(t.q[0], t.q[1], t.q[2], t.q[3]);
-      if (first) {
-        die.mesh.position.copy(die.targetPos);
-        die.mesh.quaternion.copy(die.targetQuat);
-      }
-    });
     this.requestRender();
   }
 
@@ -803,14 +747,6 @@ export class DiceEngine {
     });
   }
 
-  private snapshotTransforms(roll: RollInstance): DieTransform[] {
-    return roll.dice.map((die) => {
-      const p = die.mesh.position;
-      const q = die.mesh.quaternion;
-      return { id: die.spec.id, p: [p.x, p.y, p.z] as Vec3, q: [q.x, q.y, q.z, q.w] as Quat };
-    });
-  }
-
   private newRoll(
     rollId: string,
     dice: DieInstance[],
@@ -858,13 +794,10 @@ export class DiceEngine {
 
   private frame = (now: number) => {
     this.rafId = null;
-    const dt = this.lastFrameTime ? Math.min((now - this.lastFrameTime) / 1000, 0.05) : FIXED_DT;
-    this.lastFrameTime = now;
+    this.animateDrag(now);
     for (const roll of this.rolls.values()) {
       if (roll.mode === "track" && !roll.settled) {
         this.advanceTrack(roll, now);
-      } else if (roll.mode === "remote-motion") {
-        this.advanceRemoteMotion(roll, dt);
       }
       if (roll.settled) {
         if (roll.fadeStart === null && roll.removeAt !== null && now >= roll.removeAt) {
@@ -878,41 +811,19 @@ export class DiceEngine {
     this.renderer.render(this.scene, this.camera);
     if (this.needsLoop(now)) {
       this.rafId = requestAnimationFrame(this.frame);
-    } else {
-      this.lastFrameTime = 0;
     }
   };
 
-  /// <summary>Eases remote-motion dice toward their latest target for a smooth shake.</summary>
-  private advanceRemoteMotion(roll: RollInstance, dt: number) {
-    const alpha = 1 - Math.exp(-dt / MOTION_SMOOTH_TAU);
-    roll.dice.forEach((die) => {
-      if (!die.targetPos || !die.targetQuat) return;
-      die.mesh.position.lerp(die.targetPos, alpha);
-      die.mesh.quaternion.slerp(die.targetQuat, alpha);
-    });
-  }
-
-  /// <summary>
-  /// Keeps the RAF alive while tracks, remote smoothing, or fade animations are active.
-  /// </summary>
+  /// <summary>Keeps the RAF alive while tracks or fade animations are active.</summary>
   private needsLoop(now: number): boolean {
+    if (this.drag) {
+      return true;
+    }
     for (const roll of this.rolls.values()) {
       if (roll.mode === "track" && !roll.settled) return true;
       // Keep ticking through the post-roll linger and fade-out (removeAt can be in the future).
       if (roll.settled && roll.removeAt !== null) {
         if (roll.fadeStart === null || now - roll.fadeStart < FADE_MS) return true;
-      }
-      if (roll.mode === "remote-motion") {
-        for (const die of roll.dice) {
-          if (!die.targetPos || !die.targetQuat) continue;
-          if (
-            die.mesh.position.distanceToSquared(die.targetPos) > MOTION_SNAP_EPS ||
-            die.mesh.quaternion.angleTo(die.targetQuat) > 0.01
-          ) {
-            return true;
-          }
-        }
       }
     }
     return false;
@@ -965,9 +876,7 @@ export class DiceEngine {
     this.callbacks.onSettled?.(roll.rollId);
   }
 
-  /// <summary>
-  /// Fades a settled roll out smoothly (opacity 1 → 0) before removing it.
-  /// </summary>
+  /// <summary>Fades a settled roll out smoothly (opacity 1 → 0) before removing it.</summary>
   private advanceFade(roll: RollInstance, now: number) {
     const t = Math.min((now - roll.fadeStart!) / FADE_MS, 1);
     const opacity = 1 - smoothstep(t);
@@ -1002,33 +911,6 @@ export class DiceEngine {
     });
     this.scene.remove(roll.group);
     this.rolls.delete(rollId);
-    const waiters = this.fadeWaiters.get(rollId);
-    if (waiters && waiters.length > 0) {
-      waiters.forEach((resolve) => resolve());
-      this.fadeWaiters.delete(rollId);
-    }
-  }
-
-  /// <summary>
-  /// Starts a roll's fade-out immediately and resolves once the roll is removed from scene.
-  /// </summary>
-  fadeOutAndClear(rollId: string): Promise<void> {
-    const roll = this.rolls.get(rollId);
-    if (!roll) {
-      return Promise.resolve();
-    }
-    const now = performance.now();
-    roll.settled = true;
-    roll.removeAt = now;
-    if (roll.fadeStart === null) {
-      roll.fadeStart = now;
-    }
-    this.requestRender();
-    return new Promise<void>((resolve) => {
-      const current = this.fadeWaiters.get(rollId) ?? [];
-      current.push(resolve);
-      this.fadeWaiters.set(rollId, current);
-    });
   }
 
   dispose() {

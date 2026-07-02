@@ -1,649 +1,484 @@
-import { useEffect, useRef, useState } from "react";
-import type {
-  CharacterSheet,
-  ConnectedPlayer,
-  DerivedStatDef,
-  PlayerSlot,
-  SheetTemplate,
-} from "../lib/types";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   abilityModifier,
-  characterSheetsEqual,
-  DEFAULT_ABILITY_SCORE,
+  createDefaultSheet,
+  DEFAULT_SHEET_TEMPLATE,
   derivedStatTotal,
   formatModifier,
+  type CharacterSheet,
+  type SheetRecord,
+  type SheetSectionId,
 } from "../lib/types";
-import { uploadPortrait } from "../lib/uploadAsset";
-import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
 import { NumberInput } from "./NumberInput";
-import type { useDmActions } from "../hooks/useGameRoom";
+import { useDebouncedCallback } from "../hooks/useDebouncedCallback";
+import { uploadPortrait } from "../lib/uploadAsset";
 
-type CharacterSheetProps = {
-  sheet: CharacterSheet | null;
+type CharacterSheetPanelProps = {
+  record: SheetRecord | null;
   canEdit: boolean;
+  isDm: boolean;
+  roomId: string;
   onChange: (sheet: CharacterSheet) => void;
-  template: SheetTemplate;
-  slotId?: string | null;
-  playerSlots?: PlayerSlot[];
-  connectedPlayers?: ConnectedPlayer[];
-  allSheets?: Record<string, CharacterSheet>;
-  isDm?: boolean;
-  dm?: ReturnType<typeof useDmActions>;
-  showSlotManagement?: boolean;
+  /** DM-only: flips a section's player visibility (NPC sheets). */
+  onToggleReveal?: (section: SheetSectionId, revealed: boolean) => void;
+  /** Click-to-roll (1d20 + modifier), attributed to this sheet. Shift = advantage, Alt = disadvantage. */
+  onRoll?: (label: string, modifier: number, adv?: "adv" | "dis") => void;
 };
 
-type CharacterSheetFormProps = {
-  sheet: CharacterSheet;
-  canEdit: boolean;
-  template: SheetTemplate;
-  onChange?: (sheet: CharacterSheet) => void;
-  slotId?: string | null;
-  compact?: boolean;
-};
+const template = DEFAULT_SHEET_TEMPLATE;
 
-type SheetFieldProps = {
-  label: string;
-  children: React.ReactNode;
-};
-
-/// <summary>
-/// Label wrapper for a single character sheet field.
-/// </summary>
-function SheetField({ label, children }: SheetFieldProps) {
-  return (
-    <label className="sheet-field">
-      <span className="sheet-field-label">{label}</span>
-      {children}
-    </label>
-  );
+/** Shift-click rolls with advantage, Alt-click with disadvantage. */
+function advFromEvent(event: React.MouseEvent): "adv" | "dis" | undefined {
+  if (event.shiftKey) return "adv";
+  if (event.altKey) return "dis";
+  return undefined;
 }
 
-type SheetSectionProps = {
-  title: string;
-  children: React.ReactNode;
-};
+const ROLL_HINT = "Click to roll (Shift = advantage, Alt = disadvantage)";
 
 /// <summary>
-/// Groups related character sheet fields under a section heading.
+/// One collapsible sheet section card. Cards are the reveal granularity: on NPC
+/// sheets the DM gets a show/hide toggle per card, and players see "???" for
+/// sections the server stripped.
 /// </summary>
-function SheetSection({ title, children }: SheetSectionProps) {
+function SheetCard({
+  title,
+  hidden,
+  revealToggle,
+  children,
+}: {
+  title: string;
+  /** Player-side: the server redacted this section. */
+  hidden: boolean;
+  /** DM-side reveal control for NPC sheets, or null. */
+  revealToggle: { revealed: boolean; onToggle: (revealed: boolean) => void } | null;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
   return (
-    <section className="sheet-section">
-      <h3>{title}</h3>
-      {children}
+    <section className="sheet-card">
+      <header className="sheet-card-head">
+        <button className="sheet-card-toggle" onClick={() => setOpen((v) => !v)}>
+          <span className="chevron">{open ? "▾" : "▸"}</span>
+          {title}
+        </button>
+        {revealToggle ? (
+          <button
+            className={`reveal-toggle ${revealToggle.revealed ? "reveal-toggle--on" : ""}`}
+            title={
+              revealToggle.revealed
+                ? "Visible to players — click to hide"
+                : "Hidden from players — click to reveal"
+            }
+            onClick={() => revealToggle.onToggle(!revealToggle.revealed)}
+          >
+            {revealToggle.revealed ? "👁 Shown" : "✕ Hidden"}
+          </button>
+        ) : null}
+      </header>
+      {open ? (
+        hidden ? (
+          <div className="sheet-card-body">
+            <span className="muted">??? — not yet revealed</span>
+          </div>
+        ) : (
+          <div className="sheet-card-body stack">{children}</div>
+        )
+      ) : null}
     </section>
   );
 }
 
-type AbilityCardProps = {
-  abbr: string;
-  name: string;
-  score: number;
-  canEdit: boolean;
-  onScoreChange: (value: number) => void;
-};
-
 /// <summary>
-/// One ability: editable score with its derived 5e modifier shown beneath.
+/// A character sheet rendered as collapsible section cards. Editable by its
+/// owner and by the DM (who edits NPC sheets in place); players see unrevealed
+/// NPC sections as "???" — the data itself is stripped server-side.
 /// </summary>
-function AbilityCard({ abbr, name, score, canEdit, onScoreChange }: AbilityCardProps) {
-  return (
-    <div className="ability-card" title={name}>
-      <span className="ability-abbr">{abbr}</span>
-      <NumberInput
-        className="ability-score"
-        value={score}
-        min={0}
-        allowNegative={false}
-        disabled={!canEdit}
-        onCommit={onScoreChange}
-      />
-      <span className="ability-mod">{formatModifier(abilityModifier(score))}</span>
-    </div>
-  );
-}
-
-type DerivedStatRowProps = {
-  def: DerivedStatDef;
-  abilityAbbr: string | null;
-  manual: number;
-  total: number;
-  canEdit: boolean;
-  onManualChange: (value: number) => void;
-};
-
-/// <summary>
-/// One skill or saving throw: computed total, linked-ability tag, and the player's manual modifier.
-/// </summary>
-function DerivedStatRow({
-  def,
-  abilityAbbr,
-  manual,
-  total,
+export function CharacterSheetPanel({
+  record,
   canEdit,
-  onManualChange,
-}: DerivedStatRowProps) {
-  return (
-    <div className="stat-row">
-      <span className="stat-total">{formatModifier(total)}</span>
-      <span className="stat-name">{def.name}</span>
-      <span className="stat-ability-tag">{abilityAbbr ?? "—"}</span>
-      <NumberInput
-        className="stat-mod-input"
-        value={manual}
-        disabled={!canEdit}
-        aria-label={`${def.name} modifier`}
-        onCommit={onManualChange}
-      />
-    </div>
-  );
-}
-
-/// <summary>
-/// Shared character sheet fields for player edit and DM read-only views.
-/// </summary>
-function CharacterSheetForm({
-  sheet: serverSheet,
-  canEdit,
-  template,
+  isDm,
+  roomId,
   onChange,
-  slotId,
-  compact = false,
-}: CharacterSheetFormProps) {
-  const iconRef = useRef<HTMLInputElement>(null);
-  const [uploadingIcon, setUploadingIcon] = useState(false);
-  const [iconError, setIconError] = useState<string | null>(null);
-  const [draft, setDraft] = useState(serverSheet);
-  const lastSentRef = useRef(serverSheet);
-  const textRows = compact ? 3 : 5;
+  onToggleReveal,
+  onRoll,
+}: CharacterSheetPanelProps) {
+  const [draft, setDraft] = useState<CharacterSheet>(record?.data ?? createDefaultSheet(""));
+  const [uploading, setUploading] = useState(false);
+  const { debounced } = useDebouncedCallback((next: CharacterSheet) => onChange(next), 400);
 
-  const { debounced: debouncedSave, flush } = useDebouncedCallback((next: CharacterSheet) => {
-    lastSentRef.current = next;
-    onChange?.(next);
-  }, 400);
-
+  // Reset the editable draft when switching which sheet is shown.
   useEffect(() => {
-    setDraft((current) =>
-      characterSheetsEqual(current, lastSentRef.current) ? serverSheet : current,
+    setDraft(record?.data ?? createDefaultSheet(""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [record?.id]);
+
+  if (!record) {
+    return (
+      <div className="panel-body">
+        <span className="muted">This sheet no longer exists.</span>
+      </div>
     );
-    lastSentRef.current = serverSheet;
-  }, [serverSheet]);
+  }
 
-  const update = (partial: Partial<CharacterSheet>) => {
-    if (!canEdit || !onChange) {
-      return;
-    }
-    const next = { ...draft, ...partial };
+  const value = canEdit ? draft : record.data;
+
+  const update = (patch: Partial<CharacterSheet>) => {
+    if (!canEdit) return;
+    const next = { ...draft, ...patch };
     setDraft(next);
-    debouncedSave(next);
+    debounced(next);
   };
 
-  const saveNow = (next: CharacterSheet) => {
-    setDraft(next);
-    flush();
-    lastSentRef.current = next;
-    onChange?.(next);
-  };
-
-  const updateAbilityScore = (abilityId: string, value: number) =>
-    update({ abilityScores: { ...draft.abilityScores, [abilityId]: value } });
-
-  const updateSkillMod = (skillId: string, value: number) =>
-    update({ skillMods: { ...draft.skillMods, [skillId]: value } });
-
-  const updateSaveMod = (saveId: string, value: number) =>
-    update({ saveMods: { ...draft.saveMods, [saveId]: value } });
-
-  const handleIconFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file || !canEdit || !onChange || !slotId) {
-      return;
-    }
-
-    setIconError(null);
-    setUploadingIcon(true);
+  const handlePortrait = async (file: File) => {
+    if (!canEdit) return;
+    setUploading(true);
     try {
-      const uploaded = await uploadPortrait(slotId, file);
-      saveNow({ ...draft, iconUrl: uploaded.url });
-    } catch (error) {
-      setIconError(error instanceof Error ? error.message : "Icon upload failed.");
+      const { url } = await uploadPortrait(roomId, record.id, file);
+      update({ iconUrl: url });
+    } catch {
+      // Non-fatal: portrait stays unchanged.
     } finally {
-      setUploadingIcon(false);
+      setUploading(false);
     }
   };
 
-  const sheet = draft;
-  const abilityById = new Map(template.abilities.map((ability) => [ability.id, ability]));
-  const abbrFor = (def: DerivedStatDef): string | null =>
-    def.mode === "ability" ? (abilityById.get(def.abilityId)?.abbr ?? null) : null;
+  /** Section is stripped for this viewer (players looking at unrevealed NPC data). */
+  const hiddenFor = (section: SheetSectionId) =>
+    !isDm && record.kind === "npc" && !record.revealed[section];
+
+  /** DM-only reveal toggle, present on NPC sheet cards. */
+  const revealToggleFor = (section: SheetSectionId) =>
+    isDm && record.kind === "npc" && onToggleReveal
+      ? {
+          revealed: record.revealed[section],
+          onToggle: (revealed: boolean) => onToggleReveal(section, revealed),
+        }
+      : null;
 
   return (
-    <div className={`character-form${compact ? " character-form-compact" : ""}`}>
-      <SheetSection title="Character">
-        <div className="sheet-icon-row">
-          {sheet.iconUrl ? (
-            <img className="sheet-portrait" src={sheet.iconUrl} alt="" />
+    <div className="panel-body stack">
+      <SheetCard
+        title="Identity"
+        hidden={hiddenFor("identity")}
+        revealToggle={revealToggleFor("identity")}
+      >
+        <div className="sheet-top">
+          {value.iconUrl ? (
+            <img className="sheet-portrait" src={value.iconUrl} alt="portrait" />
           ) : (
-            <div className="sheet-portrait sheet-portrait-empty">No icon</div>
+            <div className="sheet-portrait" />
           )}
-          {canEdit && slotId ? (
-            <div className="sheet-icon-actions">
-              <button
-                type="button"
-                className="btn-compact"
-                disabled={uploadingIcon}
-                onClick={() => iconRef.current?.click()}
-              >
-                {uploadingIcon ? "Uploading…" : sheet.iconUrl ? "Change icon" : "Upload icon"}
-              </button>
-              {sheet.iconUrl ? (
-                <button type="button" className="btn-compact" onClick={() => update({ iconUrl: null })}>
-                  Remove
-                </button>
-              ) : null}
-              <input
-                ref={iconRef}
-                className="file-input-hidden"
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                onChange={(event) => {
-                  void handleIconFile(event);
-                }}
-              />
-              {iconError ? <p className="sheet-field-error">{iconError}</p> : null}
-            </div>
-          ) : null}
-        </div>
-        <div className="sheet-field-grid">
-          <SheetField label="Character name">
+          <div style={{ flex: 1 }}>
+            <label>Character name</label>
             <input
-              value={sheet.characterName}
+              value={value.characterName}
               disabled={!canEdit}
-              onChange={(event) => update({ characterName: event.target.value })}
+              onChange={(e) => update({ characterName: e.target.value })}
             />
-          </SheetField>
-          <SheetField label="Player name">
-            <input
-              value={sheet.playerName}
-              disabled={!canEdit}
-              onChange={(event) => update({ playerName: event.target.value })}
-            />
-          </SheetField>
+            {canEdit ? (
+              <label style={{ marginTop: "0.4rem", cursor: "pointer" }}>
+                {uploading ? "Uploading…" : "Upload portrait"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handlePortrait(file);
+                  }}
+                />
+              </label>
+            ) : null}
+          </div>
         </div>
-      </SheetSection>
 
-      <SheetSection title="Class & level">
-        <div className="sheet-field-grid">
-          <SheetField label="Class">
+        <div className="grid-2">
+          <div>
+            <label>Class</label>
             <input
-              value={sheet.characterClass}
+              value={value.characterClass}
               disabled={!canEdit}
-              onChange={(event) => update({ characterClass: event.target.value })}
+              onChange={(e) => update({ characterClass: e.target.value })}
             />
-          </SheetField>
-          <SheetField label="Subclass">
-            <input
-              value={sheet.subclass}
-              disabled={!canEdit}
-              onChange={(event) => update({ subclass: event.target.value })}
-            />
-          </SheetField>
-          <SheetField label="Level">
+          </div>
+          <div>
+            <label>Level</label>
             <NumberInput
-              value={sheet.level}
+              value={value.level}
               min={1}
               allowNegative={false}
               disabled={!canEdit}
               onCommit={(level) => update({ level })}
             />
-          </SheetField>
-          <SheetField label="XP">
-            <NumberInput
-              value={sheet.xp}
-              min={0}
-              allowNegative={false}
+          </div>
+          <div>
+            <label>Race</label>
+            <input
+              value={value.race}
               disabled={!canEdit}
-              onCommit={(xp) => update({ xp })}
+              onChange={(e) => update({ race: e.target.value })}
             />
-          </SheetField>
+          </div>
+          <div>
+            <label>Alignment</label>
+            <input
+              value={value.alignment}
+              disabled={!canEdit}
+              onChange={(e) => update({ alignment: e.target.value })}
+            />
+          </div>
         </div>
-      </SheetSection>
+      </SheetCard>
 
-      <SheetSection title="Combat">
-        <div className="sheet-field-grid">
-          <SheetField label="HP (current)">
-            <NumberInput
-              value={sheet.hp.current}
-              disabled={!canEdit}
-              onCommit={(current) => update({ hp: { ...draft.hp, current } })}
-            />
-          </SheetField>
-          <SheetField label="HP (max)">
-            <NumberInput
-              value={sheet.hp.max}
-              min={0}
-              allowNegative={false}
-              disabled={!canEdit}
-              onCommit={(max) => update({ hp: { ...draft.hp, max } })}
-            />
-          </SheetField>
-          <SheetField label="Armor Class">
-            <NumberInput
-              value={sheet.ac}
-              min={0}
-              allowNegative={false}
-              disabled={!canEdit}
-              onCommit={(ac) => update({ ac })}
-            />
-          </SheetField>
-          <SheetField label="Initiative">
-            <NumberInput
-              value={sheet.initiative}
-              disabled={!canEdit}
-              onCommit={(initiative) => update({ initiative })}
-            />
-          </SheetField>
-        </div>
-      </SheetSection>
-
-      {template.abilities.length > 0 ? (
-        <SheetSection title="Abilities">
-          <div className="ability-grid">
-            {template.abilities.map((ability) => (
-              <AbilityCard
-                key={ability.id}
-                abbr={ability.abbr}
-                name={ability.name}
-                score={sheet.abilityScores[ability.id] ?? DEFAULT_ABILITY_SCORE}
-                canEdit={canEdit}
-                onScoreChange={(value) => updateAbilityScore(ability.id, value)}
+      <SheetCard
+        title="Combat"
+        hidden={hiddenFor("combat")}
+        revealToggle={revealToggleFor("combat")}
+      >
+        <div className="grid-3">
+          <div>
+            <label>HP</label>
+            <div className="row">
+              <NumberInput
+                value={value.hp.current}
+                disabled={!canEdit}
+                onCommit={(current) => update({ hp: { ...value.hp, current } })}
+                aria-label="Current HP"
               />
-            ))}
+              <span className="muted">/</span>
+              <NumberInput
+                value={value.hp.max}
+                disabled={!canEdit}
+                onCommit={(max) => update({ hp: { ...value.hp, max } })}
+                aria-label="Max HP"
+              />
+            </div>
           </div>
-        </SheetSection>
-      ) : null}
-
-      {template.skills.length > 0 ? (
-        <SheetSection title="Skills">
-          <div className="stat-list">
-            {template.skills.map((skill) => {
-              const manual = sheet.skillMods[skill.id] ?? 0;
-              return (
-                <DerivedStatRow
-                  key={skill.id}
-                  def={skill}
-                  abilityAbbr={abbrFor(skill)}
-                  manual={manual}
-                  total={derivedStatTotal(skill, manual, sheet.abilityScores)}
-                  canEdit={canEdit}
-                  onManualChange={(value) => updateSkillMod(skill.id, value)}
-                />
-              );
-            })}
+          <div>
+            <label>AC</label>
+            <NumberInput value={value.ac} disabled={!canEdit} onCommit={(ac) => update({ ac })} />
           </div>
-        </SheetSection>
-      ) : null}
-
-      {template.saves.length > 0 ? (
-        <SheetSection title="Saving throws">
-          <div className="stat-list">
-            {template.saves.map((save) => {
-              const manual = sheet.saveMods[save.id] ?? 0;
-              return (
-                <DerivedStatRow
-                  key={save.id}
-                  def={save}
-                  abilityAbbr={abbrFor(save)}
-                  manual={manual}
-                  total={derivedStatTotal(save, manual, sheet.abilityScores)}
-                  canEdit={canEdit}
-                  onManualChange={(value) => updateSaveMod(save.id, value)}
-                />
-              );
-            })}
+          <div>
+            <label>Init</label>
+            <div className="row">
+              <NumberInput
+                value={value.initiative}
+                disabled={!canEdit}
+                onCommit={(initiative) => update({ initiative })}
+              />
+              {onRoll ? (
+                <button
+                  className="roll-btn"
+                  title={ROLL_HINT}
+                  onClick={(e) => onRoll("Initiative", value.initiative, advFromEvent(e))}
+                >
+                  🎲
+                </button>
+              ) : null}
+            </div>
           </div>
-        </SheetSection>
-      ) : null}
-
-      <SheetSection title="Details">
-        <div className="sheet-field-grid">
-          <SheetField label="Race">
-            <input
-              value={sheet.race}
-              disabled={!canEdit}
-              onChange={(event) => update({ race: event.target.value })}
-            />
-          </SheetField>
-          <SheetField label="Alignment">
-            <input
-              value={sheet.alignment}
-              disabled={!canEdit}
-              onChange={(event) => update({ alignment: event.target.value })}
-            />
-          </SheetField>
-          <SheetField label="Size">
-            <input
-              value={sheet.size}
-              disabled={!canEdit}
-              onChange={(event) => update({ size: event.target.value })}
-            />
-          </SheetField>
-          <SheetField label="Age">
-            <input
-              value={sheet.age}
-              disabled={!canEdit}
-              onChange={(event) => update({ age: event.target.value })}
-            />
-          </SheetField>
-          <SheetField label="Height">
-            <input
-              value={sheet.height}
-              disabled={!canEdit}
-              onChange={(event) => update({ height: event.target.value })}
-            />
-          </SheetField>
-          <SheetField label="Weight">
-            <input
-              value={sheet.weight}
-              disabled={!canEdit}
-              onChange={(event) => update({ weight: event.target.value })}
-            />
-          </SheetField>
-          <SheetField label="Eyes">
-            <input
-              value={sheet.eyes}
-              disabled={!canEdit}
-              onChange={(event) => update({ eyes: event.target.value })}
-            />
-          </SheetField>
-          <SheetField label="Skin">
-            <input
-              value={sheet.skin}
-              disabled={!canEdit}
-              onChange={(event) => update({ skin: event.target.value })}
-            />
-          </SheetField>
-          <SheetField label="Hair">
-            <input
-              value={sheet.hair}
-              disabled={!canEdit}
-              onChange={(event) => update({ hair: event.target.value })}
-            />
-          </SheetField>
         </div>
-      </SheetSection>
+      </SheetCard>
 
-      <SheetSection title="Story">
-        <SheetField label="Backstory / personality / flaws, etc.">
-          <textarea
-            rows={textRows}
-            value={sheet.backstoryPersonality}
-            disabled={!canEdit}
-            onChange={(event) => update({ backstoryPersonality: event.target.value })}
-          />
-        </SheetField>
-        <SheetField label="Notes">
-          <textarea
-            rows={textRows}
-            value={sheet.notes}
-            disabled={!canEdit}
-            onChange={(event) => update({ notes: event.target.value })}
-          />
-        </SheetField>
-      </SheetSection>
-    </div>
-  );
-}
+      <SheetCard
+        title="Abilities"
+        hidden={hiddenFor("abilities")}
+        revealToggle={revealToggleFor("abilities")}
+      >
+        <div className="grid-3">
+          {template.abilities.map((ability) => {
+            const score = value.abilityScores[ability.id] ?? 10;
+            const mod = abilityModifier(score);
+            return (
+              <div className="ability" key={ability.id}>
+                <div className="abbr">{ability.abbr}</div>
+                {onRoll ? (
+                  <button
+                    className="mod roll-btn"
+                    title={`${ability.name} check — ${ROLL_HINT}`}
+                    onClick={(e) => onRoll(`${ability.name} check`, mod, advFromEvent(e))}
+                  >
+                    {formatModifier(mod)}
+                  </button>
+                ) : (
+                  <div className="mod">{formatModifier(mod)}</div>
+                )}
+                <NumberInput
+                  value={score}
+                  min={1}
+                  allowNegative={false}
+                  disabled={!canEdit}
+                  onCommit={(next) =>
+                    update({ abilityScores: { ...value.abilityScores, [ability.id]: next } })
+                  }
+                  aria-label={ability.name}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </SheetCard>
 
-/// <summary>
-/// Sidebar character sheet form; editable for the owning player, read-only for the DM view.
-/// </summary>
-export function CharacterSheetPanel({
-  sheet,
-  canEdit,
-  onChange,
-  template,
-  slotId,
-  playerSlots,
-  connectedPlayers,
-  allSheets,
-  isDm,
-  dm,
-  showSlotManagement = true,
-}: CharacterSheetProps) {
-  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+      <SheetCard
+        title="Saving throws"
+        hidden={hiddenFor("saves")}
+        revealToggle={revealToggleFor("saves")}
+      >
+        {template.saves.map((save) => {
+          const manual = value.saveMods[save.id] ?? 0;
+          const total = derivedStatTotal(save, manual, value.abilityScores);
+          return (
+            <div className="stat-row" key={save.id}>
+              <span>{save.name}</span>
+              <NumberInput
+                value={manual}
+                disabled={!canEdit}
+                onCommit={(next) => update({ saveMods: { ...value.saveMods, [save.id]: next } })}
+                aria-label={`${save.name} save modifier`}
+              />
+              {onRoll ? (
+                <button
+                  className="total roll-btn"
+                  title={`${save.name} save — ${ROLL_HINT}`}
+                  onClick={(e) => onRoll(`${save.name} save`, total, advFromEvent(e))}
+                >
+                  {formatModifier(total)}
+                </button>
+              ) : (
+                <span className="total">{formatModifier(total)}</span>
+              )}
+            </div>
+          );
+        })}
+      </SheetCard>
 
-  if (isDm && playerSlots && dm) {
-    const connectedBySlot = new Map(
-      (connectedPlayers ?? []).map((player) => [player.playerId, player]),
-    );
+      <SheetCard
+        title="Skills"
+        hidden={hiddenFor("skills")}
+        revealToggle={revealToggleFor("skills")}
+      >
+        {template.skills.map((skill) => {
+          const manual = value.skillMods[skill.id] ?? 0;
+          const total = derivedStatTotal(skill, manual, value.abilityScores);
+          return (
+            <div className="stat-row" key={skill.id}>
+              <span>{skill.name}</span>
+              <NumberInput
+                value={manual}
+                disabled={!canEdit}
+                onCommit={(next) => update({ skillMods: { ...value.skillMods, [skill.id]: next } })}
+                aria-label={`${skill.name} modifier`}
+              />
+              {onRoll ? (
+                <button
+                  className="total roll-btn"
+                  title={`${skill.name} check — ${ROLL_HINT}`}
+                  onClick={(e) => onRoll(`${skill.name} check`, total, advFromEvent(e))}
+                >
+                  {formatModifier(total)}
+                </button>
+              ) : (
+                <span className="total">{formatModifier(total)}</span>
+              )}
+            </div>
+          );
+        })}
+      </SheetCard>
 
-    return (
-      <div className={`side-panel party-panel${showSlotManagement ? "" : " party-panel-sheets-only"}`}>
-        <header className="side-panel-header">
-          <h2>{showSlotManagement ? "Players" : "Character sheets"}</h2>
-          {showSlotManagement ? (
-            <button type="button" className="btn-compact" onClick={() => dm.addPlayerSlot("New player")}>
-              + Slot
+      <SheetCard
+        title="Inventory"
+        hidden={hiddenFor("inventory")}
+        revealToggle={revealToggleFor("inventory")}
+      >
+        <div
+          className="stack"
+          // Drop target for pointer-dragged items from the Items directory.
+          data-inv-drop={canEdit ? record.id : undefined}
+        >
+          {value.inventory.length === 0 ? (
+            <span className="muted" style={{ fontSize: "0.78rem" }}>
+              {canEdit && isDm
+                ? "Empty. Drag items here from the Items tab, or add a row."
+                : "Empty."}
+            </span>
+          ) : null}
+          {value.inventory.map((entry, index) => (
+            <div className="inv-row" key={index}>
+              <input
+                value={entry.name}
+                disabled={!canEdit}
+                aria-label="Item name"
+                onChange={(e) =>
+                  update({
+                    inventory: value.inventory.map((row, i) =>
+                      i === index ? { ...row, name: e.target.value } : row,
+                    ),
+                  })
+                }
+              />
+              <NumberInput
+                value={entry.qty}
+                min={1}
+                allowNegative={false}
+                disabled={!canEdit}
+                aria-label="Quantity"
+                onCommit={(qty) =>
+                  update({
+                    inventory: value.inventory.map((row, i) =>
+                      i === index ? { ...row, qty } : row,
+                    ),
+                  })
+                }
+              />
+              <input
+                value={entry.note}
+                disabled={!canEdit}
+                placeholder="note"
+                aria-label="Item note"
+                onChange={(e) =>
+                  update({
+                    inventory: value.inventory.map((row, i) =>
+                      i === index ? { ...row, note: e.target.value } : row,
+                    ),
+                  })
+                }
+              />
+              {canEdit ? (
+                <button
+                  className="btn-ghost icon-btn"
+                  title="Remove"
+                  onClick={() =>
+                    update({ inventory: value.inventory.filter((_, i) => i !== index) })
+                  }
+                >
+                  ✕
+                </button>
+              ) : null}
+            </div>
+          ))}
+          {canEdit ? (
+            <button
+              onClick={() =>
+                update({
+                  inventory: [...value.inventory, { itemId: null, name: "New item", qty: 1, note: "" }],
+                })
+              }
+            >
+              ＋ Add row
             </button>
           ) : null}
-        </header>
-        <div className="side-panel-body">
-          {playerSlots.length === 0 ? (
-            <p className="muted">
-              {showSlotManagement
-                ? "Create player slots so your party can join without duplicates."
-                : "Add player slots in the Players tab to view character sheets here."}
-            </p>
-          ) : (
-            <div className="party-list party-grid">
-              {playerSlots.map((slot) => {
-                const connected = connectedBySlot.get(slot.id);
-                const playerSheet = allSheets?.[slot.id];
-                return (
-                  <div key={slot.id} className="party-card party-card-sheet">
-                    {showSlotManagement ? (
-                      <div className="party-card-meta">
-                        <input
-                          className="slot-name-input"
-                          value={slot.name}
-                          onChange={(event) =>
-                            dm.updatePlayerSlot({ ...slot, name: event.target.value })
-                          }
-                        />
-                        <span className={`slot-connection${connected ? " online" : ""}`}>
-                          {connected ? "Connected" : "Waiting"}
-                        </span>
-                        {confirmRemoveId === slot.id ? (
-                          <div className="party-remove-confirm">
-                            <button
-                              type="button"
-                              className="btn-compact"
-                              onClick={() => setConfirmRemoveId(null)}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              className="btn-compact danger"
-                              onClick={() => {
-                                dm.removePlayerSlot(slot.id);
-                                setConfirmRemoveId(null);
-                              }}
-                            >
-                              Confirm remove
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            className="btn-compact danger"
-                            disabled={Boolean(connected)}
-                            onClick={() => setConfirmRemoveId(slot.id)}
-                          >
-                            Remove
-                          </button>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="party-card-heading">
-                        <h3>{slot.name}</h3>
-                        <span className={`slot-connection${connected ? " online" : ""}`}>
-                          {connected ? "Connected" : "Waiting"}
-                        </span>
-                      </div>
-                    )}
-                    {playerSheet ? (
-                      <CharacterSheetForm
-                        sheet={playerSheet}
-                        canEdit={false}
-                        template={template}
-                        slotId={slot.id}
-                        compact
-                      />
-                    ) : (
-                      <p className="muted party-sheet-empty">
-                        No sheet yet — the player fills this in after joining.
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
-      </div>
-    );
-  }
+      </SheetCard>
 
-  if (!sheet) {
-    return (
-      <div className="side-panel">
-        <header className="side-panel-header">
-          <h2>Character sheet</h2>
-        </header>
-        <div className="side-panel-body">
-          <p className="muted">Join as a player to edit your sheet.</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="side-panel">
-      <header className="side-panel-header">
-        <h2>Character sheet</h2>
-      </header>
-      <div className="side-panel-body">
-        <CharacterSheetForm
-          sheet={sheet}
-          canEdit={canEdit}
-          template={template}
-          onChange={onChange}
-          slotId={slotId}
+      <SheetCard title="Notes" hidden={hiddenFor("notes")} revealToggle={revealToggleFor("notes")}>
+        <textarea
+          value={value.notes}
+          disabled={!canEdit}
+          onChange={(e) => update({ notes: e.target.value })}
+          placeholder="Backstory, reminders…"
         />
-      </div>
+      </SheetCard>
     </div>
   );
 }

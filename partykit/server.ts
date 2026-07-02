@@ -1,39 +1,37 @@
 import type * as Party from "partykit/server";
 import {
-  createDefaultSheet,
+  abilityModifier,
   createInitialState,
+  createNpcSheetRecord,
+  createPcSheetRecord,
   createPlayerSlot,
+  DEFAULT_ABILITY_SCORE,
+  MAX_LOG_ENTRIES,
   normalizeCharacterSheet,
   normalizeGameState,
-  normalizeSheetTemplate,
+  normalizeItem,
+  normalizeScene,
   normalizeToken,
+  SHEET_SECTIONS,
   syncPlayerTokenFromState,
   type ClientMessage,
+  type CombatEntry,
   type ConnectedPlayer,
   type DiceRoll,
   type GameState,
+  type LogEntry,
   type Role,
   type Scene,
   type ServerMessage,
 } from "../src/lib/types";
-import { normalizeScene } from "../src/lib/sceneUtils";
-import { normalizeTokenTemplate } from "../src/lib/tokenTemplate";
-import {
-  ANNOTATION_DURATION_MS,
-  annotationPathLength,
-  annotationRemainingMs,
-  isAnnotationExpired,
-  isValidAnnotationPoints,
-  MAX_ACTIVE_ANNOTATIONS_PER_PLAYER,
-  normalizeMapAnnotation,
-  trimAnnotationPoints,
-} from "../src/lib/mapAnnotation";
-import { rollDiceExpression, secureRandInt } from "../src/lib/dice";
+import { rollDiceExpression, rollWithAdvantage, secureRandInt } from "../src/lib/dice";
 import {
   buildExpressionLabel,
   interpretRoll,
   rollFaceValues,
-} from "../src/dice3d/diceProtocol";
+  sanitizeThrow,
+} from "../src/lib/dice3d";
+import { redactStateFor, type StateView } from "../src/lib/redact";
 import { loadCampaignFromDisk } from "./loadCampaign";
 
 type ClientMeta = {
@@ -45,16 +43,16 @@ type ClientMeta = {
 
 const ROOM_KEY = "room-key";
 const VIEWPORT_THROTTLE_MS = 66;
-const MAX_PUBLIC_DICE_LOG = 50;
-const MAX_DICE_PER_THROW = 20;
+const VIEWPORT_PERSIST_DEBOUNCE_MS = 2000;
+const MAX_CHAT_LENGTH = 2000;
 
 export default class GameServer implements Party.Server {
   state: GameState;
   clients = new Map<string, ClientMeta>();
-  annotationRemovalTimers = new Map<string, ReturnType<typeof setTimeout>>();
   lastViewportBroadcast = 0;
   pendingViewport: GameState["viewport"] | null = null;
   viewportTimer: ReturnType<typeof setTimeout> | null = null;
+  viewportPersistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(readonly room: Party.Room) {
     this.state = createInitialState(room.id);
@@ -67,7 +65,6 @@ export default class GameServer implements Party.Server {
         ...stored,
         dmClientId: null,
         connectedPlayers: [],
-        scenes: stored.scenes.map((scene) => normalizeScene(scene)),
       });
     } else {
       const manifest = await loadCampaignFromDisk();
@@ -80,29 +77,7 @@ export default class GameServer implements Party.Server {
       }
     }
     this.clearStaleDm();
-    this.pruneAndRescheduleAnnotations();
     await this.persistState();
-  }
-
-  /// <summary>
-  /// Drops expired annotations and rebuilds removal timers after durable storage reload.
-  /// </summary>
-  pruneAndRescheduleAnnotations() {
-    const now = Date.now();
-    const annotations = (this.state.annotations ?? [])
-      .map((annotation) => normalizeMapAnnotation(annotation))
-      .filter((annotation) => !isAnnotationExpired(annotation.createdAt, now));
-
-    this.state.annotations = annotations;
-
-    for (const timer of this.annotationRemovalTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.annotationRemovalTimers.clear();
-
-    for (const annotation of annotations) {
-      this.scheduleAnnotationRemoval(annotation.id, annotationRemainingMs(annotation.createdAt, now));
-    }
   }
 
   /// <summary>
@@ -122,13 +97,6 @@ export default class GameServer implements Party.Server {
   }
 
   /// <summary>
-  /// Broadcasts a typed message to all clients, optionally excluding one connection.
-  /// </summary>
-  broadcast(message: ServerMessage, exceptId?: string) {
-    this.room.broadcast(JSON.stringify(message), exceptId ? [exceptId] : []);
-  }
-
-  /// <summary>
   /// Clears dmClientId when the stored DM connection is no longer in the room.
   /// </summary>
   clearStaleDm() {
@@ -145,12 +113,87 @@ export default class GameServer implements Party.Server {
       ...this.state,
       dmClientId: null,
       connectedPlayers: [],
-      publicDiceLog: (this.state.publicDiceLog ?? []).slice(-MAX_PUBLIC_DICE_LOG),
+      log: (this.state.log ?? []).slice(-MAX_LOG_ENTRIES),
     });
   }
 
   /// <summary>
-  /// Broadcasts full game state to every client with per-connection role metadata.
+  /// Appends an entry to the unified log, enforcing the size cap.
+  /// </summary>
+  appendLog(entry: LogEntry) {
+    this.state.log = [...(this.state.log ?? []), entry].slice(-MAX_LOG_ENTRIES);
+  }
+
+  /// <summary>
+  /// Records a curated game event (scene change, token placed, join/leave, …).
+  /// Kept deliberately sparse — no per-move spam.
+  /// </summary>
+  logEvent(text: string, dmOnly = false) {
+    this.appendLog({
+      id: `log-${crypto.randomUUID().slice(0, 8)}`,
+      t: Date.now(),
+      kind: "event",
+      text,
+      ...(dmOnly ? { dmOnly: true } : {}),
+    });
+  }
+
+  /// <summary>
+  /// Sorts combatants: rolled first by initiative desc, DEX desc tiebreak,
+  /// insertion order last (stable sort). Unrolled entries sink to the bottom.
+  /// The current turn keeps pointing at the same combatant across re-sorts.
+  /// </summary>
+  sortCombat() {
+    const combat = this.state.combat;
+    if (!combat) {
+      return;
+    }
+    const currentId = combat.entries[combat.turnIndex]?.id ?? null;
+    combat.entries = [...combat.entries].sort((a, b) => {
+      const aRolled = a.initiative !== null;
+      const bRolled = b.initiative !== null;
+      if (aRolled !== bRolled) {
+        return aRolled ? -1 : 1;
+      }
+      if (aRolled && bRolled && a.initiative !== b.initiative) {
+        return (b.initiative as number) - (a.initiative as number);
+      }
+      return b.dexScore - a.dexScore;
+    });
+    if (currentId) {
+      const index = combat.entries.findIndex((entry) => entry.id === currentId);
+      if (index >= 0) {
+        combat.turnIndex = index;
+      }
+    }
+  }
+
+  /// <summary>
+  /// Initiative bonus for a sheet: DEX modifier plus the sheet's manual init field.
+  /// </summary>
+  initiativeBonus(sheetId: string | null): { bonus: number; dexScore: number } {
+    const data = sheetId ? this.state.sheets[sheetId]?.data : undefined;
+    const dexScore = data?.abilityScores["dex"] ?? DEFAULT_ABILITY_SCORE;
+    return { bonus: abilityModifier(dexScore) + (data?.initiative ?? 0), dexScore };
+  }
+
+  /// <summary>
+  /// Returns the redaction view for a connection based on its join state and role.
+  /// </summary>
+  viewFor(connectionId: string): StateView {
+    const meta = this.clients.get(connectionId);
+    if (!meta?.joined || !meta.role) {
+      return null;
+    }
+    if (meta.role === "dm") {
+      return { role: "dm" };
+    }
+    return { role: "player", playerId: meta.playerId ?? "" };
+  }
+
+  /// <summary>
+  /// Broadcasts game state to every client, redacted per connection role.
+  /// Storage keeps the full truth; only outbound frames are filtered.
   /// </summary>
   async broadcastState() {
     this.clearStaleDm();
@@ -160,7 +203,7 @@ export default class GameServer implements Party.Server {
       const meta = this.clients.get(connection.id);
       this.sendTo(connection, {
         type: "STATE",
-        state: this.state,
+        state: redactStateFor(this.state, this.viewFor(connection.id)),
         yourClientId: connection.id,
         yourRole: meta?.role ?? null,
       });
@@ -205,7 +248,7 @@ export default class GameServer implements Party.Server {
   sendLobbyState(connection: Party.Connection) {
     this.sendTo(connection, {
       type: "STATE",
-      state: this.state,
+      state: redactStateFor(this.state, null),
       yourClientId: connection.id,
       yourRole: null,
     });
@@ -251,7 +294,9 @@ export default class GameServer implements Party.Server {
   }
 
   /// <summary>
-  /// Applies the latest pending viewport and broadcasts state.
+  /// Applies the latest pending viewport and relays it as a lightweight VIEWPORT
+  /// delta — never a full STATE broadcast (this runs at up to ~15Hz while the DM
+  /// pans). Persistence is debounced off the hot path.
   /// </summary>
   flushViewport() {
     if (!this.pendingViewport) {
@@ -260,35 +305,19 @@ export default class GameServer implements Party.Server {
     this.state.viewport = this.pendingViewport;
     this.pendingViewport = null;
     this.lastViewportBroadcast = Date.now();
-    void this.broadcastState();
-  }
-
-  /// <summary>
-  /// Removes one annotation by id and only broadcasts when state actually changed.
-  /// </summary>
-  removeAnnotationById(annotationId: string) {
-    const before = this.state.annotations?.length ?? 0;
-    this.state.annotations = (this.state.annotations ?? []).filter(
-      (item) => item.id !== annotationId,
-    );
-    this.annotationRemovalTimers.delete(annotationId);
-    if ((this.state.annotations?.length ?? 0) !== before) {
-      void this.broadcastState();
+    const frame = JSON.stringify({
+      type: "VIEWPORT",
+      viewport: this.state.viewport,
+    } satisfies ServerMessage);
+    for (const connection of this.room.getConnections()) {
+      connection.send(frame);
     }
-  }
-
-  /// <summary>
-  /// Schedules annotation expiry, replacing any existing timer for that annotation id.
-  /// </summary>
-  scheduleAnnotationRemoval(annotationId: string, delayMs: number) {
-    const existingTimer = this.annotationRemovalTimers.get(annotationId);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
+    if (!this.viewportPersistTimer) {
+      this.viewportPersistTimer = setTimeout(() => {
+        this.viewportPersistTimer = null;
+        void this.persistState();
+      }, VIEWPORT_PERSIST_DEBOUNCE_MS);
     }
-    const timer = setTimeout(() => {
-      this.removeAnnotationById(annotationId);
-    }, delayMs);
-    this.annotationRemovalTimers.set(annotationId, timer);
   }
 
   onConnect(connection: Party.Connection) {
@@ -303,10 +332,17 @@ export default class GameServer implements Party.Server {
   }
 
   onClose(connection: Party.Connection) {
+    const meta = this.clients.get(connection.id);
     this.clients.delete(connection.id);
 
     if (this.state.dmClientId === connection.id) {
       this.state.dmClientId = null;
+    }
+
+    if (meta?.joined && meta.displayName) {
+      this.logEvent(
+        meta.role === "dm" ? `${meta.displayName} (DM) left.` : `${meta.displayName} left.`,
+      );
     }
 
     this.syncConnectedPlayers();
@@ -366,12 +402,17 @@ export default class GameServer implements Party.Server {
         meta.displayName = slot.name;
         meta.joined = true;
 
-        if (!this.state.characterSheets[parsed.slotId]) {
-          this.state.characterSheets[parsed.slotId] = createDefaultSheet(slot.name);
+        if (!this.state.sheets[parsed.slotId]) {
+          this.state.sheets[parsed.slotId] = createPcSheetRecord(parsed.slotId, slot.name);
         }
       }
 
       this.syncConnectedPlayers();
+      this.logEvent(
+        meta.role === "dm"
+          ? `${meta.displayName} (DM) joined.`
+          : `${meta.displayName} joined.`,
+      );
       this.sendTo(sender, {
         type: "JOINED",
         role: meta.role,
@@ -386,23 +427,33 @@ export default class GameServer implements Party.Server {
       return;
     }
 
-    if (parsed.type === "UPDATE_MY_SHEET") {
-      if (meta.role !== "player" || !meta.playerId) {
-        this.sendTo(sender, { type: "ERROR", message: "Only players can update character sheets." });
+    if (parsed.type === "UPDATE_SHEET") {
+      // The DM may edit any sheet (NPCs in place, PCs if needed); players only their own.
+      const canEdit =
+        this.isDm(sender.id) || (meta.role === "player" && meta.playerId === parsed.sheetId);
+      if (!canEdit) {
+        this.sendTo(sender, {
+          type: "ERROR",
+          message: "You can only edit your own character sheet.",
+        });
         return;
       }
-      const slotName =
-        this.state.playerSlots.find((slot) => slot.id === meta.playerId)?.name ?? "Player";
-      const existing = this.state.characterSheets[meta.playerId];
-      this.state.characterSheets[meta.playerId] = normalizeCharacterSheet(
-        existing ? { ...existing, ...parsed.sheet } : parsed.sheet,
-        slotName,
-      );
-      this.state.tokens = this.state.tokens.map((token) =>
-        token.ownerPlayerId === meta.playerId
-          ? syncPlayerTokenFromState(token, this.state)
-          : token,
-      );
+      const record = this.state.sheets[parsed.sheetId];
+      if (!record) {
+        this.sendTo(sender, { type: "ERROR", message: "Sheet not found." });
+        return;
+      }
+      const fallbackName =
+        this.state.playerSlots.find((slot) => slot.id === record.ownerSlotId)?.name ??
+        (record.data.characterName || "Character");
+      record.data = normalizeCharacterSheet({ ...record.data, ...parsed.sheet }, fallbackName);
+      if (record.ownerSlotId) {
+        this.state.tokens = this.state.tokens.map((token) =>
+          token.ownerPlayerId === record.ownerSlotId
+            ? syncPlayerTokenFromState(token, this.state)
+            : token,
+        );
+      }
       void this.broadcastState();
       return;
     }
@@ -421,47 +472,37 @@ export default class GameServer implements Party.Server {
       }
     }
 
-    if (parsed.type === "ADD_ANNOTATION") {
-      if (!meta.playerId) {
-        return;
-      }
-      const points = parsed.points;
-      if (!isValidAnnotationPoints(points)) {
-        return;
-      }
-      const trimmedPoints = trimAnnotationPoints(points);
-      if (annotationPathLength(trimmedPoints) < 8) {
-        return;
-      }
-      if (!this.state.scenes.some((scene) => scene.id === parsed.sceneId)) {
-        return;
-      }
-      const activePlayerAnnotations = (this.state.annotations ?? []).filter(
-        (item) => item.playerId === meta.playerId && !isAnnotationExpired(item.createdAt),
-      );
-      if (activePlayerAnnotations.length >= MAX_ACTIVE_ANNOTATIONS_PER_PLAYER) {
-        return;
-      }
-      const now = Date.now();
-      const annotation = {
-        id: `ann-${crypto.randomUUID().slice(0, 8)}`,
-        sceneId: parsed.sceneId,
-        playerId: meta.playerId,
-        playerName: meta.displayName?.trim() || "Player",
-        color: parsed.color || "#fcd34d",
-        points: trimmedPoints,
-        createdAt: now,
-      };
-      const existing = this.state.annotations ?? [];
-      this.state.annotations = [...existing, annotation].slice(-24);
-      void this.broadcastState();
-      this.scheduleAnnotationRemoval(annotation.id, ANNOTATION_DURATION_MS);
-      return;
-    }
-
     if (parsed.type === "ROLL_DICE") {
+      if (parsed.private && !this.isDm(sender.id)) {
+        this.sendTo(sender, { type: "ERROR", message: "Only the DM can make secret rolls." });
+        return;
+      }
+
+      // Sheet-integrated rolls are attributed to the character (DM rolls as any
+      // NPC/PC; players only as themselves).
+      let actor: { name: string; sheetId?: string } = {
+        name: meta.displayName?.trim() || "Unknown",
+      };
+      const sheetId = parsed.context?.sheetId;
+      if (sheetId) {
+        const canRollAs =
+          this.isDm(sender.id) || (meta.role === "player" && meta.playerId === sheetId);
+        const record = this.state.sheets[sheetId];
+        if (!canRollAs || !record) {
+          this.sendTo(sender, {
+            type: "ERROR",
+            message: "You can only roll from your own sheet.",
+          });
+          return;
+        }
+        actor = { name: record.data.characterName?.trim() || actor.name, sheetId };
+      }
+
       try {
-        const result = rollDiceExpression(parsed.expression, secureRandInt);
+        const advResult = parsed.adv
+          ? rollWithAdvantage(parsed.expression, parsed.adv, secureRandInt)
+          : null;
+        const result = advResult ?? rollDiceExpression(parsed.expression, secureRandInt);
         const roll: DiceRoll = {
           id: `roll-${crypto.randomUUID().slice(0, 8)}`,
           rollerName: meta.displayName?.trim() || "Unknown",
@@ -471,19 +512,22 @@ export default class GameServer implements Party.Server {
           modifier: result.modifier,
           total: result.total,
           timestamp: Date.now(),
+          ...(parsed.adv && advResult
+            ? { adv: parsed.adv, otherTotal: advResult.otherTotal }
+            : {}),
         };
 
-        if (parsed.private) {
-          if (!this.isDm(sender.id)) {
-            this.sendTo(sender, { type: "ERROR", message: "Only the DM can make secret rolls." });
-            return;
-          }
-          this.sendTo(sender, { type: "DM_DICE_ROLL", roll });
-          return;
-        }
-
-        const log = this.state.publicDiceLog ?? [];
-        this.state.publicDiceLog = [...log, roll].slice(-MAX_PUBLIC_DICE_LOG);
+        // Secret rolls persist as dmOnly log entries (stripped for players by
+        // redactStateFor), so the DM's secret log survives a refresh.
+        this.appendLog({
+          id: `log-${crypto.randomUUID().slice(0, 8)}`,
+          t: roll.timestamp,
+          kind: "roll",
+          roll,
+          actor,
+          ...(parsed.context?.label ? { label: parsed.context.label } : {}),
+          ...(parsed.private ? { dmOnly: true } : {}),
+        });
         void this.broadcastState();
       } catch (error) {
         const message = error instanceof Error ? error.message : "Invalid dice expression.";
@@ -492,47 +536,99 @@ export default class GameServer implements Party.Server {
       return;
     }
 
-    if (parsed.type === "DICE_MOTION") {
-      // Pure relay of another player's live drag/shake so everyone sees it move.
-      if (!Array.isArray(parsed.transforms) || parsed.transforms.length > MAX_DICE_PER_THROW) {
+    if (parsed.type === "COMBAT_ROLL_INITIATIVE") {
+      const combat = this.state.combat;
+      if (!combat) {
+        this.sendTo(sender, { type: "ERROR", message: "No active combat." });
         return;
       }
-      const specs =
-        Array.isArray(parsed.specs) && parsed.specs.length > 0 && parsed.specs.length <= MAX_DICE_PER_THROW
-          ? parsed.specs
-          : undefined;
-      this.broadcast(
-        {
-          type: "DICE_MOTION",
-          rollId: parsed.rollId,
-          rollerId: meta.playerId ?? "unknown",
+      if (meta.role !== "player" || !meta.playerId) {
+        this.sendTo(sender, {
+          type: "ERROR",
+          message: "The DM sets NPC initiative from the tracker.",
+        });
+        return;
+      }
+      const playerId = meta.playerId;
+      const pending = combat.entries.filter((entry) => {
+        if (entry.initiative !== null) {
+          return false;
+        }
+        const token = this.state.tokens.find((item) => item.id === entry.tokenId);
+        return token?.ownerPlayerId === playerId || entry.sheetId === playerId;
+      });
+      if (pending.length === 0) {
+        this.sendTo(sender, { type: "ERROR", message: "You have no pending initiative roll." });
+        return;
+      }
+      const record = this.state.sheets[playerId];
+      const { bonus, dexScore } = this.initiativeBonus(playerId);
+      for (const entry of pending) {
+        const d20 = secureRandInt(20) + 1;
+        entry.initiative = d20 + bonus;
+        entry.hasRolled = true;
+        entry.dexScore = dexScore;
+        const roll: DiceRoll = {
+          id: `roll-${crypto.randomUUID().slice(0, 8)}`,
           rollerName: meta.displayName?.trim() || "Unknown",
-          specs,
-          transforms: parsed.transforms,
-          cursor: parsed.cursor,
-          trayCenter: parsed.trayCenter,
-          secret: parsed.secret && this.isDm(sender.id) ? true : undefined,
-        },
-        sender.id,
-      );
+          rollerId: playerId,
+          expression: `1d20${bonus >= 0 ? `+${bonus}` : bonus}`,
+          rolls: [d20],
+          modifier: bonus,
+          total: entry.initiative,
+          timestamp: Date.now(),
+        };
+        this.appendLog({
+          id: `log-${crypto.randomUUID().slice(0, 8)}`,
+          t: roll.timestamp,
+          kind: "roll",
+          roll,
+          actor: {
+            name: record?.data.characterName?.trim() || roll.rollerName,
+            sheetId: playerId,
+          },
+          label: "Initiative",
+        });
+      }
+      this.sortCombat();
+      void this.broadcastState();
       return;
     }
 
     if (parsed.type === "DICE_THROW_REQUEST") {
-      const specs = parsed.specs;
-      if (!Array.isArray(specs) || specs.length < 1 || specs.length > MAX_DICE_PER_THROW) {
-        this.sendTo(sender, { type: "ERROR", message: "Invalid dice throw." });
-        return;
-      }
-      const isPrivate = Boolean(parsed.private);
-      if (isPrivate && !this.isDm(sender.id)) {
+      if (parsed.private && !this.isDm(sender.id)) {
         this.sendTo(sender, { type: "ERROR", message: "Only the DM can make secret rolls." });
         return;
       }
+      const sanitized = sanitizeThrow(parsed.specs, parsed.track);
+      if (!sanitized) {
+        this.sendTo(sender, { type: "ERROR", message: "Invalid dice throw." });
+        return;
+      }
+      const { specs, track } = sanitized;
 
-      // Server is authoritative: pick each face value with the CSPRNG.
+      // Same attribution rules as ROLL_DICE: DM rolls as any sheet, players as their own.
+      let actor: { name: string; sheetId?: string } = {
+        name: meta.displayName?.trim() || "Unknown",
+      };
+      const sheetId = parsed.context?.sheetId;
+      if (sheetId) {
+        const canRollAs =
+          this.isDm(sender.id) || (meta.role === "player" && meta.playerId === sheetId);
+        const record = this.state.sheets[sheetId];
+        if (!canRollAs || !record) {
+          this.sendTo(sender, { type: "ERROR", message: "You can only roll from your own sheet." });
+          return;
+        }
+        actor = { name: record.data.characterName?.trim() || actor.name, sheetId };
+      }
+
+      // The server picks every value — physics never decides results.
       const faceValues = rollFaceValues(specs, secureRandInt);
-      const modifier = Number.isFinite(parsed.modifier) ? Math.trunc(parsed.modifier) : 0;
+      const modifier =
+        typeof parsed.modifier === "number" && Number.isFinite(parsed.modifier)
+          ? Math.max(-1000, Math.min(1000, Math.trunc(parsed.modifier)))
+          : 0;
       const { rolls, total } = interpretRoll(specs, faceValues);
       const roll: DiceRoll = {
         id: `roll-${crypto.randomUUID().slice(0, 8)}`,
@@ -544,52 +640,78 @@ export default class GameServer implements Party.Server {
         total: total + modifier,
         timestamp: Date.now(),
       };
+      const secret = Boolean(parsed.private);
+      const trayCenter: [number, number] = [
+        Number.isFinite(parsed.trayCenter?.[0]) ? parsed.trayCenter[0] : 0,
+        Number.isFinite(parsed.trayCenter?.[1]) ? parsed.trayCenter[1] : 0,
+      ];
 
-      const throwMessage: ServerMessage = {
-        type: "DICE_THROW",
-        rollId: parsed.rollId,
-        rollerId: roll.rollerId,
-        rollerName: roll.rollerName,
-        specs,
-        track: parsed.track,
-        faceValues,
-        roll,
-        private: isPrivate,
-        trayCenter: parsed.trayCenter,
-      };
-
-      // The animation plays immediately, but the log entry only appears once the dice
-      // would have finished rolling — defer by the recorded track's duration.
-      const track = parsed.track;
-      const settleMs =
-        track && track.fps > 0 ? Math.min((track.frames / track.fps) * 1000, 12000) : 0;
-      const delayMs = settleMs + 300;
-
-      if (isPrivate) {
-        // Secret roll: the DM (sender) gets the full result; everyone else sees the dice
-        // tumble but with faceValues + roll stripped, so they render blank and can't read it.
-        this.sendTo(sender, throwMessage);
-        const blankMessage: ServerMessage = {
+      // Everyone replays the same track now; values stripped for non-DM on secret throws.
+      for (const connection of this.room.getConnections()) {
+        const connMeta = this.clients.get(connection.id);
+        if (!connMeta?.joined) {
+          continue;
+        }
+        const withValues = !secret || connMeta.role === "dm";
+        this.sendTo(connection, {
           type: "DICE_THROW",
           rollId: parsed.rollId,
-          rollerId: roll.rollerId,
-          rollerName: roll.rollerName,
+          actorName: secret && !withValues ? "DM" : actor.name,
           specs,
-          track: parsed.track,
-          private: true,
-          trayCenter: parsed.trayCenter,
-        };
-        this.broadcast(blankMessage, sender.id);
-        setTimeout(() => this.sendTo(sender, { type: "DM_DICE_ROLL", roll }), delayMs);
-        return;
+          track,
+          trayCenter,
+          ...(withValues ? { faceValues } : {}),
+          ...(secret ? { secret: true } : {}),
+        });
       }
 
-      this.broadcast(throwMessage);
+      // Defer the log entry until the dice would have settled, so the log never
+      // spoils the result mid-tumble. (v1 behavior; capped for safety.)
+      const settleMs = Math.min((track.frames / track.fps) * 1000 + 400, 8000);
+      const label = parsed.context?.label;
       setTimeout(() => {
-        const log = this.state.publicDiceLog ?? [];
-        this.state.publicDiceLog = [...log, roll].slice(-MAX_PUBLIC_DICE_LOG);
+        this.appendLog({
+          id: `log-${crypto.randomUUID().slice(0, 8)}`,
+          t: Date.now(),
+          kind: "roll",
+          roll,
+          actor,
+          ...(label ? { label } : {}),
+          ...(secret ? { dmOnly: true } : {}),
+        });
         void this.broadcastState();
-      }, delayMs);
+      }, settleMs);
+      return;
+    }
+
+    if (parsed.type === "SEND_CHAT") {
+      const text = String(parsed.text ?? "")
+        .trim()
+        .slice(0, MAX_CHAT_LENGTH);
+      if (!text) {
+        return;
+      }
+      let whisperTo: string | undefined;
+      if (parsed.whisperTo) {
+        const valid =
+          parsed.whisperTo === "dm" ||
+          this.state.playerSlots.some((slot) => slot.id === parsed.whisperTo);
+        if (!valid) {
+          this.sendTo(sender, { type: "ERROR", message: "Whisper target not found." });
+          return;
+        }
+        whisperTo = parsed.whisperTo;
+      }
+      this.appendLog({
+        id: `log-${crypto.randomUUID().slice(0, 8)}`,
+        t: Date.now(),
+        kind: "chat",
+        from: meta.displayName?.trim() || "Unknown",
+        fromId: meta.playerId ?? "unknown",
+        text,
+        ...(whisperTo ? { whisperTo } : {}),
+      });
+      void this.broadcastState();
       return;
     }
 
@@ -602,13 +724,15 @@ export default class GameServer implements Party.Server {
       case "UPDATE_VIEWPORT":
         this.scheduleViewportBroadcast(parsed.viewport);
         break;
-      case "SET_SCENE":
-        if (this.state.scenes.some((scene) => scene.id === parsed.sceneId)) {
+      case "SET_SCENE": {
+        const scene = this.state.scenes.find((item) => item.id === parsed.sceneId);
+        if (scene) {
           this.state.activeSceneId = parsed.sceneId;
-          this.state.ping = null;
+          this.logEvent(`Scene changed to “${scene.name}”.`);
           void this.broadcastState();
         }
         break;
+      }
       case "ADD_SCENE":
         this.state.scenes.push(normalizeScene(parsed.scene));
         void this.broadcastState();
@@ -634,22 +758,19 @@ export default class GameServer implements Party.Server {
         }
         this.state.scenes = this.state.scenes.filter((scene) => scene.id !== parsed.sceneId);
         this.state.tokens = this.state.tokens.filter((token) => token.sceneId !== parsed.sceneId);
-        this.state.playerSlots = this.state.playerSlots.map((slot) => ({
-          ...slot,
-          visibleSceneIds: slot.visibleSceneIds.filter((id) => id !== parsed.sceneId),
-        }));
         if (this.state.activeSceneId === parsed.sceneId) {
           this.state.activeSceneId = this.state.scenes[0].id;
         }
         void this.broadcastState();
         break;
       }
-      case "ADD_TOKEN":
-        this.state.tokens.push(
-          syncPlayerTokenFromState(normalizeToken(parsed.token), this.state),
-        );
+      case "ADD_TOKEN": {
+        const token = syncPlayerTokenFromState(normalizeToken(parsed.token), this.state);
+        this.state.tokens.push(token);
+        this.logEvent(`Token “${token.label || "Token"}” placed.`);
         void this.broadcastState();
         break;
+      }
       case "MOVE_TOKEN": {
         const token = this.state.tokens.find((item) => item.id === parsed.tokenId);
         if (token) {
@@ -665,58 +786,15 @@ export default class GameServer implements Party.Server {
         );
         void this.broadcastState();
         break;
-      case "REMOVE_TOKEN":
+      case "REMOVE_TOKEN": {
+        const removed = this.state.tokens.find((token) => token.id === parsed.tokenId);
         this.state.tokens = this.state.tokens.filter((token) => token.id !== parsed.tokenId);
-        void this.broadcastState();
-        break;
-      case "ADD_TOKEN_TEMPLATE": {
-        const template = normalizeTokenTemplate(parsed.template);
-        this.state.tokenTemplates = [...(this.state.tokenTemplates ?? []), template];
-        void this.broadcastState();
-        break;
-      }
-      case "UPDATE_TOKEN_TEMPLATE": {
-        const template = normalizeTokenTemplate(parsed.template);
-        this.state.tokenTemplates = (this.state.tokenTemplates ?? []).map((item) =>
-          item.id === template.id ? template : item,
-        );
+        if (removed) {
+          this.logEvent(`Token “${removed.label || "Token"}” removed.`);
+        }
         void this.broadcastState();
         break;
       }
-      case "REMOVE_TOKEN_TEMPLATE":
-        this.state.tokenTemplates = (this.state.tokenTemplates ?? []).filter(
-          (item) => item.id !== parsed.templateId,
-        );
-        void this.broadcastState();
-        break;
-      case "SET_PING":
-        this.state.ping = {
-          x: parsed.x,
-          y: parsed.y,
-          sceneId: this.state.activeSceneId,
-        };
-        void this.broadcastState();
-        setTimeout(() => {
-          if (
-            this.state.ping?.x === parsed.x &&
-            this.state.ping?.y === parsed.y &&
-            this.state.ping?.sceneId === this.state.activeSceneId
-          ) {
-            this.state.ping = null;
-            void this.broadcastState();
-          }
-        }, 3000);
-        break;
-      case "CLEAR_PING":
-        this.state.ping = null;
-        void this.broadcastState();
-        break;
-      case "UPDATE_FOG":
-        this.state.scenes = this.state.scenes.map((scene) =>
-          scene.id === parsed.sceneId ? { ...scene, fogDataUrl: parsed.fogDataUrl } : scene,
-        );
-        void this.broadcastState();
-        break;
       case "IMPORT_CAMPAIGN": {
         const manifest = parsed.manifest;
         if (manifest.version !== 1 || !Array.isArray(manifest.scenes)) {
@@ -729,17 +807,278 @@ export default class GameServer implements Party.Server {
         } else if (this.state.scenes[0]) {
           this.state.activeSceneId = this.state.scenes[0].id;
         }
-        this.state.ping = null;
+        void this.broadcastState();
+        break;
+      }
+      case "COMBAT_START": {
+        const wanted = new Set(parsed.tokenIds);
+        const tokens = this.state.tokens.filter(
+          (token) => token.sceneId === this.state.activeSceneId && wanted.has(token.id),
+        );
+        if (tokens.length === 0) {
+          this.sendTo(sender, {
+            type: "ERROR",
+            message: "No tokens in the active scene to start combat with.",
+          });
+          return;
+        }
+        const entries: CombatEntry[] = tokens.map((token) => {
+          const isPc = Boolean(token.ownerPlayerId);
+          const { bonus, dexScore } = this.initiativeBonus(token.sheetId);
+          // NPCs auto-roll; PCs wait for their player's click.
+          const initiative = isPc ? null : secureRandInt(20) + 1 + bonus;
+          return {
+            id: `centry-${crypto.randomUUID().slice(0, 8)}`,
+            tokenId: token.id,
+            sheetId: token.sheetId,
+            name: token.label || "Combatant",
+            initiative,
+            dexScore,
+            hasRolled: initiative !== null,
+          };
+        });
+        this.state.combat = { round: 1, turnIndex: 0, entries };
+        this.sortCombat();
+        this.state.combat.turnIndex = 0;
+        this.logEvent(`⚔ Combat started (${entries.length} combatants). Roll for initiative!`);
+        void this.broadcastState();
+        break;
+      }
+      case "COMBAT_SET_INITIATIVE": {
+        const entry = this.state.combat?.entries.find((item) => item.id === parsed.entryId);
+        if (!entry || typeof parsed.value !== "number" || !Number.isFinite(parsed.value)) {
+          this.sendTo(sender, { type: "ERROR", message: "Combatant not found." });
+          return;
+        }
+        entry.initiative = parsed.value;
+        entry.hasRolled = true;
+        this.sortCombat();
+        void this.broadcastState();
+        break;
+      }
+      case "COMBAT_NEXT": {
+        const combat = this.state.combat;
+        if (!combat || combat.entries.length === 0) {
+          break;
+        }
+        combat.turnIndex += 1;
+        if (combat.turnIndex >= combat.entries.length) {
+          combat.turnIndex = 0;
+          combat.round += 1;
+          this.logEvent(`Round ${combat.round} begins.`);
+        }
+        void this.broadcastState();
+        break;
+      }
+      case "COMBAT_PREV": {
+        const combat = this.state.combat;
+        if (!combat || combat.entries.length === 0) {
+          break;
+        }
+        combat.turnIndex -= 1;
+        if (combat.turnIndex < 0) {
+          if (combat.round > 1) {
+            combat.round -= 1;
+            combat.turnIndex = combat.entries.length - 1;
+          } else {
+            combat.turnIndex = 0;
+          }
+        }
+        void this.broadcastState();
+        break;
+      }
+      case "COMBAT_END": {
+        if (this.state.combat) {
+          this.state.combat = null;
+          this.logEvent("Combat ended.");
+          void this.broadcastState();
+        }
+        break;
+      }
+      case "CREATE_SHEET": {
+        const sheetId = parsed.sheetId?.trim();
+        if (!sheetId || this.state.sheets[sheetId]) {
+          this.sendTo(sender, { type: "ERROR", message: "Invalid or duplicate sheet id." });
+          return;
+        }
+        this.state.sheets[sheetId] = createNpcSheetRecord(sheetId, parsed.name?.trim() || "NPC");
+        void this.broadcastState();
+        break;
+      }
+      case "DUPLICATE_SHEET": {
+        const source = this.state.sheets[parsed.sheetId];
+        const newSheetId = parsed.newSheetId?.trim();
+        if (!source || !newSheetId || this.state.sheets[newSheetId]) {
+          this.sendTo(sender, { type: "ERROR", message: "Cannot duplicate that sheet." });
+          return;
+        }
+        const copy = createNpcSheetRecord(newSheetId, "NPC");
+        // normalizeCharacterSheet rebuilds nested objects, so the copy shares no state.
+        copy.data = normalizeCharacterSheet(
+          { ...source.data, characterName: `${source.data.characterName || "NPC"} (copy)` },
+          "NPC",
+        );
+        copy.revealed = { ...source.revealed };
+        this.state.sheets[newSheetId] = copy;
+        void this.broadcastState();
+        break;
+      }
+      case "DELETE_SHEET": {
+        const record = this.state.sheets[parsed.sheetId];
+        if (!record) {
+          break;
+        }
+        if (record.kind === "pc") {
+          this.sendTo(sender, {
+            type: "ERROR",
+            message: "PC sheets are tied to their player slot — remove the slot instead.",
+          });
+          return;
+        }
+        delete this.state.sheets[parsed.sheetId];
+        this.state.tokens = this.state.tokens.map((token) =>
+          token.sheetId === parsed.sheetId ? { ...token, sheetId: null } : token,
+        );
+        void this.broadcastState();
+        break;
+      }
+      case "SET_SHEET_REVEAL": {
+        const record = this.state.sheets[parsed.sheetId];
+        if (!record || !SHEET_SECTIONS.some((section) => section.id === parsed.section)) {
+          this.sendTo(sender, { type: "ERROR", message: "Sheet or section not found." });
+          return;
+        }
+        if (record.kind === "pc") {
+          this.sendTo(sender, { type: "ERROR", message: "PC sheets are always visible." });
+          return;
+        }
+        record.revealed[parsed.section] = Boolean(parsed.revealed);
+        // Don't leak the name via the event text unless identity is revealed.
+        const npcName = record.revealed.identity
+          ? record.data.characterName?.trim() || "an NPC"
+          : "an unidentified creature";
+        const sectionLabel =
+          SHEET_SECTIONS.find((section) => section.id === parsed.section)?.label ??
+          parsed.section;
+        this.logEvent(
+          `${sectionLabel} ${parsed.revealed ? "revealed" : "hidden"} for ${npcName}.`,
+        );
+        void this.broadcastState();
+        break;
+      }
+      case "UPDATE_DM_NOTES": {
+        this.state.dmNotes = String(parsed.notes ?? "").slice(0, 20_000);
+        void this.broadcastState();
+        break;
+      }
+      case "SET_SHEET_FOLDER": {
+        const record = this.state.sheets[parsed.sheetId];
+        const validFolder =
+          parsed.folderId === null ||
+          this.state.folders.some(
+            (folder) => folder.id === parsed.folderId && folder.kind === "actor",
+          );
+        if (!record || !validFolder) {
+          this.sendTo(sender, { type: "ERROR", message: "Sheet or folder not found." });
+          return;
+        }
+        record.folderId = parsed.folderId;
+        if (typeof parsed.sortOrder === "number" && Number.isFinite(parsed.sortOrder)) {
+          record.sortOrder = parsed.sortOrder;
+        }
+        void this.broadcastState();
+        break;
+      }
+      case "CREATE_FOLDER": {
+        const folderId = parsed.folderId?.trim();
+        const name = parsed.name?.trim().slice(0, 100);
+        const kind = parsed.kind === "item" ? "item" : "actor";
+        if (!folderId || !name || this.state.folders.some((f) => f.id === folderId)) {
+          this.sendTo(sender, { type: "ERROR", message: "Invalid or duplicate folder." });
+          return;
+        }
+        this.state.folders.push({ id: folderId, name, kind });
+        void this.broadcastState();
+        break;
+      }
+      case "RENAME_FOLDER": {
+        const folder = this.state.folders.find((f) => f.id === parsed.folderId);
+        const name = parsed.name?.trim().slice(0, 100);
+        if (!folder || !name) {
+          this.sendTo(sender, { type: "ERROR", message: "Folder not found." });
+          return;
+        }
+        folder.name = name;
+        void this.broadcastState();
+        break;
+      }
+      case "DELETE_FOLDER": {
+        if (!this.state.folders.some((f) => f.id === parsed.folderId)) {
+          break;
+        }
+        // Members drop back to the root; nothing is deleted with the folder.
+        this.state.folders = this.state.folders.filter((f) => f.id !== parsed.folderId);
+        for (const record of Object.values(this.state.sheets)) {
+          if (record.folderId === parsed.folderId) {
+            record.folderId = null;
+          }
+        }
+        for (const item of Object.values(this.state.items)) {
+          if (item.folderId === parsed.folderId) {
+            item.folderId = null;
+          }
+        }
+        void this.broadcastState();
+        break;
+      }
+      case "CREATE_ITEM": {
+        const itemId = parsed.itemId?.trim();
+        const name = parsed.name?.trim().slice(0, 200);
+        if (!itemId || !name || this.state.items[itemId]) {
+          this.sendTo(sender, { type: "ERROR", message: "Invalid or duplicate item." });
+          return;
+        }
+        this.state.items[itemId] = {
+          id: itemId,
+          name,
+          description: "",
+          iconUrl: null,
+          folderId: null,
+        };
+        void this.broadcastState();
+        break;
+      }
+      case "UPDATE_ITEM": {
+        const existing = this.state.items[parsed.item?.id];
+        if (!existing) {
+          this.sendTo(sender, { type: "ERROR", message: "Item not found." });
+          return;
+        }
+        const next = normalizeItem({ ...parsed.item, id: existing.id });
+        const validFolder =
+          next.folderId === null ||
+          this.state.folders.some(
+            (folder) => folder.id === next.folderId && folder.kind === "item",
+          );
+        this.state.items[existing.id] = {
+          ...next,
+          name: next.name.slice(0, 200),
+          description: next.description.slice(0, 5000),
+          folderId: validFolder ? next.folderId : null,
+        };
+        void this.broadcastState();
+        break;
+      }
+      case "DELETE_ITEM": {
+        // Sheet inventories keep their name copies, so this is always safe.
+        delete this.state.items[parsed.itemId];
         void this.broadcastState();
         break;
       }
       case "ADD_PLAYER_SLOT": {
-        const slot = createPlayerSlot(
-          parsed.name,
-          this.state.scenes.map((scene) => scene.id),
-        );
+        const slot = createPlayerSlot(parsed.name);
         this.state.playerSlots.push(slot);
-        this.state.characterSheets[slot.id] = createDefaultSheet(slot.name);
+        this.state.sheets[slot.id] = createPcSheetRecord(slot.id, slot.name);
         void this.broadcastState();
         break;
       }
@@ -763,10 +1102,23 @@ export default class GameServer implements Party.Server {
         void this.broadcastState();
         break;
       }
-      case "UPDATE_SHEET_TEMPLATE":
-        this.state.sheetTemplate = normalizeSheetTemplate(parsed.template);
-        void this.broadcastState();
+      case "KICK_PLAYER": {
+        const target = this.state.connectedPlayers.find(
+          (player) => player.playerId === parsed.playerId,
+        );
+        const connection = target ? this.room.getConnection(target.clientId) : null;
+        if (connection) {
+          this.sendTo(connection, {
+            type: "KICKED",
+            message: "You were removed from the room by the DM.",
+          });
+          if (target) {
+            this.logEvent(`${target.displayName} was removed by the DM.`);
+          }
+          connection.close();
+        }
         break;
+      }
       case "REMOVE_PLAYER_SLOT": {
         if (this.isSlotTaken(parsed.slotId)) {
           this.sendTo(sender, {
@@ -778,7 +1130,7 @@ export default class GameServer implements Party.Server {
         this.state.playerSlots = this.state.playerSlots.filter(
           (slot) => slot.id !== parsed.slotId,
         );
-        delete this.state.characterSheets[parsed.slotId];
+        delete this.state.sheets[parsed.slotId];
         this.state.tokens = this.state.tokens.map((token) =>
           token.ownerPlayerId === parsed.slotId ? { ...token, ownerPlayerId: null } : token,
         );

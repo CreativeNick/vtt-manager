@@ -18,6 +18,7 @@ type SaveRequestBody = {
 };
 
 type UploadMapImageBody = {
+  roomId?: string;
   sceneId: string;
   layerId: string;
   dataUrl: string;
@@ -26,11 +27,13 @@ type UploadMapImageBody = {
 };
 
 type UploadPortraitBody = {
+  roomId?: string;
   slotId: string;
   dataUrl: string;
 };
 
 type UploadTokenImageBody = {
+  roomId?: string;
   tokenId: string;
   dataUrl: string;
 };
@@ -88,6 +91,13 @@ function dataUrlToFile(dataUrl: string): { buffer: Buffer; ext: string } {
 }
 
 /// <summary>
+/// Room namespace prefix for asset filenames — mirrors the production R2 key scheme.
+/// </summary>
+function roomFilePrefix(roomId: string | undefined): string {
+  return roomId ? `${roomId}--` : "";
+}
+
+/// <summary>
 /// Reads the full request body from a Node HTTP incoming message.
 /// </summary>
 function readRequestBody(req: import("node:http").IncomingMessage): Promise<string> {
@@ -107,11 +117,12 @@ export async function writeMapImageToDisk(
   sceneId: string,
   layerId: string,
   dataUrl: string,
+  roomId?: string,
 ): Promise<string> {
   const mapsDir = join(rootDir, "public", "maps");
   await mkdir(mapsDir, { recursive: true });
   const { buffer, ext } = dataUrlToFile(dataUrl);
-  const filename = `${sceneId}-${layerId}.${ext}`;
+  const filename = `${roomFilePrefix(roomId)}${sceneId}-${layerId}.${ext}`;
   await writeFile(join(mapsDir, filename), buffer);
   return `/maps/${filename}`;
 }
@@ -123,11 +134,12 @@ export async function writePortraitToDisk(
   rootDir: string,
   slotId: string,
   dataUrl: string,
+  roomId?: string,
 ): Promise<string> {
   const portraitsDir = join(rootDir, "public", "portraits");
   await mkdir(portraitsDir, { recursive: true });
   const { buffer, ext } = dataUrlToFile(dataUrl);
-  const filename = `${slotId}.${ext}`;
+  const filename = `${roomFilePrefix(roomId)}${slotId}.${ext}`;
   await writeFile(join(portraitsDir, filename), buffer);
   return `/portraits/${filename}`;
 }
@@ -139,11 +151,12 @@ export async function writeTokenImageToDisk(
   rootDir: string,
   tokenId: string,
   dataUrl: string,
+  roomId?: string,
 ): Promise<string> {
   const tokensDir = join(rootDir, "public", "tokens");
   await mkdir(tokensDir, { recursive: true });
   const { buffer, ext } = dataUrlToFile(dataUrl);
-  const filename = `${tokenId}.${ext}`;
+  const filename = `${roomFilePrefix(roomId)}${tokenId}.${ext}`;
   await writeFile(join(tokensDir, filename), buffer);
   return `/tokens/${filename}`;
 }
@@ -165,39 +178,23 @@ export async function writeCampaignIconToDisk(
 }
 
 /// <summary>
-/// Writes scene layers and fog masks to public/ and returns a path-based manifest.
+/// Writes scene map images to public/ and returns a path-based manifest.
 /// </summary>
 async function buildManifest(
   rootDir: string,
   body: SaveRequestBody,
 ): Promise<CampaignManifest> {
-  const fogDir = join(rootDir, "public", "campaign", "fog");
   const campaignDir = join(rootDir, "public", "campaign");
-  await mkdir(fogDir, { recursive: true });
   await mkdir(campaignDir, { recursive: true });
 
   const scenes: Scene[] = [];
 
   for (const scene of body.scenes) {
-    const layers = [];
-    for (const layer of scene.layers) {
-      if (layer.url.startsWith("data:")) {
-        const url = await writeMapImageToDisk(rootDir, scene.id, layer.id, layer.url);
-        layers.push({ ...layer, url });
-      } else {
-        layers.push(layer);
-      }
+    let mapUrl = scene.mapUrl;
+    if (mapUrl?.startsWith("data:")) {
+      mapUrl = await writeMapImageToDisk(rootDir, scene.id, "main", mapUrl);
     }
-
-    let fogDataUrl = scene.fogDataUrl;
-    if (fogDataUrl?.startsWith("data:")) {
-      const { buffer } = dataUrlToFile(fogDataUrl);
-      const fogFilename = `${scene.id}.png`;
-      await writeFile(join(fogDir, fogFilename), buffer);
-      fogDataUrl = `/campaign/fog/${fogFilename}`;
-    }
-
-    scenes.push({ ...scene, layers, fogDataUrl });
+    scenes.push({ ...scene, mapUrl });
   }
 
   const manifest: CampaignManifest = {
@@ -243,6 +240,7 @@ export function devCampaignSavePlugin(): Plugin {
               body.sceneId,
               body.layerId,
               body.dataUrl,
+              body.roomId,
             );
             res.setHeader("Content-Type", "application/json");
             res.end(
@@ -281,7 +279,12 @@ export function devCampaignSavePlugin(): Plugin {
               return;
             }
 
-            const url = await writePortraitToDisk(server.config.root, body.slotId, body.dataUrl);
+            const url = await writePortraitToDisk(
+              server.config.root,
+              body.slotId,
+              body.dataUrl,
+              body.roomId,
+            );
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify({ ok: true, url }));
           } catch (error) {
@@ -311,7 +314,12 @@ export function devCampaignSavePlugin(): Plugin {
               return;
             }
 
-            const url = await writeTokenImageToDisk(server.config.root, body.tokenId, body.dataUrl);
+            const url = await writeTokenImageToDisk(
+              server.config.root,
+              body.tokenId,
+              body.dataUrl,
+              body.roomId,
+            );
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify({ ok: true, url }));
           } catch (error) {

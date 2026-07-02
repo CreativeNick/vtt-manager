@@ -3,36 +3,20 @@ import PartySocket from "partysocket";
 import type {
   CharacterSheet,
   ClientMessage,
-  DiceRoll,
+  Folder,
   GameState,
+  ItemRecord,
   JoinMessage,
   PlayerSlot,
   Role,
   Scene,
   ServerMessage,
-  SheetTemplate,
+  SheetSectionId,
   Token,
   Viewport,
 } from "../lib/types";
-import type { TokenTemplate } from "../lib/tokenTemplate";
 import { normalizeGameState } from "../lib/types";
 import type { CampaignManifest } from "../lib/campaignManifest";
-import type { CursorPoint, DiceTrack, DieSpec, DieTransform, WorldPoint } from "../dice3d/diceProtocol";
-
-/** Transient dice events (throws + live drag motion) that drive the 3D dice arena. */
-export type DiceEvent =
-  | Extract<ServerMessage, { type: "DICE_THROW" }>
-  | Extract<ServerMessage, { type: "DICE_MOTION" }>;
-
-export type ThrowDicePayload = {
-  rollId: string;
-  specs: DieSpec[];
-  track: DiceTrack;
-  modifier: number;
-  private?: boolean;
-  /** Map/world anchor for this roll's tray. */
-  trayCenter?: WorldPoint;
-};
 
 /// <summary>
 /// Resolves the PartyKit host for dev (Vite proxy) or production (env var).
@@ -49,11 +33,26 @@ function getPartyKitHost(): string {
 
 const PARTYKIT_PARTY = "main";
 
-export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "joined";
+export type ConnectionStatus =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "joined"
+  /** Connection dropped after a successful join; PartySocket is auto-rejoining. */
+  | "reconnecting";
 
 export type JoinParams =
   | { role: "dm"; displayName: string; roomKey: string }
   | { role: "player"; slotId: string; roomKey: string };
+
+export type RollOptions = {
+  private?: boolean;
+  context?: { sheetId?: string; label?: string };
+  adv?: "adv" | "dis";
+};
+
+/** The transient 3D-throw broadcast, dispatched to dice-overlay subscribers. */
+export type DiceThrowEvent = Extract<ServerMessage, { type: "DICE_THROW" }>;
 
 export type GameRoom = {
   status: ConnectionStatus;
@@ -62,20 +61,12 @@ export type GameRoom = {
   yourClientId: string | null;
   yourRole: Role | null;
   yourPlayerId: string | null;
-  privateDiceLog: DiceRoll[];
   send: (message: ClientMessage) => void;
   join: (params: JoinParams) => void;
-  rollDice: (expression: string, options?: { private?: boolean }) => void;
-  throwDice: (payload: ThrowDicePayload) => void;
-  sendDiceMotion: (
-    rollId: string,
-    specs: DieSpec[] | undefined,
-    transforms: DieTransform[],
-    cursor?: CursorPoint,
-    trayCenter?: WorldPoint,
-    secret?: boolean,
-  ) => void;
-  subscribeDice: (handler: (event: DiceEvent) => void) => () => void;
+  rollDice: (expression: string, options?: RollOptions) => void;
+  /** Listen for 3D dice throws; returns an unsubscribe function. */
+  subscribeDice: (listener: (event: DiceThrowEvent) => void) => () => void;
+  clearError: () => void;
 };
 
 export type RoomLobby = {
@@ -245,10 +236,10 @@ export function useGameRoom(roomId: string | null): GameRoom {
   const [yourClientId, setYourClientId] = useState<string | null>(null);
   const [yourRole, setYourRole] = useState<Role | null>(null);
   const [yourPlayerId, setYourPlayerId] = useState<string | null>(null);
-  const [privateDiceLog, setPrivateDiceLog] = useState<DiceRoll[]>([]);
   const socketRef = useRef<PartySocket | null>(null);
   const pendingJoinRef = useRef<JoinMessage | null>(null);
-  const diceListenersRef = useRef<Set<(event: DiceEvent) => void>>(new Set());
+  const everJoinedRef = useRef(false);
+  const diceListenersRef = useRef<Set<(event: DiceThrowEvent) => void>>(new Set());
 
   const send = useCallback((message: ClientMessage) => {
     const socket = socketRef.current;
@@ -258,47 +249,17 @@ export function useGameRoom(roomId: string | null): GameRoom {
   }, []);
 
   const rollDice = useCallback(
-    (expression: string, options?: { private?: boolean }) => {
-      send({ type: "ROLL_DICE", expression, private: options?.private });
-    },
-    [send],
-  );
-
-  const throwDice = useCallback(
-    (payload: ThrowDicePayload) => {
+    (expression: string, options?: RollOptions) => {
       send({
-        type: "DICE_THROW_REQUEST",
-        rollId: payload.rollId,
-        specs: payload.specs,
-        track: payload.track,
-        modifier: payload.modifier,
-        private: payload.private,
-        trayCenter: payload.trayCenter,
+        type: "ROLL_DICE",
+        expression,
+        private: options?.private,
+        context: options?.context,
+        adv: options?.adv,
       });
     },
     [send],
   );
-
-  const sendDiceMotion = useCallback(
-    (
-      rollId: string,
-      specs: DieSpec[] | undefined,
-      transforms: DieTransform[],
-      cursor?: CursorPoint,
-      trayCenter?: WorldPoint,
-      secret?: boolean,
-    ) => {
-      send({ type: "DICE_MOTION", rollId, specs, transforms, cursor, trayCenter, secret });
-    },
-    [send],
-  );
-
-  const subscribeDice = useCallback((handler: (event: DiceEvent) => void) => {
-    diceListenersRef.current.add(handler);
-    return () => {
-      diceListenersRef.current.delete(handler);
-    };
-  }, []);
 
   const join = useCallback(
     (params: JoinParams) => {
@@ -336,7 +297,7 @@ export function useGameRoom(roomId: string | null): GameRoom {
 
     setStatus("connecting");
     setError(null);
-    setPrivateDiceLog([]);
+    everJoinedRef.current = false;
 
     const socket = new PartySocket({
       host: getPartyKitHost(),
@@ -361,26 +322,43 @@ export function useGameRoom(roomId: string | null): GameRoom {
         setYourClientId(message.yourClientId);
         setYourRole(message.yourRole);
         if (message.yourRole) {
+          everJoinedRef.current = true;
           setStatus("joined");
+        }
+      } else if (message.type === "VIEWPORT") {
+        // Hot-path delta: patch the shared viewport without reprocessing full state.
+        setState((current) =>
+          current ? { ...current, viewport: message.viewport } : current,
+        );
+      } else if (message.type === "DICE_THROW") {
+        for (const listener of diceListenersRef.current) {
+          listener(message);
         }
       } else if (message.type === "JOINED") {
         setYourRole(message.role);
         setYourPlayerId(message.playerId);
+        everJoinedRef.current = true;
         setStatus("joined");
         setError(null);
-      } else if (message.type === "DM_DICE_ROLL") {
-        setPrivateDiceLog((current) => [...current, message.roll].slice(-50));
-      } else if (message.type === "DICE_THROW" || message.type === "DICE_MOTION") {
-        for (const listener of diceListenersRef.current) {
-          listener(message);
-        }
-      } else if (message.type === "ERROR") {
+      } else if (message.type === "KICKED") {
+        // Prevent PartySocket's auto-reconnect from silently rejoining after a kick.
+        pendingJoinRef.current = null;
         setError(message.message);
-        setStatus("connected");
+        setStatus("disconnected");
+      } else if (message.type === "ERROR") {
+        // Never downgrade the connection status: an in-game rules error
+        // ("cannot remove that slot", …) must not eject a joined client.
+        setError(message.message);
       }
     });
 
     socket.addEventListener("close", () => {
+      // A drop after a successful join is a blip: PartySocket auto-reconnects and
+      // the pending join is re-sent on open. Only unjoined failures are terminal.
+      if (everJoinedRef.current && pendingJoinRef.current) {
+        setStatus("reconnecting");
+        return;
+      }
       setStatus("disconnected");
       setError((prev) =>
         prev ?? "Lost connection to the game server. Is PartyKit running on port 1999?",
@@ -399,6 +377,15 @@ export function useGameRoom(roomId: string | null): GameRoom {
     };
   }, [roomId]);
 
+  const clearError = useCallback(() => setError(null), []);
+
+  const subscribeDice = useCallback((listener: (event: DiceThrowEvent) => void) => {
+    diceListenersRef.current.add(listener);
+    return () => {
+      diceListenersRef.current.delete(listener);
+    };
+  }, []);
+
   return {
     status,
     error,
@@ -406,13 +393,11 @@ export function useGameRoom(roomId: string | null): GameRoom {
     yourClientId,
     yourRole,
     yourPlayerId,
-    privateDiceLog,
     send,
     join,
     rollDice,
-    throwDice,
-    sendDiceMotion,
     subscribeDice,
+    clearError,
   };
 }
 
@@ -432,25 +417,38 @@ export function useDmActions(room: GameRoom) {
         send({ type: "MOVE_TOKEN", tokenId, x, y }),
       updateToken: (token: Token) => send({ type: "UPDATE_TOKEN", token }),
       removeToken: (tokenId: string) => send({ type: "REMOVE_TOKEN", tokenId }),
-      setPing: (x: number, y: number) => send({ type: "SET_PING", x, y }),
-      clearPing: () => send({ type: "CLEAR_PING" }),
-      addAnnotation: (sceneId: string, points: number[], color: string) =>
-        send({ type: "ADD_ANNOTATION", sceneId, points, color }),
-      updateFog: (sceneId: string, fogDataUrl: string) =>
-        send({ type: "UPDATE_FOG", sceneId, fogDataUrl }),
       importCampaign: (manifest: CampaignManifest) =>
         send({ type: "IMPORT_CAMPAIGN", manifest }),
-      updateSheetTemplate: (template: SheetTemplate) =>
-        send({ type: "UPDATE_SHEET_TEMPLATE", template }),
       addPlayerSlot: (name: string) => send({ type: "ADD_PLAYER_SLOT", name }),
       updatePlayerSlot: (slot: PlayerSlot) => send({ type: "UPDATE_PLAYER_SLOT", slot }),
       removePlayerSlot: (slotId: string) => send({ type: "REMOVE_PLAYER_SLOT", slotId }),
-      addTokenTemplate: (template: TokenTemplate) =>
-        send({ type: "ADD_TOKEN_TEMPLATE", template }),
-      updateTokenTemplate: (template: TokenTemplate) =>
-        send({ type: "UPDATE_TOKEN_TEMPLATE", template }),
-      removeTokenTemplate: (templateId: string) =>
-        send({ type: "REMOVE_TOKEN_TEMPLATE", templateId }),
+      kickPlayer: (playerId: string) => send({ type: "KICK_PLAYER", playerId }),
+      updateSheet: (sheetId: string, sheet: CharacterSheet) =>
+        send({ type: "UPDATE_SHEET", sheetId, sheet }),
+      createSheet: (sheetId: string, name: string) =>
+        send({ type: "CREATE_SHEET", sheetId, name }),
+      duplicateSheet: (sheetId: string, newSheetId: string) =>
+        send({ type: "DUPLICATE_SHEET", sheetId, newSheetId }),
+      deleteSheet: (sheetId: string) => send({ type: "DELETE_SHEET", sheetId }),
+      setSheetReveal: (sheetId: string, section: SheetSectionId, revealed: boolean) =>
+        send({ type: "SET_SHEET_REVEAL", sheetId, section, revealed }),
+      updateDmNotes: (notes: string) => send({ type: "UPDATE_DM_NOTES", notes }),
+      startCombat: (tokenIds: string[]) => send({ type: "COMBAT_START", tokenIds }),
+      setCombatInitiative: (entryId: string, value: number) =>
+        send({ type: "COMBAT_SET_INITIATIVE", entryId, value }),
+      nextTurn: () => send({ type: "COMBAT_NEXT" }),
+      prevTurn: () => send({ type: "COMBAT_PREV" }),
+      endCombat: () => send({ type: "COMBAT_END" }),
+      setSheetFolder: (sheetId: string, folderId: string | null, sortOrder?: number) =>
+        send({ type: "SET_SHEET_FOLDER", sheetId, folderId, sortOrder }),
+      createFolder: (folderId: string, kind: Folder["kind"], name: string) =>
+        send({ type: "CREATE_FOLDER", folderId, kind, name }),
+      renameFolder: (folderId: string, name: string) =>
+        send({ type: "RENAME_FOLDER", folderId, name }),
+      deleteFolder: (folderId: string) => send({ type: "DELETE_FOLDER", folderId }),
+      createItem: (itemId: string, name: string) => send({ type: "CREATE_ITEM", itemId, name }),
+      updateItem: (item: ItemRecord) => send({ type: "UPDATE_ITEM", item }),
+      deleteItem: (itemId: string) => send({ type: "DELETE_ITEM", itemId }),
     }),
     [send, yourRole],
   );
@@ -460,15 +458,15 @@ export function usePlayerSheet(room: GameRoom) {
   const { send, yourRole, yourPlayerId, state } = room;
 
   const sheet =
-    yourPlayerId && state ? (state.characterSheets[yourPlayerId] ?? null) : null;
+    yourPlayerId && state ? (state.sheets[yourPlayerId]?.data ?? null) : null;
 
   const updateSheet = useCallback(
     (next: CharacterSheet) => {
-      if (yourRole === "player") {
-        send({ type: "UPDATE_MY_SHEET", sheet: next });
+      if (yourRole === "player" && yourPlayerId) {
+        send({ type: "UPDATE_SHEET", sheetId: yourPlayerId, sheet: next });
       }
     },
-    [send, yourRole],
+    [send, yourRole, yourPlayerId],
   );
 
   return { sheet, updateSheet, canEdit: yourRole === "player" };

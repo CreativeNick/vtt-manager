@@ -1,0 +1,51 @@
+/* ============================================================================
+   Design tokens — the single re-theming surface.
+   Components consume ONLY these variables; a new skin (or a user CSS theme
+   later) is just a new set of values for these properties. The current dark
+   palette is a placeholder skin, not the final look.
+   ========================================================================== */
+
+:root {
+  /* -- Palette --------------------------------------------------------------- */
+  --bg: #1a1a1c;
+  --surface: rgba(38, 38, 42, 0.95);
+  --surface-solid: #262629;
+  --surface-2: #303035;
+  --surface-inset: rgba(0, 0, 0, 0.2);
+  --input-bg: rgba(0, 0, 0, 0.28);
+  --border: #45454b;
+  --border-subtle: #333338;
+  --text: #e6e6e8;
+  --text-muted: #9a9aa2;
+  --accent: #4a9eff;
+  --accent-bright: #7bb8ff;
+  --on-accent: #08182b;
+  --danger: #e5686b;
+  --danger-soft: rgba(229, 104, 107, 0.16);
+  --danger-text: #ffd9d9;
+  --success: #7bc488;
+
+  /* -- Typography -------------------------------------------------------------
+     display = narrative headers, body = UI text, mono = stats/data. */
+  --font-display: "Cinzel", Georgia, serif;
+  --font-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, monospace;
+
+  /* -- Spacing (4px unit) ------------------------------------------------------ */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+
+  /* -- Shape ------------------------------------------------------------------- */
+  --radius: 6px;
+  --radius-lg: 12px;
+
+  /* -- Elevation (map → cluster → window → modal) -------------------------------- */
+  --elev-1: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --elev-2: 0 8px 30px rgba(0, 0, 0, 0.5);
+  --elev-3: 0 16px 50px rgba(0, 0, 0, 0.6);
+  --shadow: var(--elev-2);
+  --blur: blur(10px);
+}

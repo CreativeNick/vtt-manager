@@ -1,6 +1,8 @@
 /// <summary>
-/// Transport types and pure result logic shared by the client dice engine and the
+/// 3D-dice transport types and pure result logic shared by the client engine and the
 /// PartyKit server. No DOM or Three.js imports here so the server can use it too.
+/// Recovered from the v1 dice system (git e23a632) with the live-motion relay types
+/// removed (that feature is a later stretch).
 /// </summary>
 
 /**
@@ -16,9 +18,9 @@ export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 
 /**
- * A point in shared map/world coordinates (the same space Konva uses for tokens/pings).
- * Used to anchor a roll's dice to the map so every client renders them at the same map
- * location regardless of window size or zoom.
+ * A point in shared map/world coordinates (the same space Konva uses for tokens).
+ * A throw is anchored at the roller's view center so every client renders the dice at
+ * the same board location.
  */
 export type WorldPoint = [number, number];
 
@@ -35,8 +37,9 @@ export interface DieSpec {
 /** Max dice in one throw (matches the server-side cap). */
 export const MAX_DICE_PER_THROW = 20;
 
-/** How many grid cells the dice tray anchor may sit past each map edge. */
-export const ROLL_REGION_BORDER_CELLS = 3;
+/** Server-side track caps: reject absurd or oversized recordings. */
+export const MAX_TRACK_FRAMES = 400;
+export const MAX_TRACK_IMPACTS = 200;
 
 /** Initial kinematic state for one die at the moment of release. */
 export interface DieThrowState {
@@ -50,16 +53,6 @@ export interface DieThrowState {
   /** Angular velocity. */
   ang: Vec3;
 }
-
-/** Lightweight transform sample broadcast live while a die is grabbed/shaken. */
-export interface DieTransform {
-  id: string;
-  p: Vec3;
-  q: Quat;
-}
-
-/** Roller cursor position in shared map/world coordinates, projected per-viewer. */
-export type CursorPoint = WorldPoint;
 
 /** Recorded per-frame motion for one die. samples = flat [px,py,pz,qx,qy,qz,qw] per frame. */
 export interface DieFrames {
@@ -157,6 +150,58 @@ export function parseDiceExpression(
     return null;
   }
   return { specs, modifier };
+}
+
+const DIE_KINDS = new Set<string>(["d4", "d6", "d8", "d10", "d12", "d20", "custom"]);
+
+/// <summary>
+/// Server-side validation of a client-supplied throw: sane specs and a track whose
+/// shape matches them. Returns null when anything is off.
+/// </summary>
+export function sanitizeThrow(
+  specs: DieSpec[],
+  track: DiceTrack,
+): { specs: DieSpec[]; track: DiceTrack } | null {
+  if (!Array.isArray(specs) || specs.length === 0 || specs.length > MAX_DICE_PER_THROW) {
+    return null;
+  }
+  for (const spec of specs) {
+    if (!spec || typeof spec.id !== "string" || !DIE_KINDS.has(spec.kind)) {
+      return null;
+    }
+    if (spec.kind === "custom") {
+      const sides = spec.sides ?? 0;
+      if (!Number.isFinite(sides) || sides < 2 || sides > 1000) {
+        return null;
+      }
+    }
+  }
+  if (!track || typeof track !== "object") {
+    return null;
+  }
+  const fps = track.fps;
+  const frames = track.frames;
+  if (!Number.isFinite(fps) || fps < 10 || fps > 60) {
+    return null;
+  }
+  if (!Number.isFinite(frames) || frames < 1 || frames > MAX_TRACK_FRAMES) {
+    return null;
+  }
+  if (!Array.isArray(track.dice) || track.dice.length !== specs.length) {
+    return null;
+  }
+  for (const die of track.dice) {
+    if (!die || typeof die.id !== "string" || !Array.isArray(die.samples)) {
+      return null;
+    }
+    if (die.samples.length !== frames * 7 || die.samples.some((v) => !Number.isFinite(v))) {
+      return null;
+    }
+  }
+  if (!Array.isArray(track.impacts) || track.impacts.length > MAX_TRACK_IMPACTS) {
+    return null;
+  }
+  return { specs, track };
 }
 
 /// <summary>

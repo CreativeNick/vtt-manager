@@ -67,16 +67,37 @@ export function rollDiceExpression(
 }
 
 /// <summary>
+/// Rolls an expression twice and keeps the better (advantage) or worse
+/// (disadvantage) total; the discarded total is reported for the log.
+/// </summary>
+export function rollWithAdvantage(
+  expression: string,
+  adv: "adv" | "dis",
+  randInt: (n: number) => number = (n) => Math.floor(Math.random() * n),
+): DiceRollResult & { otherTotal: number } {
+  const first = rollDiceExpression(expression, randInt);
+  const second = rollDiceExpression(expression, randInt);
+  const keepFirst = adv === "adv" ? first.total >= second.total : first.total <= second.total;
+  const kept = keepFirst ? first : second;
+  const other = keepFirst ? second : first;
+  return { ...kept, otherTotal: other.total };
+}
+
+/// <summary>
 /// Formats a dice roll for display in the shared or secret log.
 /// </summary>
-export function formatDiceRoll(roll: Pick<DiceRoll, "expression" | "rolls" | "modifier" | "total">): string {
+export function formatDiceRoll(
+  roll: Pick<DiceRoll, "expression" | "rolls" | "modifier" | "total"> &
+    Partial<Pick<DiceRoll, "adv" | "otherTotal">>,
+): string {
   const dice =
     roll.rolls.length === 1 ? String(roll.rolls[0]) : `[${roll.rolls.join(", ")}]`;
-  if (roll.modifier === 0) {
-    return `${roll.expression} → ${dice} = ${roll.total}`;
-  }
-  const mod = roll.modifier > 0 ? ` + ${roll.modifier}` : ` ${roll.modifier}`;
-  return `${roll.expression} → ${dice}${mod} = ${roll.total}`;
+  const mod =
+    roll.modifier === 0 ? "" : roll.modifier > 0 ? ` + ${roll.modifier}` : ` ${roll.modifier}`;
+  const advSuffix = roll.adv
+    ? ` (${roll.adv === "adv" ? "advantage" : "disadvantage"}, dropped ${roll.otherTotal})`
+    : "";
+  return `${roll.expression} → ${dice}${mod} = ${roll.total}${advSuffix}`;
 }
 
 export const DICE_QUICK_SIDES = [4, 6, 8, 10, 12, 20, 100] as const;

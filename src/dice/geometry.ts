@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
-import type { DieKind } from "./diceProtocol";
+import type { DieKind } from "../lib/dice3d";
 
 /// <summary>
 /// Procedural dice geometry: builds the convex body mesh, per-face metadata used to

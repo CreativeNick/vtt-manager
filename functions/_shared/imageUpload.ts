@@ -5,6 +5,15 @@ type UploadBody = {
 };
 
 /// <summary>
+/// Room namespace for upload keys (e.g. "myroom--slot-abc123.png") so a campaign's
+/// assets can be listed by prefix and garbage-collected later. Optional for
+/// backward compatibility with older clients.
+/// </summary>
+export function roomKeyPrefix(body: Record<string, unknown>): string {
+  return body.roomId && typeof body.roomId === "string" ? `${body.roomId}--` : "";
+}
+
+/// <summary>
 /// Writes an uploaded image to R2 and returns a JSON response with its public path.
 /// </summary>
 export async function handleImageUpload(

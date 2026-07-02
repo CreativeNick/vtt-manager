@@ -1,0 +1,397 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { GameRoom } from "../hooks/useGameRoom";
+import type { Viewport } from "../lib/types";
+import {
+  decomposeDie,
+  parseDiceExpression,
+  MAX_DICE_PER_THROW,
+  type DieSpec,
+  type WorldPoint,
+} from "../lib/dice3d";
+import type { DiceAudio } from "./audio";
+import type { DiceEngine } from "./engine";
+import type { DiceTrayScene } from "./trayScene";
+
+const ENABLED_KEY = "dice-3d-enabled";
+
+/** Physical dice cap per throw (bigger pools resolve as text rolls). */
+const MAX_PHYSICAL_DICE = 12;
+
+function readEnabled(): boolean {
+  try {
+    const stored = window.localStorage.getItem(ENABLED_KEY);
+    if (stored !== null) {
+      return stored !== "0";
+    }
+  } catch {
+    // fall through to the media query default
+  }
+  return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** How many physical dice one selection unit costs (a d100 is a pair of d10s). */
+function physicalCount(sides: number): number {
+  return sides === 100 ? 2 : 1;
+}
+
+export interface DiceOverlayController {
+  /** Callback ref for the full-window arena element. */
+  containerRef: (node: HTMLDivElement | null) => void;
+  /** Callback ref for the dice tray's felt well (hosts the tray's own 3D scene). */
+  trayMountRef: (node: HTMLDivElement | null) => void;
+  /** Feed this client's live viewport so dice stay world-anchored and screen-sized. */
+  setProjection: (viewport: Viewport) => void;
+  /** DM secret mode, read live at throw time. */
+  setSecret: (on: boolean) => void;
+  /** 3D animation preference (persisted). When off, callers fall back to text rolls. */
+  enabled: boolean;
+  setEnabled: (on: boolean) => void;
+  muted: boolean;
+  setMuted: (muted: boolean) => void;
+  /** Current d#-button selection: sides → count. Selected tray dice glow. */
+  selection: Record<number, number>;
+  /** Adds/removes dice from the selection (delta ±1); capped at 12 physical dice. */
+  adjustSelection: (sides: number, delta: number) => void;
+  clearSelection: () => void;
+  /**
+   * Starts a grab from a pointerdown on the tray well. Picks up the die under the
+   * cursor — plus every other highlighted die (far ones gather next to the cursor).
+   * Returns false when nothing grabbable is under the pointer or 3D isn't ready.
+   */
+  grabFromTray: (event: { clientX: number; clientY: number }) => boolean;
+  /** Parse an expression and throw it physically. False → caller falls back to text. */
+  throwExpression: (expression: string) => boolean;
+}
+
+const uid = () => crypto.randomUUID().slice(0, 8);
+
+interface ArmedRoll {
+  specs: DieSpec[];
+  modifier: number;
+}
+
+/// <summary>
+/// Owns the 3D dice overlay lifecycle: lazily loads the Three+Rapier engine, wires it
+/// to the room (recorded-track throws in, authoritative DICE_THROW playback out), and
+/// exposes the tray-selection + grab controls. The arena canvas never takes pointer
+/// events — grabs start from the tray well and ride window listeners.
+/// </summary>
+export function useDiceOverlay(room: GameRoom): DiceOverlayController {
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const containerRef = useCallback((node: HTMLDivElement | null) => setContainer(node), []);
+  const [trayMount, setTrayMount] = useState<HTMLDivElement | null>(null);
+  const trayMountRef = useCallback((node: HTMLDivElement | null) => setTrayMount(node), []);
+
+  const roomRef = useRef(room);
+  roomRef.current = room;
+
+  const engineRef = useRef<DiceEngine | null>(null);
+  const enginePromiseRef = useRef<Promise<DiceEngine | null> | null>(null);
+  const trayRef = useRef<DiceTrayScene | null>(null);
+  const audioRef = useRef<DiceAudio | null>(null);
+  const viewportRef = useRef<Viewport>({ x: 0, y: 0, scale: 1 });
+  const armedRef = useRef<Map<string, ArmedRoll>>(new Map());
+  const ourRollIdsRef = useRef<Set<string>>(new Set());
+  const secretRef = useRef(false);
+
+  const [enabled, setEnabledState] = useState(readEnabled);
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  const [muted, setMutedState] = useState(false);
+  const [selection, setSelection] = useState<Record<number, number>>({});
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+
+  /// <summary>Loads three/rapier + boots the engine exactly once (on demand).</summary>
+  const ensureEngine = useCallback((): Promise<DiceEngine | null> => {
+    if (engineRef.current) {
+      return Promise.resolve(engineRef.current);
+    }
+    if (!container) {
+      return Promise.resolve(null);
+    }
+    if (!enginePromiseRef.current) {
+      enginePromiseRef.current = (async () => {
+        try {
+          const [{ DiceEngine }, { DiceAudio }] = await Promise.all([
+            import("./engine"),
+            import("./audio"),
+          ]);
+          const audio = new DiceAudio();
+          audioRef.current = audio;
+          setMutedState(audio.isMuted());
+          const engine = await DiceEngine.create(container, {
+            onRelease: (rollId, track, trayCenter) => {
+              const armed = armedRef.current.get(rollId);
+              if (armed) {
+                roomRef.current.send({
+                  type: "DICE_THROW_REQUEST",
+                  rollId,
+                  specs: armed.specs,
+                  track,
+                  modifier: armed.modifier,
+                  trayCenter,
+                  private: secretRef.current || undefined,
+                });
+              }
+            },
+            onImpact: (strength) => audioRef.current?.impact(strength),
+          });
+          engine.setMapProjection(viewportRef.current);
+          engineRef.current = engine;
+          return engine;
+        } catch (error) {
+          console.error("[dice] engine init failed:", error);
+          enginePromiseRef.current = null;
+          return null;
+        }
+      })();
+    }
+    return enginePromiseRef.current;
+  }, [container]);
+
+  // Wire authoritative throws from the room; loads the engine on first sight of one.
+  useEffect(() => {
+    const unsubscribe = roomRef.current.subscribeDice((event) => {
+      if (!enabledRef.current) {
+        return; // 3D off: results arrive via the log
+      }
+      void ensureEngine().then((engine) => {
+        if (!engine) {
+          return;
+        }
+        const local = ourRollIdsRef.current.has(event.rollId);
+        ourRollIdsRef.current.delete(event.rollId);
+        armedRef.current.delete(event.rollId);
+        const blank = !event.faceValues || event.faceValues.length === 0;
+        engine.playTrack(
+          event.rollId,
+          event.specs,
+          event.track,
+          event.faceValues ?? [],
+          local,
+          blank,
+          event.trayCenter,
+        );
+      });
+    });
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Dispose the engine with its container.
+  useEffect(() => {
+    return () => {
+      engineRef.current?.dispose();
+      engineRef.current = null;
+      enginePromiseRef.current = null;
+      audioRef.current?.dispose();
+      audioRef.current = null;
+    };
+  }, [container]);
+
+  // The tray's own little 3D scene lives exactly as long as the felt well is mounted.
+  useEffect(() => {
+    if (!trayMount) {
+      return;
+    }
+    let cancelled = false;
+    void import("./trayScene").then(({ DiceTrayScene }) => {
+      if (cancelled) {
+        return;
+      }
+      const tray = new DiceTrayScene(trayMount);
+      tray.setSelection(selectionRef.current);
+      trayRef.current = tray;
+    });
+    return () => {
+      cancelled = true;
+      trayRef.current?.dispose();
+      trayRef.current = null;
+    };
+  }, [trayMount]);
+
+  useEffect(() => {
+    trayRef.current?.setSelection(selection);
+  }, [selection]);
+
+  const setProjection = useCallback((viewport: Viewport) => {
+    viewportRef.current = viewport;
+    engineRef.current?.setMapProjection(viewport);
+  }, []);
+
+  const setSecret = useCallback((on: boolean) => {
+    secretRef.current = on;
+  }, []);
+
+  const setEnabled = useCallback(
+    (on: boolean) => {
+      setEnabledState(on);
+      try {
+        window.localStorage.setItem(ENABLED_KEY, on ? "1" : "0");
+      } catch {
+        // preference just won't persist
+      }
+      if (on) {
+        void ensureEngine();
+      } else {
+        setSelection({});
+      }
+    },
+    [ensureEngine],
+  );
+
+  const setMuted = useCallback((next: boolean) => {
+    audioRef.current?.setMuted(next);
+    setMutedState(next);
+  }, []);
+
+  const adjustSelection = useCallback((sides: number, delta: number) => {
+    setSelection((current) => {
+      const cur = current[sides] ?? 0;
+      const next = Math.max(0, cur + delta);
+      if (delta > 0) {
+        const total = Object.entries(current).reduce(
+          (sum, [s, n]) => sum + physicalCount(Number(s)) * n,
+          0,
+        );
+        if (total + physicalCount(sides) * delta > MAX_PHYSICAL_DICE) {
+          return current;
+        }
+      }
+      const updated = { ...current };
+      if (next === 0) {
+        delete updated[sides];
+      } else {
+        updated[sides] = next;
+      }
+      return updated;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelection({}), []);
+
+  /** This client's window center in map/world coordinates — the text-roll throw anchor. */
+  const viewCenter = useCallback((): WorldPoint => {
+    const viewport = viewportRef.current;
+    const scale = viewport.scale > 0 ? viewport.scale : 1;
+    return [
+      (window.innerWidth / 2 - viewport.x) / scale,
+      (window.innerHeight / 2 - viewport.y) / scale,
+    ];
+  }, []);
+
+  /// <summary>Registers a roll and its window drag listeners through to release.</summary>
+  const rideDrag = useCallback((engine: DiceEngine, onUpExtra?: () => void) => {
+    const onMove = (e: PointerEvent) => {
+      engine.moveDrag(e.clientX, e.clientY);
+      e.preventDefault();
+    };
+    const onUp = (e: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      engine.endDrag(e.clientX, e.clientY);
+      onUpExtra?.();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, []);
+
+  const grabFromTray = useCallback(
+    (event: { clientX: number; clientY: number }): boolean => {
+      if (!enabledRef.current) {
+        return false;
+      }
+      const engine = engineRef.current;
+      const tray = trayRef.current;
+      if (!engine || !tray) {
+        void ensureEngine(); // warm up for next time
+        return false;
+      }
+      const hit = tray.hitTest(event.clientX, event.clientY);
+      if (hit === null) {
+        return false;
+      }
+      // Grabbing a highlighted die picks up the whole selection (grabbed type first);
+      // an unhighlighted die is a quick single grab.
+      const current = selectionRef.current;
+      const picks: Array<[number, number]> =
+        (current[hit] ?? 0) > 0
+          ? [
+              [hit, current[hit]],
+              ...Object.entries(current)
+                .filter(([s, n]) => Number(s) !== hit && n > 0)
+                .map(([s, n]) => [Number(s), n] as [number, number]),
+            ]
+          : [[hit, 1]];
+      const poses = tray.liftForGrab(picks);
+      const specs: DieSpec[] = picks.flatMap(([sides, count]) =>
+        Array.from({ length: count }, () =>
+          decomposeDie(sides).map((spec) => ({ ...spec, id: uid() })),
+        ).flat(),
+      );
+      if (specs.length === 0 || specs.length > MAX_DICE_PER_THROW) {
+        tray.restoreLifted();
+        return false;
+      }
+      const rollId = uid();
+      armedRef.current.set(rollId, { specs, modifier: 0 });
+      ourRollIdsRef.current.add(rollId);
+      setSelection({});
+      audioRef.current?.resume();
+      engine.beginTrayGrab(rollId, specs, poses, event.clientX, event.clientY);
+      rideDrag(engine, () => trayRef.current?.restoreLifted());
+      return true;
+    },
+    [ensureEngine, rideDrag],
+  );
+
+  const throwExpression = useCallback(
+    (expression: string): boolean => {
+      if (!enabledRef.current || !engineRef.current) {
+        if (enabledRef.current) {
+          void ensureEngine();
+        }
+        return false;
+      }
+      const parsed = parseDiceExpression(expression);
+      if (!parsed || parsed.specs.length > MAX_PHYSICAL_DICE) {
+        return false;
+      }
+      const specs = parsed.specs.map((spec) => ({ ...spec, id: uid() }));
+      const engine = engineRef.current;
+      const rollId = uid();
+      armedRef.current.set(rollId, { specs, modifier: parsed.modifier });
+      ourRollIdsRef.current.add(rollId);
+      audioRef.current?.resume();
+      engine.arm(rollId, specs, viewCenter());
+      engine.autoThrow(rollId);
+      return true;
+    },
+    [ensureEngine, viewCenter],
+  );
+
+  // Preload the engine as soon as 3D is enabled and the arena exists, so the first
+  // grab doesn't stall on the three/rapier download.
+  useEffect(() => {
+    if (enabled && container) {
+      void ensureEngine();
+    }
+  }, [enabled, container, ensureEngine]);
+
+  return {
+    containerRef,
+    trayMountRef,
+    setProjection,
+    setSecret,
+    enabled,
+    setEnabled,
+    muted,
+    setMuted,
+    selection,
+    adjustSelection,
+    clearSelection,
+    grabFromTray,
+    throwExpression,
+  };
+}

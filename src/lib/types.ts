@@ -1,19 +1,5 @@
 import type { CampaignManifest } from "./campaignManifest";
-import type { MapAnnotation } from "./mapAnnotation";
-import { normalizeMapAnnotation } from "./mapAnnotation";
-import type { TokenTemplate } from "./tokenTemplate";
-import { normalizeTokenTemplate } from "./tokenTemplate";
-import type { CursorPoint, DiceTrack, DieSpec, DieTransform, WorldPoint } from "../dice3d/diceProtocol";
-
-export type { MapAnnotation } from "./mapAnnotation";
-export { ANNOTATION_DURATION_MS, normalizeMapAnnotation } from "./mapAnnotation";
-export type { TokenTemplate, TokenTemplateCategory } from "./tokenTemplate";
-export {
-  createTokenTemplate,
-  normalizeTokenTemplate,
-  TOKEN_TEMPLATE_CATEGORIES,
-  tokenFromTemplate,
-} from "./tokenTemplate";
+import type { DiceTrack, DieSpec, WorldPoint } from "./dice3d";
 
 export type Role = "dm" | "player";
 
@@ -23,36 +9,26 @@ export type Viewport = {
   scale: number;
 };
 
-export type MapLayer = {
-  id: string;
-  url: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  label?: string;
-};
-
+/// <summary>
+/// A scene is a single background map image (drawn at world origin) plus a grid.
+/// Bare-bones: one image per scene, no layers/fog.
+/// </summary>
 export type Scene = {
   id: string;
   name: string;
-  layers: MapLayer[];
+  mapUrl: string | null;
   width: number;
   height: number;
-  /** World-space reference center; independent of map image placement. */
-  centerX: number;
-  centerY: number;
-  /** Grid units players may pan from center per axis; 0 = unlimited. */
-  playerPanLimit: number;
   gridSize: number;
   showGrid: boolean;
-  fogEnabled: boolean;
-  fogDataUrl: string | null;
-  defaultViewport: Viewport;
   backgroundColor: string;
+  defaultViewport: Viewport;
 };
 
 export type TokenKind = "player" | "enemy";
+
+/** How a token's HP (from its linked sheet) is shown to players. DM always sees bars. */
+export type TokenHpDisplay = "none" | "bar" | "values";
 
 export type Token = {
   id: string;
@@ -64,9 +40,78 @@ export type Token = {
   kind: TokenKind;
   imageUrl: string | null;
   ownerPlayerId: string | null;
+  /** Linked sheet. Player tokens auto-link to their owner's PC sheet. */
+  sheetId: string | null;
+  /** Active condition ids from CONDITIONS. */
+  conditions: string[];
+  showHp: TokenHpDisplay;
+};
+
+export const CONDITIONS = [
+  { id: "blinded", label: "Blinded", emoji: "🙈" },
+  { id: "charmed", label: "Charmed", emoji: "💘" },
+  { id: "frightened", label: "Frightened", emoji: "😱" },
+  { id: "grappled", label: "Grappled", emoji: "✊" },
+  { id: "invisible", label: "Invisible", emoji: "👻" },
+  { id: "paralyzed", label: "Paralyzed", emoji: "⚡" },
+  { id: "poisoned", label: "Poisoned", emoji: "🤢" },
+  { id: "prone", label: "Prone", emoji: "🛌" },
+  { id: "restrained", label: "Restrained", emoji: "⛓️" },
+  { id: "stunned", label: "Stunned", emoji: "💫" },
+  { id: "unconscious", label: "Unconscious", emoji: "💤" },
+  { id: "concentrating", label: "Concentrating", emoji: "🎯" },
+] as const;
+
+const CONDITION_IDS = new Set<string>(CONDITIONS.map((condition) => condition.id));
+
+/** One combatant in the initiative order. */
+export type CombatEntry = {
+  id: string;
+  tokenId: string | null;
+  sheetId: string | null;
+  name: string;
+  /** null until rolled — unrolled entries sort last with a "waiting" badge. */
+  initiative: number | null;
+  /** Tiebreaker: higher DEX score acts first on equal initiative. */
+  dexScore: number;
+  hasRolled: boolean;
+  /** Masked to "???" for players (hidden tokens, Phase 5). */
+  hidden?: boolean;
+};
+
+export type CombatState = {
+  round: number;
+  turnIndex: number;
+  entries: CombatEntry[];
 };
 
 export type HitPoints = { current: number; max: number };
+
+/** Directory folder for organizing actors (sheets) or items. Flat for now. */
+export type Folder = {
+  id: string;
+  name: string;
+  kind: "actor" | "item";
+};
+
+/** A catalog item (DM-side library). Dragging one onto a sheet copies its name. */
+export type ItemRecord = {
+  id: string;
+  name: string;
+  description: string;
+  iconUrl: string | null;
+  folderId: string | null;
+  /** Manual directory ordering (fractional insertion); unset sorts last by name. */
+  sortOrder?: number;
+};
+
+/** One row of a sheet's inventory. `name` is a copy, so catalog deletions are safe. */
+export type InventoryEntry = {
+  itemId: string | null;
+  name: string;
+  qty: number;
+  note: string;
+};
 
 export type CharacterSheet = {
   characterName: string;
@@ -86,8 +131,9 @@ export type CharacterSheet = {
   hair: string;
   backstoryPersonality: string;
   notes: string;
+  inventory: InventoryEntry[];
   iconUrl: string | null;
-  /** Combat block (game-loop resources kept outside the configurable template). */
+  /** Combat block (game-loop resources kept outside the sheet template). */
   hp: HitPoints;
   ac: number;
   initiative: number;
@@ -138,10 +184,155 @@ type LegacyCharacterSheet = Partial<CharacterSheet> & {
   ac?: number;
 };
 
+/** The reveal/collapse granularity of a character sheet. */
+export type SheetSectionId =
+  | "identity"
+  | "combat"
+  | "abilities"
+  | "saves"
+  | "skills"
+  | "inventory"
+  | "notes";
+
+export const SHEET_SECTIONS: Array<{ id: SheetSectionId; label: string }> = [
+  { id: "identity", label: "Identity" },
+  { id: "combat", label: "Combat" },
+  { id: "abilities", label: "Abilities" },
+  { id: "saves", label: "Saving throws" },
+  { id: "skills", label: "Skills" },
+  { id: "inventory", label: "Inventory" },
+  { id: "notes", label: "Notes" },
+];
+
+/** Which CharacterSheet fields belong to each section — drives server-side redaction. */
+export const SHEET_SECTION_FIELDS: Record<SheetSectionId, Array<keyof CharacterSheet>> = {
+  identity: [
+    "characterName",
+    "playerName",
+    "characterClass",
+    "subclass",
+    "level",
+    "xp",
+    "race",
+    "alignment",
+    "size",
+    "age",
+    "height",
+    "weight",
+    "eyes",
+    "skin",
+    "hair",
+    "iconUrl",
+  ],
+  combat: ["hp", "ac", "initiative"],
+  abilities: ["abilityScores"],
+  saves: ["saveMods"],
+  skills: ["skillMods"],
+  inventory: ["inventory"],
+  notes: ["notes", "backstoryPersonality"],
+};
+
+export type SheetKind = "pc" | "npc";
+
+/// <summary>
+/// A first-class sheet entity. PC sheets keep id === slotId; NPC sheets are
+/// DM-created and hidden from players section-by-section until revealed.
+/// Multiple tokens may share one sheet (six goblins, one stat block).
+/// </summary>
+export type SheetRecord = {
+  id: string;
+  kind: SheetKind;
+  ownerSlotId: string | null;
+  data: CharacterSheet;
+  /** Per-section player visibility. PC sheets are always fully revealed. */
+  revealed: Record<SheetSectionId, boolean>;
+  /** Actors-directory folder, or null for the root. */
+  folderId: string | null;
+  /** Manual directory ordering (fractional insertion); unset sorts last by name. */
+  sortOrder?: number;
+  /** Set only on outbound copies whose hidden sections were stripped server-side. */
+  redacted?: boolean;
+};
+
+export function createRevealedFlags(value: boolean): Record<SheetSectionId, boolean> {
+  const flags = {} as Record<SheetSectionId, boolean>;
+  for (const section of SHEET_SECTIONS) {
+    flags[section.id] = value;
+  }
+  return flags;
+}
+
+export function createPcSheetRecord(slotId: string, name: string): SheetRecord {
+  return {
+    id: slotId,
+    kind: "pc",
+    ownerSlotId: slotId,
+    data: createDefaultSheet(name),
+    revealed: createRevealedFlags(true),
+    folderId: null,
+  };
+}
+
+export function createNpcSheetRecord(id: string, name: string): SheetRecord {
+  return {
+    id,
+    kind: "npc",
+    ownerSlotId: null,
+    data: createDefaultSheet(name),
+    revealed: createRevealedFlags(false),
+    folderId: null,
+  };
+}
+
+/// <summary>
+/// Normalizes a persisted sheet record: fills missing reveal flags and forces
+/// PC sheets fully revealed. Preserves the outbound `redacted` marker so the
+/// client can render hidden sections honestly instead of as zero-filled data.
+/// </summary>
+export function normalizeSheetRecord(
+  record: Partial<SheetRecord> & { id: string },
+  fallbackName: string,
+): SheetRecord {
+  const kind: SheetKind = record.kind === "npc" ? "npc" : "pc";
+  const revealed = createRevealedFlags(kind === "pc");
+  if (kind === "npc" && record.revealed && typeof record.revealed === "object") {
+    for (const section of SHEET_SECTIONS) {
+      revealed[section.id] = Boolean(record.revealed[section.id]);
+    }
+  }
+  return {
+    id: record.id,
+    kind,
+    ownerSlotId: kind === "pc" ? (record.ownerSlotId ?? record.id) : null,
+    data: normalizeCharacterSheet(record.data, fallbackName),
+    revealed,
+    folderId: typeof record.folderId === "string" ? record.folderId : null,
+    ...(typeof record.sortOrder === "number" && Number.isFinite(record.sortOrder)
+      ? { sortOrder: record.sortOrder }
+      : {}),
+    ...(record.redacted ? { redacted: true } : {}),
+  };
+}
+
+/// <summary>
+/// Validates a persisted catalog item.
+/// </summary>
+export function normalizeItem(item: Partial<ItemRecord> & { id: string }): ItemRecord {
+  return {
+    id: item.id,
+    name: typeof item.name === "string" && item.name.trim() ? item.name : "Item",
+    description: typeof item.description === "string" ? item.description : "",
+    iconUrl: typeof item.iconUrl === "string" ? item.iconUrl : null,
+    folderId: typeof item.folderId === "string" ? item.folderId : null,
+    ...(typeof item.sortOrder === "number" && Number.isFinite(item.sortOrder)
+      ? { sortOrder: item.sortOrder }
+      : {}),
+  };
+}
+
 export type PlayerSlot = {
   id: string;
   name: string;
-  visibleSceneIds: string[];
 };
 
 export type ConnectedPlayer = {
@@ -159,7 +350,40 @@ export type DiceRoll = {
   modifier: number;
   total: number;
   timestamp: number;
+  /** Advantage/disadvantage: the expression was rolled twice, best/worst total kept. */
+  adv?: "adv" | "dis";
+  /** The discarded roll's total when adv/dis was used. */
+  otherTotal?: number;
 };
+
+/** One entry in the unified roll/action/chat log. */
+export type LogEntry =
+  | {
+      id: string;
+      t: number;
+      kind: "roll";
+      roll: DiceRoll;
+      /** Who the roll was made as (the character), not necessarily who clicked. */
+      actor: { name: string; sheetId?: string };
+      /** e.g. "Stealth check" for sheet-integrated rolls. */
+      label?: string;
+      /** Secret DM roll — values masked in player frames. */
+      dmOnly?: boolean;
+      /** Set on outbound player copies of secret rolls: values are blanked. */
+      masked?: boolean;
+    }
+  | { id: string; t: number; kind: "event"; text: string; dmOnly?: boolean }
+  | {
+      id: string;
+      t: number;
+      kind: "chat";
+      from: string;
+      /** Stable sender id (playerId or "dm") — drives whisper visibility. */
+      fromId: string;
+      text: string;
+      /** Whisper target (slotId or "dm"); visible only to sender, target, and DM. */
+      whisperTo?: string;
+    };
 
 export type GameState = {
   roomId: string;
@@ -169,13 +393,27 @@ export type GameState = {
   tokens: Token[];
   viewport: Viewport;
   playerSlots: PlayerSlot[];
-  characterSheets: Record<string, CharacterSheet>;
+  /** All sheets (PC + NPC) keyed by sheet id. PC sheet ids equal their slot ids. */
+  sheets: Record<string, SheetRecord>;
   connectedPlayers: ConnectedPlayer[];
-  ping: { x: number; y: number; sceneId: string } | null;
-  annotations: MapAnnotation[];
-  publicDiceLog: DiceRoll[];
-  sheetTemplate: SheetTemplate;
-  tokenTemplates: TokenTemplate[];
+  /** Unified roll/action/chat log, capped at MAX_LOG_ENTRIES server-side. */
+  log: LogEntry[];
+  /** DM-only scratchpad — redacted to "" for players. */
+  dmNotes: string;
+  /** Active combat/initiative tracker, or null out of combat. */
+  combat: CombatState | null;
+  /** Actor/item directory folders (DM-only; stripped for players). */
+  folders: Folder[];
+  /** Item catalog (DM-only; sheets copy item names into their inventories). */
+  items: Record<string, ItemRecord>;
+};
+
+export const MAX_LOG_ENTRIES = 100;
+
+/** Pre-Phase-1/2 persisted states: slot-keyed sheets, roll-only dice log. */
+type LegacyGameStateFields = {
+  characterSheets?: Record<string, CharacterSheet>;
+  publicDiceLog?: DiceRoll[];
 };
 
 export type JoinMessage =
@@ -193,80 +431,73 @@ export type ClientMessage =
   | { type: "MOVE_TOKEN"; tokenId: string; x: number; y: number }
   | { type: "UPDATE_TOKEN"; token: Token }
   | { type: "REMOVE_TOKEN"; tokenId: string }
-  | { type: "UPDATE_MY_SHEET"; sheet: CharacterSheet }
-  | { type: "SET_PING"; x: number; y: number }
-  | { type: "CLEAR_PING" }
-  | {
-      type: "ADD_ANNOTATION";
-      sceneId: string;
-      points: number[];
-      color: string;
-    }
-  | { type: "UPDATE_FOG"; sceneId: string; fogDataUrl: string }
+  | { type: "UPDATE_SHEET"; sheetId: string; sheet: CharacterSheet }
+  | { type: "CREATE_SHEET"; sheetId: string; name: string }
+  | { type: "DUPLICATE_SHEET"; sheetId: string; newSheetId: string }
+  | { type: "DELETE_SHEET"; sheetId: string }
+  | { type: "SET_SHEET_REVEAL"; sheetId: string; section: SheetSectionId; revealed: boolean }
+  | { type: "SET_SHEET_FOLDER"; sheetId: string; folderId: string | null; sortOrder?: number }
+  | { type: "CREATE_FOLDER"; folderId: string; kind: Folder["kind"]; name: string }
+  | { type: "RENAME_FOLDER"; folderId: string; name: string }
+  | { type: "DELETE_FOLDER"; folderId: string }
+  | { type: "CREATE_ITEM"; itemId: string; name: string }
+  | { type: "UPDATE_ITEM"; item: ItemRecord }
+  | { type: "DELETE_ITEM"; itemId: string }
+  | { type: "UPDATE_DM_NOTES"; notes: string }
   | { type: "IMPORT_CAMPAIGN"; manifest: CampaignManifest }
   | { type: "ADD_PLAYER_SLOT"; name: string }
   | { type: "UPDATE_PLAYER_SLOT"; slot: PlayerSlot }
   | { type: "REMOVE_PLAYER_SLOT"; slotId: string }
-  | { type: "ADD_TOKEN_TEMPLATE"; template: TokenTemplate }
-  | { type: "UPDATE_TOKEN_TEMPLATE"; template: TokenTemplate }
-  | { type: "REMOVE_TOKEN_TEMPLATE"; templateId: string }
-  | { type: "ROLL_DICE"; expression: string; private?: boolean }
-  | { type: "UPDATE_SHEET_TEMPLATE"; template: SheetTemplate }
+  | { type: "KICK_PLAYER"; playerId: string }
   | {
-      type: "DICE_MOTION";
-      rollId: string;
-      /** Optional after first packet for a roll; receivers cache by rollId. */
-      specs?: DieSpec[];
-      transforms: DieTransform[];
-      cursor?: CursorPoint;
-      /** Map/world anchor for this roll's tray, so dice render at the same map location. */
-      trayCenter?: WorldPoint;
-      /** DM secret roll: render the shaking dice blank (no numbers) for other players. */
-      secret?: boolean;
+      type: "ROLL_DICE";
+      expression: string;
+      private?: boolean;
+      /** Roll attributed to a sheet (DM: any sheet; player: own only). */
+      context?: { sheetId?: string; label?: string };
+      adv?: "adv" | "dis";
     }
+  | { type: "SEND_CHAT"; text: string; whisperTo?: string }
   | {
+      /** A physical 3D throw: the roller pre-simulated and recorded the exact motion. */
       type: "DICE_THROW_REQUEST";
       rollId: string;
       specs: DieSpec[];
       track: DiceTrack;
       modifier: number;
+      trayCenter: WorldPoint;
+      context?: { sheetId?: string; label?: string };
       private?: boolean;
-      /** Map/world anchor for this roll's tray, so dice render at the same map location. */
-      trayCenter?: WorldPoint;
-    };
+    }
+  | { type: "COMBAT_START"; tokenIds: string[] }
+  | { type: "COMBAT_ROLL_INITIATIVE" }
+  | { type: "COMBAT_SET_INITIATIVE"; entryId: string; value: number }
+  | { type: "COMBAT_NEXT" }
+  | { type: "COMBAT_PREV" }
+  | { type: "COMBAT_END" };
 
 export type ServerMessage =
   | { type: "STATE"; state: GameState; yourClientId: string; yourRole: Role | null }
-  | { type: "ERROR"; message: string }
-  | { type: "JOINED"; role: Role; playerId: string }
-  | { type: "DM_DICE_ROLL"; roll: DiceRoll }
-  | {
-      type: "DICE_MOTION";
-      rollId: string;
-      rollerId: string;
-      rollerName: string;
-      /** Optional after first packet for a roll; receivers cache by rollId. */
-      specs?: DieSpec[];
-      transforms: DieTransform[];
-      cursor?: CursorPoint;
-      trayCenter?: WorldPoint;
-      /** DM secret roll: render the shaking dice blank (no numbers) for other players. */
-      secret?: boolean;
-    }
+  /** Lightweight DM pan/zoom delta — never triggers a full STATE broadcast. */
+  | { type: "VIEWPORT"; viewport: Viewport }
+  /**
+   * A validated 3D throw for every client to replay. `faceValues` are the server's
+   * CSPRNG results; they are OMITTED on non-DM copies of secret throws so those
+   * clients render blank dice. Transient — never part of GameState.
+   */
   | {
       type: "DICE_THROW";
       rollId: string;
-      rollerId: string;
-      rollerName: string;
+      actorName: string;
       specs: DieSpec[];
       track: DiceTrack;
-      /** Omitted on a secret roll's broadcast to non-DM clients (so dice render blank). */
+      trayCenter: WorldPoint;
       faceValues?: number[];
-      /** Omitted on a secret roll's broadcast to non-DM clients. */
-      roll?: DiceRoll;
-      private?: boolean;
-      trayCenter?: WorldPoint;
-    };
+      secret?: boolean;
+    }
+  | { type: "ERROR"; message: string }
+  | { type: "JOINED"; role: Role; playerId: string }
+  | { type: "KICKED"; message: string };
 
 export const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, scale: 1 };
 
@@ -305,7 +536,8 @@ export function playerTokenColorForSlot(slotId: string, slots: PlayerSlot[]): st
 }
 
 /// <summary>
-/// Syncs a player-owned token label, portrait, and color from slot and sheet data.
+/// Syncs a player-owned token label, portrait, color, and sheet link from slot
+/// and sheet data. Player tokens always link to their owner's PC sheet.
 /// </summary>
 export function syncPlayerTokenFromState(token: Token, state: GameState): Token {
   const normalized = normalizeToken(token);
@@ -314,9 +546,10 @@ export function syncPlayerTokenFromState(token: Token, state: GameState): Token 
   }
 
   const slot = state.playerSlots.find((item) => item.id === normalized.ownerPlayerId);
-  const sheet = state.characterSheets[normalized.ownerPlayerId];
+  const sheet = state.sheets[normalized.ownerPlayerId]?.data;
   return {
     ...normalized,
+    sheetId: normalized.ownerPlayerId,
     color: playerTokenColorForSlot(normalized.ownerPlayerId, state.playerSlots),
     label: sheet?.characterName?.trim() || slot?.name || normalized.label,
     imageUrl: sheet?.iconUrl ?? normalized.imageUrl,
@@ -324,7 +557,8 @@ export function syncPlayerTokenFromState(token: Token, state: GameState): Token 
 }
 
 /// <summary>
-/// Ensures tokens include kind and image fields from older persisted rooms.
+/// Ensures tokens include kind, image, sheet-link, and combat fields from older
+/// persisted rooms. Unknown condition ids are dropped.
 /// </summary>
 export function normalizeToken(token: Token): Token {
   const kind = token.kind ?? (token.ownerPlayerId ? "player" : "enemy");
@@ -332,8 +566,46 @@ export function normalizeToken(token: Token): Token {
     ...token,
     kind,
     imageUrl: token.imageUrl ?? null,
+    sheetId: token.sheetId ?? null,
+    conditions: Array.isArray(token.conditions)
+      ? token.conditions.filter((id) => CONDITION_IDS.has(id))
+      : [],
+    showHp: token.showHp === "bar" || token.showHp === "values" ? token.showHp : "none",
     color: token.color || (kind === "enemy" ? TOKEN_ENEMY_COLOR : TOKEN_PLAYER_COLOR),
   };
+}
+
+/// <summary>
+/// Validates persisted combat state; clamps the turn pointer into range.
+/// </summary>
+export function normalizeCombat(combat: CombatState | null | undefined): CombatState | null {
+  if (!combat || typeof combat !== "object" || !Array.isArray(combat.entries)) {
+    return null;
+  }
+  const entries: CombatEntry[] = combat.entries
+    .filter((entry) => entry && typeof entry === "object" && typeof entry.id === "string")
+    .map((entry) => ({
+      id: entry.id,
+      tokenId: entry.tokenId ?? null,
+      sheetId: entry.sheetId ?? null,
+      name: typeof entry.name === "string" ? entry.name : "Combatant",
+      initiative:
+        typeof entry.initiative === "number" && Number.isFinite(entry.initiative)
+          ? entry.initiative
+          : null,
+      dexScore:
+        typeof entry.dexScore === "number" && Number.isFinite(entry.dexScore)
+          ? entry.dexScore
+          : DEFAULT_ABILITY_SCORE,
+      hasRolled: Boolean(entry.hasRolled),
+      ...(entry.hidden ? { hidden: true } : {}),
+    }));
+  if (entries.length === 0) {
+    return null;
+  }
+  const round = typeof combat.round === "number" && combat.round >= 1 ? combat.round : 1;
+  const turnIndex = Math.min(Math.max(combat.turnIndex ?? 0, 0), entries.length - 1);
+  return { round, turnIndex, entries };
 }
 
 export function createDefaultSheet(name: string): CharacterSheet {
@@ -355,6 +627,7 @@ export function createDefaultSheet(name: string): CharacterSheet {
     hair: "",
     backstoryPersonality: "",
     notes: "",
+    inventory: [],
     iconUrl: null,
     hp: { current: 0, max: 0 },
     ac: 0,
@@ -377,9 +650,7 @@ export function abilityModifier(score: number): number {
 
 /// <summary>
 /// Computes a skill or saving throw total: ability modifier plus the player's manual
-/// modifier, or just the manual modifier for constant stats. A missing ability score
-/// is treated as 0 — consistent with how the sheet renders an unset score — so the
-/// skill total always reflects the modifier shown on the linked ability.
+/// modifier, or just the manual modifier for constant stats.
 /// </summary>
 export function derivedStatTotal(
   def: DerivedStatDef,
@@ -399,24 +670,6 @@ export function derivedStatTotal(
 /// </summary>
 export function formatModifier(value: number): string {
   return value >= 0 ? `+${value}` : `${value}`;
-}
-
-export function createAbilityDef(name: string, abbr: string): AbilityDef {
-  return {
-    id: `ability-${crypto.randomUUID().slice(0, 8)}`,
-    name: name.trim() || "Ability",
-    abbr: abbr.trim() || "ABL",
-  };
-}
-
-export function createDerivedStatDef(
-  name: string,
-  abilityId: string | null,
-): DerivedStatDef {
-  const id = `stat-${crypto.randomUUID().slice(0, 8)}`;
-  return abilityId
-    ? { id, name: name.trim() || "Stat", mode: "ability", abilityId }
-    : { id, name: name.trim() || "Stat", mode: "constant" };
 }
 
 /// <summary>
@@ -469,6 +722,9 @@ export function createDefaultSheetTemplate(): SheetTemplate {
 
   return { abilities, skills, saves };
 }
+
+/// Hard-coded 5e sheet template used everywhere (no in-app editor in the bare-bones build).
+export const DEFAULT_SHEET_TEMPLATE: SheetTemplate = createDefaultSheetTemplate();
 
 /// <summary>
 /// Combines older multi-field story sections into the current backstory field.
@@ -574,6 +830,7 @@ export function normalizeCharacterSheet(
     backstoryPersonality:
       sheet.backstoryPersonality ?? (legacyStory || defaults.backstoryPersonality),
     notes: sheet.notes ?? defaults.notes,
+    inventory: sanitizeInventory(sheet.inventory),
     iconUrl: sheet.iconUrl ?? sheet.portraitUrl ?? null,
     hp: {
       current: numberOr(sheet.hp?.current, defaults.hp.current),
@@ -595,6 +852,27 @@ function numberOr(value: unknown, fallback: number): number {
 }
 
 /// <summary>
+/// Keeps only well-formed inventory rows (capped at 200 per sheet).
+/// </summary>
+function sanitizeInventory(inventory: InventoryEntry[] | undefined): InventoryEntry[] {
+  if (!Array.isArray(inventory)) {
+    return [];
+  }
+  return inventory
+    .filter((entry) => entry && typeof entry === "object" && typeof entry.name === "string")
+    .slice(0, 200)
+    .map((entry) => ({
+      itemId: typeof entry.itemId === "string" ? entry.itemId : null,
+      name: entry.name.slice(0, 200),
+      qty:
+        typeof entry.qty === "number" && Number.isFinite(entry.qty) && entry.qty > 0
+          ? Math.floor(entry.qty)
+          : 1,
+      note: typeof entry.note === "string" ? entry.note.slice(0, 500) : "",
+    }));
+}
+
+/// <summary>
 /// Keeps only finite numeric entries from a persisted record (defaults to empty).
 /// </summary>
 function sanitizeNumberRecord(
@@ -613,131 +891,146 @@ function sanitizeNumberRecord(
 }
 
 /// <summary>
-/// Validates a persisted sheet template, dropping malformed entries and falling back
-/// to the standard 5e template when absent. Skills/saves referencing a missing ability
-/// are downgraded to constant stats so the sheet still renders.
-/// </summary>
-export function normalizeSheetTemplate(
-  template: SheetTemplate | undefined,
-): SheetTemplate {
-  if (!template || !Array.isArray(template.abilities)) {
-    return createDefaultSheetTemplate();
-  }
-
-  const abilities = template.abilities
-    .filter((ability) => ability && typeof ability.id === "string")
-    .map((ability) => ({
-      id: ability.id,
-      name: typeof ability.name === "string" ? ability.name : "Ability",
-      abbr: typeof ability.abbr === "string" ? ability.abbr : "ABL",
-    }));
-
-  const abilityIds = new Set(abilities.map((ability) => ability.id));
-
-  const normalizeStats = (stats: DerivedStatDef[] | undefined): DerivedStatDef[] =>
-    (Array.isArray(stats) ? stats : [])
-      .filter((stat) => stat && typeof stat.id === "string")
-      .map((stat) => {
-        const name = typeof stat.name === "string" ? stat.name : "Stat";
-        if (stat.mode === "ability" && abilityIds.has(stat.abilityId)) {
-          return { id: stat.id, name, mode: "ability", abilityId: stat.abilityId };
-        }
-        return { id: stat.id, name, mode: "constant" };
-      });
-
-  return {
-    abilities,
-    skills: normalizeStats(template.skills),
-    saves: normalizeStats(template.saves),
-  };
-}
-
-/// <summary>
 /// Creates a new player slot with a stable id for joining and character sheets.
 /// </summary>
-export function createPlayerSlot(name: string, sceneIds: string[]): PlayerSlot {
+export function createPlayerSlot(name: string): PlayerSlot {
   return {
     id: `slot-${crypto.randomUUID().slice(0, 8)}`,
     name: name.trim() || "Player",
-    visibleSceneIds: [...sceneIds],
   };
 }
 
 /// <summary>
-/// Ensures a player slot has scene visibility defaults for older persisted rooms.
+/// Ensures a player slot has an id and name from older persisted rooms.
 /// </summary>
-export function normalizePlayerSlot(
-  slot: PlayerSlot & { visibleSceneIds?: string[] },
-  sceneIds: string[],
-): PlayerSlot {
-  const visible = slot.visibleSceneIds ?? sceneIds;
+export function normalizePlayerSlot(slot: PlayerSlot): PlayerSlot {
   return {
-    ...slot,
-    visibleSceneIds: visible.filter((id) => sceneIds.includes(id)),
+    id: slot.id,
+    name: slot.name?.trim() || "Player",
   };
 }
 
 /// <summary>
-/// Returns whether a player slot is allowed to view a scene.
+/// Normalizes a persisted scene into the single-image schema, migrating legacy
+/// multi-layer / single-mapUrl scenes.
 /// </summary>
-export function canPlayerSeeScene(slot: PlayerSlot, sceneId: string): boolean {
-  return slot.visibleSceneIds.includes(sceneId);
+export function normalizeScene(scene: Partial<Scene> & Record<string, unknown>): Scene {
+  const legacyLayers = Array.isArray(scene.layers)
+    ? (scene.layers as Array<{ url?: string; width?: number; height?: number }>)
+    : [];
+  const firstLayer = legacyLayers[0];
+  const mapUrl =
+    (typeof scene.mapUrl === "string" ? scene.mapUrl : null) ?? firstLayer?.url ?? null;
+  const width = numberOr(scene.width, numberOr(firstLayer?.width, 800));
+  const height = numberOr(scene.height, numberOr(firstLayer?.height, 600));
+  return {
+    id: typeof scene.id === "string" ? scene.id : `scene-${crypto.randomUUID().slice(0, 8)}`,
+    name: typeof scene.name === "string" ? scene.name : "Scene",
+    mapUrl,
+    width,
+    height,
+    gridSize: numberOr(scene.gridSize, 50),
+    showGrid: scene.showGrid ?? true,
+    backgroundColor:
+      typeof scene.backgroundColor === "string" ? scene.backgroundColor : DEFAULT_SCENE_BACKGROUND,
+    defaultViewport:
+      scene.defaultViewport && typeof scene.defaultViewport === "object"
+        ? (scene.defaultViewport as Viewport)
+        : { ...DEFAULT_VIEWPORT },
+  };
 }
 
 /// <summary>
-/// Returns scenes a player slot is allowed to view.
+/// Normalizes full game state (fills missing arrays, syncs player tokens) on load.
+/// Migrates legacy `characterSheets` (keyed by slot) into first-class `sheets`
+/// records, and preserves NPC sheets alongside per-slot PC sheets.
 /// </summary>
-export function getVisibleScenesForPlayer(state: GameState, slotId: string): Scene[] {
-  const slot = state.playerSlots.find((item) => item.id === slotId);
-  if (!slot) {
-    return [];
-  }
-  return state.scenes.filter((scene) => canPlayerSeeScene(slot, scene.id));
-}
+export function normalizeGameState(state: GameState & LegacyGameStateFields): GameState {
+  const playerSlots = (state.playerSlots ?? []).map((slot) => normalizePlayerSlot(slot));
+  const slotIds = new Set(playerSlots.map((slot) => slot.id));
 
-/// <summary>
-/// Picks a valid player viewing scene, preserving their choice when still allowed.
-/// </summary>
-export function resolvePlayerViewingSceneId(
-  state: GameState,
-  slotId: string,
-  current: string | null,
-): string | null {
-  const visibleScenes = getVisibleScenesForPlayer(state, slotId);
-  if (visibleScenes.length === 0) {
-    return null;
+  const sheets: Record<string, SheetRecord> = {};
+  for (const [id, record] of Object.entries(state.sheets ?? {})) {
+    if (!record || typeof record !== "object") {
+      continue;
+    }
+    // A sheet keyed by a slot id is that slot's PC sheet regardless of stored kind.
+    const kind: SheetKind = slotIds.has(id) ? "pc" : "npc";
+    const fallbackName =
+      kind === "pc" ? (playerSlots.find((slot) => slot.id === id)?.name ?? "Character") : "NPC";
+    sheets[id] = normalizeSheetRecord({ ...record, id, kind }, fallbackName);
   }
-  if (current && visibleScenes.some((scene) => scene.id === current)) {
-    return current;
-  }
-  if (visibleScenes.some((scene) => scene.id === state.activeSceneId)) {
-    return state.activeSceneId;
-  }
-  return visibleScenes[0].id;
-}
-
-/// <summary>
-/// Ensures game state includes the playerSlots array from older persisted rooms.
-/// </summary>
-export function normalizeGameState(state: GameState): GameState {
-  const sceneIds = state.scenes.map((scene) => scene.id);
-  const playerSlots = (state.playerSlots ?? []).map((slot) => normalizePlayerSlot(slot, sceneIds));
-  const characterSheets: Record<string, CharacterSheet> = {};
   for (const slot of playerSlots) {
-    characterSheets[slot.id] = normalizeCharacterSheet(state.characterSheets?.[slot.id], slot.name);
+    if (!sheets[slot.id]) {
+      // Legacy migration: fold characterSheets[slotId] into a PC record.
+      const legacy = state.characterSheets?.[slot.id];
+      sheets[slot.id] = normalizeSheetRecord(
+        { id: slot.id, kind: "pc", data: legacy },
+        slot.name,
+      );
+    }
   }
-  return {
-    ...state,
+
+  // Legacy migration: fold the roll-only publicDiceLog into the unified log.
+  const log: LogEntry[] = Array.isArray(state.log)
+    ? state.log
+    : (state.publicDiceLog ?? []).map((roll) => ({
+        id: `log-${roll.id}`,
+        t: roll.timestamp,
+        kind: "roll" as const,
+        roll,
+        actor: { name: roll.rollerName },
+      }));
+
+  const folders: Folder[] = (Array.isArray(state.folders) ? state.folders : []).filter(
+    (folder): folder is Folder =>
+      Boolean(folder) &&
+      typeof folder.id === "string" &&
+      typeof folder.name === "string" &&
+      (folder.kind === "actor" || folder.kind === "item"),
+  );
+  const folderIds = new Set(folders.map((folder) => folder.id));
+
+  const items: Record<string, ItemRecord> = {};
+  for (const [id, item] of Object.entries(state.items ?? {})) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const normalized = normalizeItem({ ...item, id });
+    // Drop references to folders that no longer exist.
+    items[id] = folderIds.has(normalized.folderId ?? "")
+      ? normalized
+      : { ...normalized, folderId: null };
+  }
+  for (const record of Object.values(sheets)) {
+    if (record.folderId && !folderIds.has(record.folderId)) {
+      record.folderId = null;
+    }
+  }
+
+  const scenes = (state.scenes ?? []).map((scene) => normalizeScene(scene));
+  const base: GameState = {
+    roomId: state.roomId,
+    dmClientId: state.dmClientId ?? null,
+    activeSceneId: state.activeSceneId,
+    scenes,
+    viewport: state.viewport ?? { ...DEFAULT_VIEWPORT },
     playerSlots,
-    characterSheets,
-    tokens: (state.tokens ?? []).map((token) =>
-      syncPlayerTokenFromState(token, { ...state, playerSlots, characterSheets }),
-    ),
-    annotations: (state.annotations ?? []).map((annotation) => normalizeMapAnnotation(annotation)),
-    publicDiceLog: state.publicDiceLog ?? [],
-    sheetTemplate: normalizeSheetTemplate(state.sheetTemplate),
-    tokenTemplates: (state.tokenTemplates ?? []).map((template) => normalizeTokenTemplate(template)),
+    sheets,
+    connectedPlayers: state.connectedPlayers ?? [],
+    log: log.slice(-MAX_LOG_ENTRIES),
+    dmNotes: typeof state.dmNotes === "string" ? state.dmNotes : "",
+    combat: normalizeCombat(state.combat),
+    folders,
+    items,
+    tokens: [],
   };
+  base.tokens = (state.tokens ?? []).map((token) => {
+    const synced = syncPlayerTokenFromState(token, base);
+    // Drop links to sheets that no longer exist.
+    return synced.sheetId && !sheets[synced.sheetId] ? { ...synced, sheetId: null } : synced;
+  });
+  return base;
 }
 
 export function createDefaultScenes(): Scene[] {
@@ -745,54 +1038,24 @@ export function createDefaultScenes(): Scene[] {
     {
       id: "scene-1",
       name: "Dungeon",
-      layers: [
-        {
-          id: "scene-1-layer-1",
-          url: "/maps/sample-dungeon.svg",
-          x: 0,
-          y: 0,
-          width: 800,
-          height: 600,
-          label: "Dungeon",
-        },
-      ],
+      mapUrl: "/maps/sample-dungeon.svg",
       width: 800,
       height: 600,
-      centerX: 400,
-      centerY: 300,
-      playerPanLimit: 0,
       gridSize: 50,
       showGrid: true,
-      fogEnabled: true,
-      fogDataUrl: null,
-      defaultViewport: { ...DEFAULT_VIEWPORT },
       backgroundColor: DEFAULT_SCENE_BACKGROUND,
+      defaultViewport: { ...DEFAULT_VIEWPORT },
     },
     {
       id: "scene-2",
       name: "Tavern",
-      layers: [
-        {
-          id: "scene-2-layer-1",
-          url: "/maps/sample-tavern.svg",
-          x: 0,
-          y: 0,
-          width: 800,
-          height: 600,
-          label: "Tavern",
-        },
-      ],
+      mapUrl: "/maps/sample-tavern.svg",
       width: 800,
       height: 600,
-      centerX: 400,
-      centerY: 300,
-      playerPanLimit: 0,
       gridSize: 50,
       showGrid: true,
-      fogEnabled: true,
-      fogDataUrl: null,
-      defaultViewport: { ...DEFAULT_VIEWPORT },
       backgroundColor: DEFAULT_SCENE_BACKGROUND,
+      defaultViewport: { ...DEFAULT_VIEWPORT },
     },
   ];
 }
@@ -807,12 +1070,12 @@ export function createInitialState(roomId: string): GameState {
     tokens: [],
     viewport: { ...DEFAULT_VIEWPORT },
     playerSlots: [],
-    characterSheets: {},
+    sheets: {},
     connectedPlayers: [],
-    ping: null,
-    annotations: [],
-    publicDiceLog: [],
-    sheetTemplate: createDefaultSheetTemplate(),
-    tokenTemplates: [],
+    log: [],
+    dmNotes: "",
+    combat: null,
+    folders: [],
+    items: {},
   };
 }

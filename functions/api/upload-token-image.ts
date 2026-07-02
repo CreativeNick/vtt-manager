@@ -1,4 +1,4 @@
-import { handleImageUpload } from "../_shared/imageUpload";
+import { handleImageUpload, roomKeyPrefix } from "../_shared/imageUpload";
 
 /// <summary>
 /// Accepts token image uploads and stores them in R2 for production deployments.
@@ -10,7 +10,7 @@ export const onRequestPost: PagesFunction = async (context) =>
       if (!body.tokenId || typeof body.tokenId !== "string") {
         throw new Error("Missing token id.");
       }
-      return `tokens/${body.tokenId}.${ext}`;
+      return `tokens/${roomKeyPrefix(body)}${body.tokenId}.${ext}`;
     },
     buildUrl: (key) => `/${key}`,
   });

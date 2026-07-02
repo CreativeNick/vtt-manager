@@ -46,22 +46,31 @@ async function postUpload(path: string, body: Record<string, unknown>): Promise<
 }
 
 /// <summary>
-/// Uploads a character portrait and returns its public URL path.
+/// Uploads a character portrait and returns its public URL path. Keys are
+/// namespaced by room so assets can be listed/cleaned up per campaign.
 /// </summary>
-export async function uploadPortrait(slotId: string, file: File): Promise<{ url: string }> {
+export async function uploadPortrait(
+  roomId: string,
+  slotId: string,
+  file: File,
+): Promise<{ url: string }> {
   const { dataUrl } = await readImageFromFile(file);
   const path = import.meta.env.DEV ? "/__dev/upload-portrait" : "/api/upload-portrait";
-  const payload = await postUpload(path, { slotId, dataUrl });
+  const payload = await postUpload(path, { roomId, slotId, dataUrl });
   return { url: payload.url! };
 }
 
 /// <summary>
 /// Uploads a map token image and returns its public URL path.
 /// </summary>
-export async function uploadTokenImage(tokenId: string, file: File): Promise<{ url: string }> {
+export async function uploadTokenImage(
+  roomId: string,
+  tokenId: string,
+  file: File,
+): Promise<{ url: string }> {
   const { dataUrl } = await readImageFromFile(file);
   const path = import.meta.env.DEV ? "/__dev/upload-token-image" : "/api/upload-token-image";
-  const payload = await postUpload(path, { tokenId, dataUrl });
+  const payload = await postUpload(path, { roomId, tokenId, dataUrl });
   return { url: payload.url! };
 }
 
@@ -76,13 +85,14 @@ export async function uploadCampaignIcon(roomId: string, file: File): Promise<{ 
 /// Uploads a map layer image and returns its URL plus layer metadata.
 /// </summary>
 export async function uploadMapImage(
+  roomId: string,
   sceneId: string,
   file: File,
 ): Promise<{ url: string; layerId: string; width: number; height: number }> {
   const { dataUrl, width, height } = await readImageFromFile(file);
   const layerId = `layer-${crypto.randomUUID().slice(0, 8)}`;
   const path = import.meta.env.DEV ? "/__dev/upload-map-image" : "/api/upload-map-image";
-  const payload = await postUpload(path, { sceneId, layerId, dataUrl, width, height });
+  const payload = await postUpload(path, { roomId, sceneId, layerId, dataUrl, width, height });
   return {
     url: payload.url!,
     layerId: payload.layerId ?? layerId,

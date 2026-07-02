@@ -1,347 +1,417 @@
-import { useEffect, useState } from "react";
-import { useDiceArena } from "./dice3d/useDiceArena";
+import { useEffect, useRef, useState } from "react";
 import { JoinScreen } from "./components/JoinScreen";
 import { MapCanvas } from "./components/MapCanvas";
-import { DMToolbar } from "./components/DMToolbar";
-import { SceneSettingsPanel } from "./components/SceneSettingsModal";
-import { SceneAccessPanel } from "./components/SceneAccessPanel";
-import { PlayerSceneToolbar } from "./components/PlayerSceneToolbar";
-import { DicePanel } from "./components/DicePanel";
-import { CharacterSheetPanel } from "./components/CharacterSheet";
-import { TokenLibraryPanel } from "./components/TokenLibraryPanel";
-import { ResizableSplit } from "./components/ResizableSplit";
-import { useDmActions, useGameRoom, usePlayerSheet, type JoinParams } from "./hooks/useGameRoom";
-import type { FogBrushMode } from "./lib/fogCanvas";
-import { DEFAULT_VIEWPORT, playerTokenColorForSlot, resolvePlayerViewingSceneId, type Viewport } from "./lib/types";
-import { clearSessionViewportsForRoom } from "./lib/sessionViewportMemory";
+import { FloatingCluster } from "./components/FloatingCluster";
+import { FloatingWindow } from "./components/FloatingWindow";
+import { Dock } from "./components/Dock";
+import { DiceTray } from "./components/DiceTray";
+import { LogToasts } from "./components/LogToasts";
+import { TokenEditor } from "./components/TokenEditor";
+import { dockPanelsForRole, PANELS, type PanelContext, type PanelId } from "./panels/registry";
+import { useDiceOverlay } from "./dice/useDiceOverlay";
+import { useDmActions, useGameRoom, type JoinParams } from "./hooks/useGameRoom";
+import { fitViewportToScene } from "./lib/sceneUtils";
+import { DEFAULT_VIEWPORT, TOKEN_ENEMY_COLOR, type Viewport } from "./lib/types";
 
-type SessionParams = JoinParams & {
-  roomId: string;
-};
-
-export type DmView = "main" | "players" | "scenes" | "tokens";
+type SessionParams = JoinParams & { roomId: string };
 
 /// <summary>
-/// Root application shell: join flow, game room layout, and role-specific panels.
+/// Root shell: lobby (join flow) or the in-campaign view — a full-bleed map, a
+/// FoundryVTT-style docked sidebar of panel tabs (each pop-out-able into a
+/// floating window), and floating character-sheet windows.
 /// </summary>
 export default function App() {
   const [session, setSession] = useState<SessionParams | null>(null);
-  const [dmView, setDmView] = useState<DmView>("main");
-  const [fogMode, setFogMode] = useState(false);
-  const [fogPreview, setFogPreview] = useState(true);
-  const [fogBrushMode, setFogBrushMode] = useState<FogBrushMode>("reveal");
-  const [settingsViewport, setSettingsViewport] = useState<Viewport>(DEFAULT_VIEWPORT);
-  const [viewCommand, setViewCommand] = useState<{ type: "fit" | "reset"; id: number } | null>(
-    null,
-  );
-  const [viewCommandId, setViewCommandId] = useState(0);
-  const [playerViewingSceneId, setPlayerViewingSceneId] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<Viewport>(DEFAULT_VIEWPORT);
+  const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
+  const [dockOpen, setDockOpen] = useState(true);
+  const [dockTab, setDockTab] = useState<PanelId>("log");
+  const [popped, setPopped] = useState<PanelId[]>([]);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [viewSheetId, setViewSheetId] = useState<string | null>(null);
+  const [secretRolls, setSecretRolls] = useState(false);
+  const [trayOpen, setTrayOpen] = useState(true);
+  const lastSceneRef = useRef<string | null>(null);
+
   const room = useGameRoom(session?.roomId ?? null);
   const dm = useDmActions(room);
-  const { sheet, updateSheet, canEdit } = usePlayerSheet(room);
-  const diceArena = useDiceArena(room);
+  const dice = useDiceOverlay(room);
+  const { state, yourRole, status, error } = room;
+  const isDm = yourRole === "dm";
+
+  // Feed the dice overlay this client's live viewport and the DM secret toggle.
+  const setDiceProjection = dice.setProjection;
+  useEffect(() => {
+    setDiceProjection(viewport);
+  }, [viewport, setDiceProjection]);
+  const setDiceSecret = dice.setSecret;
+  useEffect(() => {
+    setDiceSecret(isDm && secretRolls);
+  }, [isDm, secretRolls, setDiceSecret]);
 
   useEffect(() => {
     if (!session) {
       return;
     }
-    clearSessionViewportsForRoom(session.roomId);
     room.join(
       session.role === "dm"
-        ? {
-            role: "dm",
-            displayName: session.displayName,
-            roomKey: session.roomKey,
-          }
-        : {
-            role: "player",
-            slotId: session.slotId,
-            roomKey: session.roomKey,
-          },
+        ? { role: "dm", displayName: session.displayName, roomKey: session.roomKey }
+        : { role: "player", slotId: session.slotId, roomKey: session.roomKey },
     );
-  }, [session, room.join]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
 
+  // Combat pulls the tracker forward when it starts (unless it's popped out).
+  const combatActive = Boolean(state?.combat);
   useEffect(() => {
-    if (dmView === "scenes") {
-      setFogMode(false);
-    }
-  }, [dmView]);
-
-  const { state, yourRole, status, error } = room;
-  const isDm = yourRole === "dm";
-
-  useEffect(() => {
-    if (isDm || !state || !room.yourPlayerId) {
+    if (status !== "joined") {
       return;
     }
-    setPlayerViewingSceneId((current) =>
-      resolvePlayerViewingSceneId(state, room.yourPlayerId!, current),
-    );
-  }, [isDm, state, room.yourPlayerId]);
+    if (combatActive) {
+      setPopped((current) => {
+        if (!current.includes("initiative")) {
+          setDockTab("initiative");
+          setDockOpen(true);
+        }
+        return current;
+      });
+    } else {
+      setDockTab((current) => (current === "initiative" ? "log" : current));
+    }
+  }, [combatActive, status]);
 
-  const mapSceneId = isDm
-    ? (state?.activeSceneId ?? "")
-    : (playerViewingSceneId ?? state?.activeSceneId ?? "");
+  // In-game errors surface as a transient banner, never a screen change.
+  const clearError = room.clearError;
+  useEffect(() => {
+    if (error && status === "joined") {
+      const timer = setTimeout(clearError, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [error, status, clearError]);
 
-  const handleViewCommand = (type: "fit" | "reset") => {
-    const id = viewCommandId + 1;
-    setViewCommandId(id);
-    setViewCommand({ type, id });
+  // Each client owns its own local viewport; fit the view when the active scene changes.
+  useEffect(() => {
+    if (!state) {
+      return;
+    }
+    const scene = state.scenes.find((item) => item.id === state.activeSceneId);
+    if (!scene || lastSceneRef.current === scene.id) {
+      return;
+    }
+    lastSceneRef.current = scene.id;
+    const fitted = fitViewportToScene(scene, window.innerWidth, window.innerHeight);
+    setViewport(fitted);
+    if (isDm) {
+      dm.updateViewport(fitted);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.activeSceneId, status]);
+
+  const leave = () => {
+    setSession(null);
+    setPopped([]);
+    setSheetOpen(false);
+    setSelectedTokenId(null);
+    setSecretRolls(false);
+    setViewSheetId(null);
+    setDockTab("log");
+    setDockOpen(true);
+    lastSceneRef.current = null;
   };
 
   if (!session) {
     return <JoinScreen onJoin={setSession} />;
   }
 
-  const sceneEditMode = isDm && dmView === "scenes";
-  const toolbarMode = dmView === "main" ? "play" : "main";
-  const playControls = isDm && dmView === "main";
-  const showMap = !isDm || (dmView !== "players" && dmView !== "tokens");
+  if (error && status !== "joined" && status !== "reconnecting") {
+    return (
+      <div className="join-failed">
+        <p>{error}</p>
+        <button onClick={leave}>Back to lobby</button>
+      </div>
+    );
+  }
 
-  const displayName =
-    session.role === "dm"
-      ? session.displayName
-      : (state?.playerSlots.find((slot) => slot.id === session.slotId)?.name ?? "Player");
+  if (!state || (status !== "joined" && status !== "reconnecting")) {
+    return <div className="loading">Connecting to room…</div>;
+  }
 
-  const gameContent =
-    state && status === "joined" ? (
-      (() => {
-        const mapSection = (
-          <section className="map-section">
-            <MapCanvas
-              state={state}
-              sceneId={mapSceneId}
-              isDm={isDm}
-              dm={dm}
-              playerSlotId={room.yourPlayerId}
-              onMoveToken={(tokenId, x, y) =>
-                room.send({ type: "MOVE_TOKEN", tokenId, x, y })
-              }
-              onAddAnnotation={(sceneId, points, color) =>
-                dm.addAnnotation(sceneId, points, color)
-              }
-              annotationColor={
-                isDm
-                  ? "#fcd34d"
-                  : playerTokenColorForSlot(room.yourPlayerId!, state.playerSlots)
-              }
-              fogMode={fogMode && playControls}
-              fogPreview={fogPreview && isDm}
-              fogBrushMode={fogBrushMode}
-              sceneEditMode={sceneEditMode}
-              viewCommand={viewCommand}
-              onSettingsViewportChange={setSettingsViewport}
-              onContainerEl={diceArena.mapAreaRef}
-              onViewportChange={diceArena.setProjection}
-            />
-            {isDm ? (
-              <DMToolbar
-                state={state}
-                dm={dm}
-                mode={toolbarMode}
-                fogMode={fogMode}
-                onFogModeChange={setFogMode}
-                fogPreview={fogPreview}
-                onFogPreviewChange={setFogPreview}
-                fogBrushMode={fogBrushMode}
-                onFogBrushModeChange={setFogBrushMode}
-              />
-            ) : null}
-          </section>
-        );
+  const selectedToken = state.tokens.find((token) => token.id === selectedTokenId) ?? null;
 
-        const sidebarPanel = isDm ? (
-          dmView === "main" ? (
-            <div className="dm-main-sidebar">
-              <SceneAccessPanel state={state} dm={dm} />
-              <CharacterSheetPanel
-                sheet={null}
-                canEdit={false}
-                onChange={() => {}}
-                template={state.sheetTemplate}
-                playerSlots={state.playerSlots}
-                connectedPlayers={state.connectedPlayers}
-                allSheets={state.characterSheets}
-                isDm={isDm}
-                dm={dm}
-                showSlotManagement={false}
-              />
-            </div>
-          ) : dmView === "players" ? (
-            <CharacterSheetPanel
-              sheet={sheet}
-              canEdit={canEdit}
-              onChange={updateSheet}
-              template={state.sheetTemplate}
-              playerSlots={state.playerSlots}
-              connectedPlayers={state.connectedPlayers}
-              allSheets={state.characterSheets}
-              isDm={isDm}
-              dm={dm}
-            />
-          ) : dmView === "tokens" ? (
-            <TokenLibraryPanel state={state} dm={dm} />
-          ) : (
-            <SceneSettingsPanel
-              state={state}
-              dm={dm}
-              viewport={settingsViewport}
-              onFitView={() => handleViewCommand("fit")}
-              onResetView={() => handleViewCommand("reset")}
-            />
-          )
-        ) : (
-          <CharacterSheetPanel
-            sheet={sheet}
-            canEdit={canEdit}
-            onChange={updateSheet}
-            template={state.sheetTemplate}
-            slotId={room.yourPlayerId}
-            playerSlots={state.playerSlots}
-            connectedPlayers={state.connectedPlayers}
-            allSheets={state.characterSheets}
-            isDm={isDm}
-            dm={dm}
-          />
-        );
+  const openSheet = (sheetId: string) => {
+    setViewSheetId(sheetId);
+    setSheetOpen(true);
+  };
 
-        const dicePanel = (
-          <DicePanel
-            isDm={isDm}
-            yourPlayerId={room.yourPlayerId}
-            publicRolls={state.publicDiceLog}
-            privateRolls={room.privateDiceLog}
-            onArm={diceArena.arm}
-            onThrowArmed={diceArena.throwArmed}
-            onThrowExpression={diceArena.throwExpression}
-            onInstantExpression={diceArena.instantExpression}
-            onInstantArmed={diceArena.instantArmed}
-            onSetSecretMode={diceArena.setSecretMode}
-            hasArmed={diceArena.hasArmed}
-            trayVisible={diceArena.trayVisible}
-            onToggleTray={diceArena.setTrayVisible}
-            muted={diceArena.muted}
-            onToggleMuted={diceArena.setMuted}
-          />
-        );
+  /** Select a token; if it has a linked sheet, open that sheet (redacted for players). */
+  const selectToken = (tokenId: string | null) => {
+    setSelectedTokenId(tokenId);
+    if (!tokenId) {
+      return;
+    }
+    const token = state.tokens.find((item) => item.id === tokenId);
+    if (token?.sheetId && state.sheets[token.sheetId]) {
+      openSheet(token.sheetId);
+    }
+  };
 
-        return (
-          <main
-            className={`game-layout${
-              isDm && (dmView === "players" || dmView === "tokens")
-                ? ` ${dmView === "players" ? "players" : "tokens"}-layout`
-                : ""
-            }`}
-          >
-            {showMap ? (
-              <ResizableSplit main={mapSection} middle={dicePanel} sidebar={sidebarPanel} />
-            ) : (
-              <div className="layout-with-dice-rail">
-                <aside className="dice-rail">{dicePanel}</aside>
-                {sidebarPanel}
-              </div>
-            )}
-          </main>
-        );
-      })()
-    ) : null;
+  /** DM dropped an actor row (or the blank chip) from the directory onto the map. */
+  const dropActorAt = (sheetId: string | null, clientX: number, clientY: number) => {
+    if (!isDm) {
+      return;
+    }
+    // The stage fills the window, so screen coords map straight through the viewport.
+    const x = (clientX - viewport.x) / viewport.scale;
+    const y = (clientY - viewport.y) / viewport.scale;
+    const record = sheetId ? state.sheets[sheetId] : null;
+    const isPc = record?.kind === "pc";
+    dm.addToken({
+      id: `token-${crypto.randomUUID().slice(0, 8)}`,
+      sceneId: state.activeSceneId,
+      x,
+      y,
+      label: record ? record.data.characterName || "Token" : "Token",
+      color: TOKEN_ENEMY_COLOR,
+      kind: isPc ? "player" : "enemy",
+      imageUrl: record?.data.iconUrl ?? null,
+      ownerPlayerId: isPc && record ? record.id : null,
+      sheetId: record && !isPc ? record.id : null,
+      conditions: [],
+      showHp: "none",
+    });
+  };
+
+  const handleViewportChange = (next: Viewport) => {
+    setViewport(next);
+    if (isDm) {
+      // Relayed server-side as a lightweight VIEWPORT delta, never a full STATE.
+      dm.updateViewport(next);
+    }
+  };
+
+  const panelContext: PanelContext = {
+    state,
+    room,
+    dm,
+    isDm,
+    viewSheetId,
+    openSheet,
+    updateSheet: (sheetId, sheet) => room.send({ type: "UPDATE_SHEET", sheetId, sheet }),
+    // The DM's persistent Secret toggle applies to every roll, sheet-clicks included.
+    rollDice: (expression, options) =>
+      room.rollDice(expression, { ...options, private: isDm && secretRolls }),
+    dropActorAt,
+  };
+
+  const dockPanels = yourRole ? dockPanelsForRole(yourRole) : [];
+  const sheetPanel = PANELS.find((panel) => panel.id === "sheet")!;
+
+  // Avatar strip: connected players + NPCs with a token in the active scene.
+  const npcChipSheetIds = [
+    ...new Set(
+      state.tokens
+        .filter(
+          (token) =>
+            token.sceneId === state.activeSceneId &&
+            token.kind === "enemy" &&
+            token.sheetId &&
+            state.sheets[token.sheetId],
+        )
+        .map((token) => token.sheetId as string),
+    ),
+  ];
+
+  const popOut = (id: PanelId) =>
+    setPopped((current) => (current.includes(id) ? current : [...current, id]));
+  const dockBack = (id: PanelId) => {
+    setPopped((current) => current.filter((item) => item !== id));
+    setDockTab(id);
+    setDockOpen(true);
+  };
 
   return (
     <div className="app">
-      <header className="app-header">
-        {isDm ? (
-          <nav className="view-tabs" aria-label="DM views">
-            <button
-              type="button"
-              className={dmView === "main" ? "active" : ""}
-              onClick={() => setDmView("main")}
-            >
-              Main view
-            </button>
-            <button
-              type="button"
-              className={dmView === "players" ? "active" : ""}
-              onClick={() => setDmView("players")}
-            >
-              Players
-            </button>
-            <button
-              type="button"
-              className={dmView === "scenes" ? "active" : ""}
-              onClick={() => setDmView("scenes")}
-            >
-              Scenes
-            </button>
-            <button
-              type="button"
-              className={dmView === "tokens" ? "active" : ""}
-              onClick={() => setDmView("tokens")}
-            >
-              Tokens
-            </button>
-          </nav>
-        ) : state && status === "joined" && room.yourPlayerId ? (
-          <PlayerSceneToolbar
-            state={state}
-            playerSlotId={room.yourPlayerId}
-            viewingSceneId={playerViewingSceneId}
-            onViewingSceneChange={setPlayerViewingSceneId}
-          />
-        ) : null}
+      <MapCanvas
+        state={state}
+        sceneId={state.activeSceneId}
+        isDm={isDm}
+        yourPlayerId={room.yourPlayerId}
+        viewport={viewport}
+        onViewportChange={handleViewportChange}
+        onMoveToken={(tokenId, x, y) => room.send({ type: "MOVE_TOKEN", tokenId, x, y })}
+        onSelectToken={selectToken}
+        selectedTokenId={selectedTokenId}
+      />
 
-        <div className="header-right">
-          <div className="header-meta">
-            <span className="meta-chip">
-              <span className="meta-label">Room</span> {session.roomId}
-            </span>
-            <span className="meta-chip">
-              <span className="meta-label">You</span> {displayName}
-            </span>
-            <span className="meta-chip">
-              <span className="meta-label">Online</span> {state?.connectedPlayers.length ?? 0}
-            </span>
-            <span className={`meta-chip meta-chip-status status-${status}`}>
-              <span className="meta-label">Status</span> {status}
-            </span>
-          </div>
-        </div>
-      </header>
+      {/* 3D dice canvas: above the map, below all UI, never takes pointer events. */}
+      <div className="dice-arena" ref={dice.containerRef} />
 
-      {error ? <div className="error-banner">{error}</div> : null}
+      <div className="overlay">
+        <FloatingCluster
+          anchor="top-center"
+          plain
+          className={`avatar-strip${dockOpen ? " avatar-strip--dock-open" : ""}`}
+        >
+          {state.connectedPlayers.map((player) => {
+            const icon = state.sheets[player.playerId]?.data.iconUrl;
+            return (
+              <div
+                key={player.playerId}
+                className="player-chip"
+                title={`${player.displayName} — double-click for sheet`}
+                onDoubleClick={() => openSheet(player.playerId)}
+              >
+                {icon ? (
+                  <img src={icon} alt={player.displayName} />
+                ) : (
+                  <span className="player-initial">
+                    {player.displayName.slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+                {isDm ? (
+                  <button
+                    className="kick"
+                    title={`Kick ${player.displayName}`}
+                    onClick={() => dm.kickPlayer(player.playerId)}
+                  >
+                    ✕
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
+          {npcChipSheetIds.map((sheetId) => {
+            const record = state.sheets[sheetId]!;
+            const name = record.data.characterName || "???";
+            return (
+              <div
+                key={sheetId}
+                className="player-chip npc-chip"
+                title={`${name} — double-click for sheet`}
+                onDoubleClick={() => openSheet(sheetId)}
+              >
+                {record.data.iconUrl ? (
+                  <img src={record.data.iconUrl} alt={name} />
+                ) : (
+                  <span className="player-initial">{name.slice(0, 1).toUpperCase()}</span>
+                )}
+              </div>
+            );
+          })}
+        </FloatingCluster>
 
-      {error && status !== "joined" ? (
-        <div className="join-failed">
-          <p>{error}</p>
-          <button type="button" onClick={() => setSession(null)}>
-            Back to join screen
-          </button>
-        </div>
-      ) : gameContent ? (
-        gameContent
-      ) : (
-        <div className="loading">Connecting to room...</div>
-      )}
-
-      <div
-        ref={diceArena.containerRef}
-        className={`dice-arena${diceArena.trayVisible ? " dice-arena--tray" : ""}${
-          diceArena.hasArmed ? " dice-arena--armed" : ""
-        }`}
-        aria-hidden
-      >
-        {diceArena.remoteCursor ? (
-          <div
-            className="dice-remote-cursor"
-            style={{
-              left: diceArena.remoteCursor.x,
-              top: diceArena.remoteCursor.y,
-              ["--cursor-color" as string]: diceArena.remoteCursor.color,
+        <FloatingCluster anchor="top-left">
+          <button
+            className={sheetOpen ? "btn-active" : ""}
+            title="Character sheet"
+            onClick={() => {
+              if (sheetOpen) {
+                setSheetOpen(false);
+              } else {
+                setViewSheetId(isDm ? viewSheetId : room.yourPlayerId);
+                setSheetOpen(true);
+              }
             }}
           >
-            <span className="dice-remote-cursor-dot" />
-            <span className="dice-remote-cursor-label">{diceArena.remoteCursor.name}</span>
-          </div>
+            🪪 Sheet
+          </button>
+          <button
+            className={trayOpen ? "btn-active" : ""}
+            title="Dice tray"
+            onClick={() => setTrayOpen((open) => !open)}
+          >
+            🎲 Dice
+          </button>
+          <button onClick={leave}>Leave</button>
+        </FloatingCluster>
+
+        <Dock
+          panels={dockPanels}
+          open={dockOpen}
+          activeTab={dockTab}
+          popped={popped}
+          context={panelContext}
+          onSelectTab={(id) => {
+            if (popped.includes(id)) {
+              dockBack(id);
+              return;
+            }
+            setDockTab(id);
+            setDockOpen(true);
+          }}
+          onPopOut={popOut}
+          onToggleOpen={() => setDockOpen((open) => !open)}
+        />
+
+        {popped.map((panelId) => {
+          const panel = PANELS.find((item) => item.id === panelId);
+          if (!panel || (yourRole && !panel.roles.includes(yourRole))) {
+            return null;
+          }
+          return (
+            <FloatingWindow
+              key={panel.id}
+              id={panel.id}
+              title={panel.title(panelContext)}
+              width={panel.width}
+              defaultPos={panel.defaultPos}
+              onClose={() => setPopped((current) => current.filter((id) => id !== panel.id))}
+              onDock={() => dockBack(panel.id)}
+            >
+              {panel.render(panelContext)}
+            </FloatingWindow>
+          );
+        })}
+
+        {sheetOpen ? (
+          <FloatingWindow
+            id="sheet"
+            title={sheetPanel.title(panelContext)}
+            width={sheetPanel.width}
+            defaultPos={sheetPanel.defaultPos}
+            onClose={() => setSheetOpen(false)}
+          >
+            {sheetPanel.render(panelContext)}
+          </FloatingWindow>
         ) : null}
+
+        {isDm && selectedToken ? (
+          <FloatingCluster anchor="bottom-left">
+            <TokenEditor
+              token={selectedToken}
+              state={state}
+              dm={dm}
+              openSheet={openSheet}
+              onClose={() => setSelectedTokenId(null)}
+            />
+          </FloatingCluster>
+        ) : null}
+
+        {/* Always mounted so the drawer can slide out (and the tray scene persists). */}
+        <DiceTray
+          open={trayOpen}
+          isDm={isDm}
+          secret={secretRolls}
+          onToggleSecret={setSecretRolls}
+          controller={dice}
+          onTextRoll={(expression) =>
+            room.rollDice(expression, { private: isDm && secretRolls })
+          }
+          onClose={() => setTrayOpen(false)}
+        />
+
+        <LogToasts
+          log={state.log}
+          yourPlayerId={room.yourPlayerId}
+          playerSlots={state.playerSlots}
+          suppress={(dockOpen && dockTab === "log") || popped.includes("log")}
+          dockExpanded={dockOpen}
+        />
+
+        {status === "reconnecting" ? (
+          <div className="toast">Reconnecting to the game server…</div>
+        ) : null}
+        {error && status === "joined" ? <div className="error-banner">{error}</div> : null}
       </div>
     </div>
   );
