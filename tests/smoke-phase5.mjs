@@ -125,9 +125,9 @@ try {
     `ephemeral=${arw.ephemeral} author=${arw.authorId}`,
   );
 
-  // --- pointer arrows capped per author (oldest fades out, not instant) -------------
-  // arw-vex is #1; add 5 more → 6 total. The oldest is aged into its fade window and
-  // removed once faded, so it lingers (fading) rather than vanishing instantly.
+  // --- pointer arrows capped per author (oldest removed; client fades it out) --------
+  // arw-vex is #1; add 5 more → the server keeps only the newest 5 per author. The
+  // fade-out is client-local (a ghost), so at the WS level the oldest is simply gone.
   for (let i = 0; i < 5; i += 1) {
     vex.send({
       type: "ADD_ANNOTATION", sceneId,
@@ -140,28 +140,14 @@ try {
   const capFrame = await dm.next(
     (m) => m.type === "STATE" && sceneOf(m.state, sceneId)?.annotations.some((a) => a.id === "arw-cap-4"),
   );
-  const afterCap = sceneOf(capFrame.state, sceneId).annotations.filter(
-    (a) => a.kind === "arrow" && a.authorId === vexId,
-  );
-  const fadingArrow = afterCap.find((a) => a.id === "arw-vex");
-  check(
-    "6th arrow ages the oldest into a fade (still present, not instantly removed)",
-    afterCap.length === 6 && !!fadingArrow && Date.now() - fadingArrow.createdAt >= 6000,
-    `count=${afterCap.length} oldestAgeMs=${fadingArrow ? Date.now() - fadingArrow.createdAt : "gone"}`,
-  );
-  const fadedFrame = await dm.next(
-    (m) =>
-      m.type === "STATE" &&
-      !sceneOf(m.state, sceneId)?.annotations.some((a) => a.id === "arw-vex"),
-    6000,
-  );
-  const settledArrows = sceneOf(fadedFrame.state, sceneId).annotations.filter(
+  const myArrows = sceneOf(capFrame.state, sceneId).annotations.filter(
     (a) => a.kind === "arrow" && a.authorId === vexId,
   );
   check(
-    "the faded-out arrow is removed after its fade, leaving 5",
-    settledArrows.length === 5 && settledArrows.some((a) => a.id === "arw-cap-4"),
-    `count=${settledArrows.length} ids=${settledArrows.map((a) => a.id).join(",")}`,
+    "pointer arrows capped at 5 per author; the oldest (arw-vex) is dropped",
+    myArrows.length === 5 && !myArrows.some((a) => a.id === "arw-vex") &&
+      myArrows.some((a) => a.id === "arw-cap-4"),
+    `count=${myArrows.length} ids=${myArrows.map((a) => a.id).join(",")}`,
   );
 
   // --- draw-tool permission: player stroke rejected by default, allowed once enabled --

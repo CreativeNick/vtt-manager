@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Arrow, Circle, Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text } from "react-konva";
 import type Konva from "konva";
 import {
+  ANNOTATION_FADE_MS,
   CONDITIONS,
   type Annotation,
   type ClientMessage,
@@ -310,7 +311,14 @@ export function MapCanvas({
   const arrowSparse = useRef<number[]>([]); // sparse, networked
   const arrowDense = useRef<number[]>([]); // dense, local preview
   const arrowGraceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Repaint clock that drives the fade of ephemeral annotations + the live draft.
+  // Removed arrows fade out client-side (a "ghost") over ANNOTATION_FADE_MS — smooth and
+  // immediate regardless of why the server dropped them (cap or end-of-life TTL).
+  const [ghosts, setGhosts] = useState<Array<{ id: string; points: number[]; removedAt: number }>>([]);
+  const prevArrowsRef = useRef<{ sceneId: string; ids: Map<string, number[]> }>({
+    sceneId: "",
+    ids: new Map(),
+  });
+  // Repaint clock that drives fades (ghost arrows, ephemeral strokes, live draft).
   const [fadeClock, setFadeClock] = useState(() => Date.now());
 
   const playersCanDraw = state.playersCanDraw;
@@ -368,15 +376,50 @@ export function MapCanvas({
     return () => clearInterval(timer);
   }, []);
 
-  // Ticks the fade clock while any ephemeral annotation or the live arrow draft exists.
+  // Snapshot removed arrows as fading "ghosts" so they fade out instead of popping.
+  const sceneAnnotationsForGhosts = scene?.annotations;
+  const currentSceneId = scene?.id ?? "";
+  useEffect(() => {
+    const current = new Map<string, number[]>();
+    for (const annotation of sceneAnnotationsForGhosts ?? []) {
+      if (annotation.kind === "arrow") {
+        current.set(annotation.id, annotation.points ?? []);
+      }
+    }
+    const prev = prevArrowsRef.current;
+    if (prev.sceneId === currentSceneId) {
+      const removed = [...prev.ids]
+        .filter(([id]) => !current.has(id))
+        .map(([id, points]) => ({ id, points, removedAt: Date.now() }));
+      if (removed.length > 0) {
+        setGhosts((g) => [...g, ...removed.filter((r) => !g.some((x) => x.id === r.id))]);
+      }
+    } else {
+      setGhosts([]); // scene change — drop stale ghosts, don't animate
+    }
+    prevArrowsRef.current = { sceneId: currentSceneId, ids: current };
+  }, [currentSceneId, sceneAnnotationsForGhosts]);
+
+  // Ticks the fade clock while anything is fading (ghosts, ephemeral strokes, or a draft).
   const hasEphemeral = (scene?.annotations ?? []).some((annotation) => annotation.ephemeral);
   useEffect(() => {
-    if (!hasEphemeral && !arrowDraft) {
+    if (!hasEphemeral && !arrowDraft && ghosts.length === 0) {
       return;
     }
-    const timer = setInterval(() => setFadeClock(Date.now()), 50);
+    const timer = setInterval(() => setFadeClock(Date.now()), 40);
     return () => clearInterval(timer);
-  }, [hasEphemeral, arrowDraft]);
+  }, [hasEphemeral, arrowDraft, ghosts.length]);
+
+  // Drop ghosts once their fade completes.
+  useEffect(() => {
+    if (ghosts.length === 0) {
+      return;
+    }
+    const alive = ghosts.filter((g) => fadeClock - g.removedAt < ANNOTATION_FADE_MS);
+    if (alive.length !== ghosts.length) {
+      setGhosts(alive);
+    }
+  }, [fadeClock, ghosts]);
 
   // Hand off preview → committed arrow: once our echo lands, drop the local preview and
   // reveal the server copy in one swap, so only ever one arrow is on screen.
@@ -766,11 +809,8 @@ export function MapCanvas({
           {scene.annotations.map((annotation) =>
             // Our own just-committed arrow is hidden until the preview hands off to it.
             annotation.id === pendingArrowId ? null : annotation.kind === "arrow" ? (
-              <MapAnnotationArrow
-                key={annotation.id}
-                points={annotation.points ?? []}
-                opacity={annotationOpacity(annotation.createdAt, fadeClock)}
-              />
+              // Solid while it exists; a client-local ghost fades it out on removal.
+              <MapAnnotationArrow key={annotation.id} points={annotation.points ?? []} opacity={1} />
             ) : (
               <AnnotationNode
                 key={annotation.id}
@@ -853,6 +893,13 @@ export function MapCanvas({
               points={ruler.points}
               color={ruler.color}
               name={ruler.name}
+            />
+          ))}
+          {ghosts.map((g) => (
+            <MapAnnotationArrow
+              key={`ghost-${g.id}`}
+              points={g.points}
+              opacity={Math.max(0, Math.min(1, 1 - (fadeClock - g.removedAt) / ANNOTATION_FADE_MS))}
             />
           ))}
           {arrowDraft && arrowDraft.length >= 4 ? (

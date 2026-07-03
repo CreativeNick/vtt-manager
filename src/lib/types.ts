@@ -46,6 +46,8 @@ export type SceneFog = {
 export const MAX_SCENE_ANNOTATIONS = 200;
 export const MAX_ANNOTATION_POINTS = 240; // flat x,y numbers → 120 sampled points
 export const EPHEMERAL_ANNOTATION_TTL_MS = 10_000;
+/** How long an annotation fades out (client-local ghost fade after it's removed). */
+export const ANNOTATION_FADE_MS = 600;
 /** Live pointer arrows one author may have at once — older ones fade first. */
 export const MAX_POINTER_ARROWS_PER_AUTHOR = 5;
 export const MAX_FOG_REVEALS = 300;

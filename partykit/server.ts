@@ -853,34 +853,21 @@ export default class GameServer implements Party.Server {
         ephemeral: isArrow ? true : this.isDm(sender.id) ? sanitized.ephemeral : true,
       };
       scene.annotations.push(annotation);
-      // Cap live pointer arrows per author. Past the limit, the author's oldest still-solid
-      // arrow is aged into its fade-out window (the client opacity ramp begins at 70% of the
-      // TTL) and removed once faded — so extra arrows fade away instead of vanishing at once.
-      // Already-fading arrows are excluded from the count so the fade never cascades.
+      // Cap live pointer arrows per author — drawing past the limit removes that author's
+      // oldest arrow immediately; the client fades the removed arrow out (a client-local
+      // ghost fade), so it's smooth without the server tracking fade state.
       if (isArrow) {
-        const now = Date.now();
-        const fadeStartMs = EPHEMERAL_ANNOTATION_TTL_MS * 0.7;
-        const active = scene.annotations.filter(
-          (item) =>
-            item.kind === "arrow" &&
-            item.authorId === annotation.authorId &&
-            now - item.createdAt < fadeStartMs,
+        const mine = scene.annotations.filter(
+          (item) => item.kind === "arrow" && item.authorId === annotation.authorId,
         );
-        if (active.length > MAX_POINTER_ARROWS_PER_AUTHOR) {
-          const excess = [...active]
-            .sort((a, b) => a.createdAt - b.createdAt)
-            .slice(0, active.length - MAX_POINTER_ARROWS_PER_AUTHOR);
-          for (const old of excess) {
-            old.createdAt = now - fadeStartMs; // begin the fade now
-            const oldId = old.id;
-            setTimeout(() => {
-              const target = this.state.scenes.find((item) => item.id === parsed.sceneId);
-              if (target?.annotations.some((item) => item.id === oldId)) {
-                target.annotations = target.annotations.filter((item) => item.id !== oldId);
-                void this.broadcastState();
-              }
-            }, EPHEMERAL_ANNOTATION_TTL_MS - fadeStartMs);
-          }
+        if (mine.length > MAX_POINTER_ARROWS_PER_AUTHOR) {
+          const drop = new Set(
+            [...mine]
+              .sort((a, b) => a.createdAt - b.createdAt)
+              .slice(0, mine.length - MAX_POINTER_ARROWS_PER_AUTHOR)
+              .map((item) => item.id),
+          );
+          scene.annotations = scene.annotations.filter((item) => !drop.has(item.id));
         }
       }
       // Cap persistent objects per scene by dropping the oldest.

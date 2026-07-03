@@ -1,4 +1,4 @@
-import { EPHEMERAL_ANNOTATION_TTL_MS, MAX_ANNOTATION_POINTS } from "./types";
+import { ANNOTATION_FADE_MS, EPHEMERAL_ANNOTATION_TTL_MS, MAX_ANNOTATION_POINTS } from "./types";
 
 /// <summary>
 /// Pure geometry + fade helpers for the shift-drag "pointer arrow" (recovered from the
@@ -102,16 +102,17 @@ export function buildAnnotationDraftPreview(
 }
 
 /// <summary>
-/// Opacity for an ephemeral annotation by age: full for the first 70% of its lifetime,
-/// then a linear fade to 0 over the final 30% (1 → 0 across ANNOTATION_DURATION_MS).
+/// Opacity for an ephemeral annotation by age: full until the last ANNOTATION_FADE_MS of
+/// its lifetime, then a quick linear fade to 0 (1 → 0 over ANNOTATION_FADE_MS).
 /// </summary>
 export function annotationOpacity(createdAt: number, now = Date.now()): number {
   const age = now - createdAt;
   if (age >= ANNOTATION_DURATION_MS) {
     return 0;
   }
-  if (age < ANNOTATION_DURATION_MS * 0.7) {
+  const fadeStart = ANNOTATION_DURATION_MS - ANNOTATION_FADE_MS;
+  if (age < fadeStart) {
     return 1;
   }
-  return 1 - (age - ANNOTATION_DURATION_MS * 0.7) / (ANNOTATION_DURATION_MS * 0.3);
+  return 1 - (age - fadeStart) / ANNOTATION_FADE_MS;
 }

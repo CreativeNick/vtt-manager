@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DICE_QUICK_SIDES } from "../lib/dice";
+import { playRollSound } from "../lib/rollSound";
 import type { DiceOverlayController } from "../dice/useDiceOverlay";
 
 type DiceTrayProps = {
-  /** Slides up into view when true, down out of view when false (stays mounted). */
+  /** Slides/fades into view when true, out when false (stays mounted). */
   open: boolean;
   isDm: boolean;
   secret: boolean;
@@ -14,12 +15,63 @@ type DiceTrayProps = {
   onClose: () => void;
 };
 
+type TrayPos = { x: number; y: number };
+type TraySize = { w: number; h: number };
+
+const POS_KEY = "cm-dice-tray-pos";
+const MARGIN = 8;
+const DRAG_THRESHOLD = 5;
+// Estimates used before the tray is measured (keeps the initial clamp sane).
+const EST_SIZE: TraySize = { w: 500, h: 170 };
+
+/// <summary>Keeps the whole tray on screen (with a margin), using its measured size.</summary>
+function clampPos(pos: TrayPos, size: TraySize = EST_SIZE): TrayPos {
+  const maxX = Math.max(MARGIN, window.innerWidth - size.w - MARGIN);
+  const maxY = Math.max(MARGIN, window.innerHeight - size.h - MARGIN);
+  return {
+    x: Math.min(Math.max(pos.x, MARGIN), maxX),
+    y: Math.min(Math.max(pos.y, MARGIN), maxY),
+  };
+}
+
+function defaultPos(size: TraySize = EST_SIZE): TrayPos {
+  return {
+    x: Math.round((window.innerWidth - size.w) / 2),
+    y: window.innerHeight - size.h - 12,
+  };
+}
+
+function savePos(pos: TrayPos) {
+  try {
+    localStorage.setItem(POS_KEY, JSON.stringify(pos));
+  } catch {
+    // position just won't persist
+  }
+}
+
+function loadPos(): TrayPos {
+  try {
+    const raw = localStorage.getItem(POS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as TrayPos;
+      if (typeof parsed?.x === "number" && typeof parsed?.y === "number") {
+        return clampPos(parsed);
+      }
+    }
+  } catch {
+    // fall through to default
+  }
+  return defaultPos();
+}
+
 /// <summary>
-/// The dice tray: a bottom-center drawer holding a physical rack of 3D dice in a felt
-/// well. Click a d# button to ready dice — the matching dice glow (click again for more,
-/// right-click to put one back) — then drag any glowing die out of the tray to pick the
-/// whole set up, shake, and throw onto the board. Dragging an unlit die throws just that
-/// one. Falls back to text rolls when 3D is off. Toggling the tray slides it in and out.
+/// The dice tray: a draggable rack of 3D dice in a felt well. Click a d# button to ready
+/// dice — the matching dice glow (click again for more, right-click to put one back) —
+/// then drag any glowing die out of the tray to pick the whole set up, shake, and throw
+/// onto the board. With 3D off, the d# buttons and Roll do text rolls (with a dice-roll
+/// sound). **Drag anywhere on the tray** (except the felt well, which grabs dice) to move
+/// it; a small move threshold keeps button clicks working. Double-click a blank part of
+/// the tray to reset its position. Toggling slides/fades it in and out where it sits.
 /// </summary>
 export function DiceTray({
   open,
@@ -31,8 +83,30 @@ export function DiceTray({
   onClose,
 }: DiceTrayProps) {
   const [expression, setExpression] = useState("1d20");
+  const [pos, setPos] = useState<TrayPos>(loadPos);
+  const trayRef = useRef<HTMLDivElement>(null);
+  const suppressClickRef = useRef(false);
 
   const selectionActive = Object.keys(controller.selection).length > 0;
+
+  const measure = (): TraySize =>
+    trayRef.current
+      ? { w: trayRef.current.offsetWidth, h: trayRef.current.offsetHeight }
+      : EST_SIZE;
+
+  // A text roll (non-3D): play the dice sound, then resolve it as a server text roll.
+  const textRoll = (expr: string) => {
+    playRollSound();
+    onTextRoll(expr);
+  };
+
+  // Pull the tray fully on-screen once we know its real size, and on window resize.
+  useEffect(() => {
+    setPos((current) => clampPos(current, measure()));
+    const onResize = () => setPos((current) => clampPos(current, measure()));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // Esc puts readied dice back.
   useEffect(() => {
@@ -54,12 +128,77 @@ export function DiceTray({
       return;
     }
     if (!controller.throwExpression(expr)) {
-      onTextRoll(expr);
+      textRoll(expr);
     }
   };
 
+  /// <summary>Starts a threshold drag from anywhere on the tray except the dice well.</summary>
+  const onTrayPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    const target = event.target as HTMLElement;
+    if (target.closest(".dice-tray-well")) {
+      return; // the felt well grabs dice, not the tray
+    }
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const offX = event.clientX - pos.x;
+    const offY = event.clientY - pos.y;
+    const size = measure();
+    let moved = false;
+
+    const onMove = (e: PointerEvent) => {
+      if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD) {
+        return; // below threshold — still a click
+      }
+      moved = true;
+      e.preventDefault();
+      setPos(clampPos({ x: e.clientX - offX, y: e.clientY - offY }, size));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      if (moved) {
+        // Swallow the click that follows a drag so it doesn't trigger a button.
+        suppressClickRef.current = true;
+        setTimeout(() => (suppressClickRef.current = false), 60);
+        setPos((current) => {
+          savePos(current);
+          return current;
+        });
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  const onTrayDoubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, .dice-tray-well")) {
+      return; // don't reset when double-clicking a control or the dice well
+    }
+    const next = clampPos(defaultPos(measure()), measure());
+    setPos(next);
+    savePos(next);
+  };
+
   return (
-    <div className={`dice-tray${open ? " dice-tray--open" : ""}`} aria-hidden={!open}>
+    <div
+      ref={trayRef}
+      className={`dice-tray${open ? " dice-tray--open" : ""}`}
+      style={{ left: pos.x, top: pos.y }}
+      aria-hidden={!open}
+      onPointerDown={onTrayPointerDown}
+      onDoubleClick={onTrayDoubleClick}
+      onClickCapture={(event) => {
+        if (suppressClickRef.current) {
+          suppressClickRef.current = false;
+          event.stopPropagation();
+          event.preventDefault();
+        }
+      }}
+    >
       {controller.enabled ? (
         <div
           className="dice-tray-well"
@@ -98,7 +237,7 @@ export function DiceTray({
                 if (controller.enabled) {
                   controller.adjustSelection(sides, 1);
                 } else {
-                  onTextRoll(`1d${sides}`);
+                  textRoll(`1d${sides}`);
                 }
               }}
               onContextMenu={(event) => {

@@ -1223,10 +1223,11 @@ body.pointer-dragging * {
 /* Bottom-center drawer: slides up into view and back down out of it when toggled. */
 .dice-tray {
   position: fixed;
-  left: 50%;
-  bottom: 0.75rem;
-  transform: translate(-50%, calc(100% + 1.5rem));
-  transition: transform 220ms ease;
+  /* Position is set inline (left/top, draggable); open/close is a slide + fade so the
+     tray hides wherever it has been dragged. */
+  transform: translateY(18px);
+  opacity: 0;
+  transition: transform 200ms ease, opacity 200ms ease;
   z-index: 25; /* above the dock rail so it stays reachable */
   pointer-events: none;
   display: flex;
@@ -1241,8 +1242,21 @@ body.pointer-dragging * {
   backdrop-filter: var(--blur);
 }
 .dice-tray--open {
-  transform: translate(-50%, 0);
+  transform: translateY(0);
+  opacity: 1;
   pointer-events: auto;
+}
+/* The tray body is a drag surface; controls keep their own cursors so clicks read right. */
+.dice-tray {
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+.dice-tray button {
+  cursor: pointer;
+}
+.dice-tray input {
+  cursor: text;
 }
 .dice-tray-controls {
   display: flex;
