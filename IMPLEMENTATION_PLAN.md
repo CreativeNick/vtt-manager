@@ -816,11 +816,14 @@ user wants to design once we understand the rules-engine work — leave clean ho
 **Shell (persistent on every page).**
 - **Left "vitals" sidebar** (collapsible via a `‹` tab on its right edge):
   - Large framed **portrait** (click-to-upload, Phase 5.5 affordance).
-  - **AC shield** badge (center) flanked by two groups of small circles = **death saves**
-    (left = successes, right = failures — *PC only; still confirming exact meaning*).
+  - **AC shield** badge showing AC (the octagon reading `15`).
   - Three badges: **Initiative** (+3), **Walk/Speed** (25), **Proficiency** (+2).
   - **Hit Points** bar (`9 / 9`) with a **TMP** (temp HP) control; **Hit Dice** bar
-    (`1 / 1`); a small **skull** button (death-save / mark-dead — *PC only; confirming*).
+    (`1 / 1`).
+  - **Death saves (PC only):** a small **skull** button that **toggles a slide-down
+    tracker** — the skull centered, **3 success slots on the left, 3 failure slots on the
+    right** (click to fill). Collapsed by default; slides down over the Favorites area when
+    opened.
   - **Favorites** section with a "Drop favorite" drop zone (drag actions/items here for a
     quick-access row).
 - **Top header:** character **name** + subtitle (`class level`, e.g. "Monk 1"); two header
@@ -909,11 +912,9 @@ home page. Differences:
 
 **Resolved (user 2026-07-02):** 🍴/⛰ = Short/Long Rest ✓; 📖 = Spells, kept visible-but-empty
 for non-casters ✓; **manual fields first, automation is a later dedicated plan** ✓; NPCs =
-same sheet without the Main tab (Features is their first tab) ✓.
-**Still to confirm:** the PC left-sidebar **circles flanking the AC shield** (three each
-side) = death-save successes/failures, and the **skull button** below Hit Dice = the
-death-save control — i.e. this is the persistent PC vitals sidebar (all PC pages), which
-NPCs don't have.
+same sheet without the Main tab (Features is their first tab) ✓; **death saves = a
+skull-toggled slide-down tracker (3 successes / 3 failures), PC-only** ✓. No open questions
+remain — this spec is ready to build in Phase 7.
 
 **Sheets fleshed out (PC + NPC).** Grow `CharacterSheet`: attacks/actions (name, to-hit
 part, damage expression, linked item), class resources (name/current/max chips), death
