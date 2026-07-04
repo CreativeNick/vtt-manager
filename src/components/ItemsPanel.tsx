@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Directory, type DirectoryRowData } from "./Directory";
 import type { GameState } from "../lib/types";
 import type { useDmActions } from "../hooks/useGameRoom";
@@ -30,8 +29,6 @@ const nextName = (prefix: string, taken: string[]) => {
 /// Inventory section of any open character sheet).
 /// </summary>
 export function ItemsPanel({ state, dm, openItemSheet, dropItemAt }: ItemsPanelProps) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-
   const rows: DirectoryRowData[] = Object.values(state.items)
     .map((item) => ({
       id: item.id,
@@ -79,7 +76,7 @@ export function ItemsPanel({ state, dm, openItemSheet, dropItemAt }: ItemsPanelP
         if (folderId) {
           dm.updateItem({ id: itemId, name: finalName, description: "", iconUrl: null, folderId });
         }
-        setExpandedId(itemId);
+        openItemSheet(itemId);
       }}
       onCreateFolder={(name) =>
         dm.createFolder(
@@ -104,16 +101,9 @@ export function ItemsPanel({ state, dm, openItemSheet, dropItemAt }: ItemsPanelP
           dropOnSheet(itemId, element);
         }
       }}
-      onRowClick={(itemId) => setExpandedId((current) => (current === itemId ? null : itemId))}
+      onRowClick={(itemId) => openItemSheet(itemId)}
       renderRowActions={(itemId) => (
         <>
-          <button
-            className="btn-ghost icon-btn"
-            title="Open item sheet"
-            onClick={() => openItemSheet(itemId)}
-          >
-            🪪
-          </button>
           <button
             className="btn-ghost icon-btn"
             title="Duplicate item"
@@ -130,38 +120,6 @@ export function ItemsPanel({ state, dm, openItemSheet, dropItemAt }: ItemsPanelP
           </button>
         </>
       )}
-      renderExpanded={(itemId) => {
-        if (itemId !== expandedId) {
-          return null;
-        }
-        const item = state.items[itemId];
-        if (!item) {
-          return null;
-        }
-        return (
-          <div className="dir-item-editor stack" key={item.id}>
-            <input
-              defaultValue={item.name}
-              aria-label="Item name"
-              onBlur={(e) => {
-                const name = e.target.value.trim();
-                if (name && name !== item.name) {
-                  dm.updateItem({ ...item, name });
-                }
-              }}
-            />
-            <textarea
-              defaultValue={item.description}
-              placeholder="Description…"
-              onBlur={(e) => {
-                if (e.target.value !== item.description) {
-                  dm.updateItem({ ...item, description: e.target.value });
-                }
-              }}
-            />
-          </div>
-        );
-      }}
     />
   );
 }

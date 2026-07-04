@@ -11,6 +11,11 @@ type ActorsPanelProps = {
   dropActorAt: (sheetId: string | null, clientX: number, clientY: number) => void;
   /** Restrict the directory to one kind (the NPCs page shows NPCs only). */
   filterKind?: "pc" | "npc";
+  /**
+   * Which folder tree to read/write: "actor" (Actors sidebar, default) or "npc"
+   * (the NPCs page's own tree). NPC sheets carry an independent folder in each.
+   */
+  folderKind?: "actor" | "npc";
 };
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -33,10 +38,22 @@ const byOrderThenName = (a: DirectoryRowData, b: DirectoryRowData) =>
 /// The Actors directory (PCs + NPCs): folders, search, quick create, manual
 /// drag-reordering, and drag-to-board token placement.
 /// </summary>
-export function ActorsPanel({ state, dm, openSheet, dropActorAt, filterKind }: ActorsPanelProps) {
+export function ActorsPanel({
+  state,
+  dm,
+  openSheet,
+  dropActorAt,
+  filterKind,
+  folderKind = "actor",
+}: ActorsPanelProps) {
   const records = Object.values(state.sheets).filter(
     (record) => !filterKind || record.kind === filterKind,
   );
+  // The NPCs page ("npc" tree) files sheets independently of the Actors sidebar ("actor" tree).
+  const folderOf = (r: (typeof records)[number]) =>
+    folderKind === "npc" ? (r.npcFolderId ?? null) : r.folderId;
+  const orderOf = (r: (typeof records)[number]) =>
+    folderKind === "npc" ? r.npcSortOrder : r.sortOrder;
 
   const rows: DirectoryRowData[] = records
     .map((record) =>
@@ -47,16 +64,16 @@ export function ActorsPanel({ state, dm, openSheet, dropActorAt, filterKind }: A
             iconUrl: record.data.iconUrl,
             color: playerTokenColorForSlot(record.id, state.playerSlots),
             badge: "PC",
-            folderId: record.folderId,
-            order: record.sortOrder,
+            folderId: folderOf(record),
+            order: orderOf(record),
           }
         : {
             id: record.id,
             name: record.data.characterName || "Unnamed NPC",
             iconUrl: record.data.iconUrl,
             color: TOKEN_ENEMY_COLOR,
-            folderId: record.folderId,
-            order: record.sortOrder,
+            folderId: folderOf(record),
+            order: orderOf(record),
           },
     )
     .sort(byOrderThenName);
@@ -70,7 +87,7 @@ export function ActorsPanel({ state, dm, openSheet, dropActorAt, filterKind }: A
   return (
     <Directory
       kind="actor"
-      folders={state.folders.filter((folder) => folder.kind === "actor")}
+      folders={state.folders.filter((folder) => folder.kind === folderKind)}
       rows={rows}
       createLabel="Create NPC"
       onCreate={(name, folderId) => {
@@ -85,20 +102,22 @@ export function ActorsPanel({ state, dm, openSheet, dropActorAt, filterKind }: A
         // Messages are ordered, so the freshly-created sheet exists by the time
         // the server processes this folder move.
         if (folderId) {
-          dm.setSheetFolder(sheetId, folderId);
+          dm.setSheetFolder(sheetId, folderId, undefined, folderKind);
         }
         openSheet(sheetId);
       }}
       onCreateFolder={(name) =>
         dm.createFolder(
           newId("folder"),
-          "actor",
-          name || nextName("Folder", state.folders.filter((f) => f.kind === "actor").map((f) => f.name)),
+          folderKind,
+          name || nextName("Folder", state.folders.filter((f) => f.kind === folderKind).map((f) => f.name)),
         )
       }
       onRenameFolder={(folderId, name) => dm.renameFolder(folderId, name)}
       onDeleteFolder={(folderId) => dm.deleteFolder(folderId)}
-      onMoveRow={(sheetId, folderId, sortOrder) => dm.setSheetFolder(sheetId, folderId, sortOrder)}
+      onMoveRow={(sheetId, folderId, sortOrder) =>
+        dm.setSheetFolder(sheetId, folderId, sortOrder, folderKind)
+      }
       onExternalDrop={dropOnBoard}
       onRowClick={(sheetId) => openSheet(sheetId)}
       renderRowActions={(sheetId) => {

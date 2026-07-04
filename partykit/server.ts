@@ -1289,18 +1289,27 @@ export default class GameServer implements Party.Server {
       }
       case "SET_SHEET_FOLDER": {
         const record = this.state.sheets[parsed.sheetId];
+        // "npc" files into the NPCs-page tree (independent from the Actors sidebar).
+        const treeKind = parsed.tree === "npc" ? "npc" : "actor";
         const validFolder =
           parsed.folderId === null ||
           this.state.folders.some(
-            (folder) => folder.id === parsed.folderId && folder.kind === "actor",
+            (folder) => folder.id === parsed.folderId && folder.kind === treeKind,
           );
         if (!record || !validFolder) {
           this.sendTo(sender, { type: "ERROR", message: "Sheet or folder not found." });
           return;
         }
-        record.folderId = parsed.folderId;
-        if (typeof parsed.sortOrder === "number" && Number.isFinite(parsed.sortOrder)) {
-          record.sortOrder = parsed.sortOrder;
+        const order =
+          typeof parsed.sortOrder === "number" && Number.isFinite(parsed.sortOrder)
+            ? parsed.sortOrder
+            : undefined;
+        if (treeKind === "npc") {
+          record.npcFolderId = parsed.folderId;
+          if (order !== undefined) record.npcSortOrder = order;
+        } else {
+          record.folderId = parsed.folderId;
+          if (order !== undefined) record.sortOrder = order;
         }
         void this.broadcastState();
         break;
@@ -1308,7 +1317,8 @@ export default class GameServer implements Party.Server {
       case "CREATE_FOLDER": {
         const folderId = parsed.folderId?.trim();
         const name = parsed.name?.trim().slice(0, 100);
-        const kind = parsed.kind === "item" ? "item" : "actor";
+        const kind =
+          parsed.kind === "item" ? "item" : parsed.kind === "npc" ? "npc" : "actor";
         if (!folderId || !name || this.state.folders.some((f) => f.id === folderId)) {
           this.sendTo(sender, { type: "ERROR", message: "Invalid or duplicate folder." });
           return;
@@ -1337,6 +1347,9 @@ export default class GameServer implements Party.Server {
         for (const record of Object.values(this.state.sheets)) {
           if (record.folderId === parsed.folderId) {
             record.folderId = null;
+          }
+          if (record.npcFolderId === parsed.folderId) {
+            record.npcFolderId = null;
           }
         }
         for (const item of Object.values(this.state.items)) {

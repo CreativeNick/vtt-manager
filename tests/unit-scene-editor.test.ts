@@ -10,6 +10,7 @@ import {
   normalizeGameState,
   normalizeItem,
   normalizeScene,
+  normalizeSheetRecord,
   normalizeToken,
   normalizeTokenShapeDefaults,
   sanitizeFogReveal,
@@ -271,6 +272,21 @@ function check(name: string, ok: boolean, detail = "") {
   const emptyDefs = normalizeTokenShapeDefaults(undefined);
   check("token shape defaults: absent → all built-ins",
     emptyDefs.player === "circle" && emptyDefs.enemy === "circle" && emptyDefs.item === "diamond");
+}
+
+// ---------------------------------------------------------------------------
+// 3d. Independent folder trees: sheet carries npcFolderId separately from folderId
+// ---------------------------------------------------------------------------
+{
+  const rec = normalizeSheetRecord(
+    { id: "sheet-1", kind: "npc", folderId: "actor-fold", npcFolderId: "npc-fold", npcSortOrder: 3 } as never,
+    "NPC",
+  );
+  check("actor-tree folderId kept", rec.folderId === "actor-fold");
+  check("npc-tree npcFolderId kept (independent)", rec.npcFolderId === "npc-fold");
+  check("npcSortOrder kept", rec.npcSortOrder === 3);
+  const bare = normalizeSheetRecord({ id: "sheet-2", kind: "npc" } as never, "NPC");
+  check("absent npcFolderId → undefined", bare.npcFolderId === undefined);
 }
 
 // ---------------------------------------------------------------------------

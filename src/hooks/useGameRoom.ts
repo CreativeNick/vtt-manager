@@ -460,8 +460,12 @@ export function useDmActions(room: GameRoom) {
       nextTurn: () => send({ type: "COMBAT_NEXT" }),
       prevTurn: () => send({ type: "COMBAT_PREV" }),
       endCombat: () => send({ type: "COMBAT_END" }),
-      setSheetFolder: (sheetId: string, folderId: string | null, sortOrder?: number) =>
-        send({ type: "SET_SHEET_FOLDER", sheetId, folderId, sortOrder }),
+      setSheetFolder: (
+        sheetId: string,
+        folderId: string | null,
+        sortOrder?: number,
+        tree?: "actor" | "npc",
+      ) => send({ type: "SET_SHEET_FOLDER", sheetId, folderId, sortOrder, tree }),
       createFolder: (folderId: string, kind: Folder["kind"], name: string) =>
         send({ type: "CREATE_FOLDER", folderId, kind, name }),
       renameFolder: (folderId: string, name: string) =>

@@ -253,11 +253,16 @@ export type CombatState = {
 
 export type HitPoints = { current: number; max: number };
 
-/** Directory folder for organizing actors (sheets) or items. Flat for now. */
+/**
+ * Directory folder. Flat for now. `kind` is the tree it belongs to:
+ * - "actor" — the Actors sidebar (PCs + NPCs combined roster)
+ * - "npc"   — the NPCs page's own tree (independent from the Actors sidebar)
+ * - "item"  — the Items directory (shared by the Items sidebar and Items page)
+ */
 export type Folder = {
   id: string;
   name: string;
-  kind: "actor" | "item";
+  kind: "actor" | "npc" | "item";
 };
 
 /** Item Sheet categories & rarities (Phase 6.7). */
@@ -441,10 +446,14 @@ export type SheetRecord = {
   data: CharacterSheet;
   /** Per-section player visibility. PC sheets are always fully revealed. */
   revealed: Record<SheetSectionId, boolean>;
-  /** Actors-directory folder, or null for the root. */
+  /** Actors-sidebar folder ("actor" tree), or null for the root. */
   folderId: string | null;
-  /** Manual directory ordering (fractional insertion); unset sorts last by name. */
+  /** Manual ordering in the Actors sidebar (fractional insertion); unset sorts last by name. */
   sortOrder?: number;
+  /** NPCs-page folder ("npc" tree) — independent from the Actors sidebar. NPC sheets only. */
+  npcFolderId?: string | null;
+  /** Manual ordering in the NPCs page. */
+  npcSortOrder?: number;
   /** Set only on outbound copies whose hidden sections were stripped server-side. */
   redacted?: boolean;
 };
@@ -504,6 +513,10 @@ export function normalizeSheetRecord(
     folderId: typeof record.folderId === "string" ? record.folderId : null,
     ...(typeof record.sortOrder === "number" && Number.isFinite(record.sortOrder)
       ? { sortOrder: record.sortOrder }
+      : {}),
+    ...(typeof record.npcFolderId === "string" ? { npcFolderId: record.npcFolderId } : {}),
+    ...(typeof record.npcSortOrder === "number" && Number.isFinite(record.npcSortOrder)
+      ? { npcSortOrder: record.npcSortOrder }
       : {}),
     ...(record.redacted ? { redacted: true } : {}),
   };
@@ -648,7 +661,14 @@ export type ClientMessage =
   | { type: "DUPLICATE_SHEET"; sheetId: string; newSheetId: string }
   | { type: "DELETE_SHEET"; sheetId: string }
   | { type: "SET_SHEET_REVEAL"; sheetId: string; section: SheetSectionId; revealed: boolean }
-  | { type: "SET_SHEET_FOLDER"; sheetId: string; folderId: string | null; sortOrder?: number }
+  | {
+      type: "SET_SHEET_FOLDER";
+      sheetId: string;
+      folderId: string | null;
+      sortOrder?: number;
+      /** Which tree to file into: the Actors sidebar ("actor", default) or the NPCs page ("npc"). */
+      tree?: "actor" | "npc";
+    }
   | { type: "CREATE_FOLDER"; folderId: string; kind: Folder["kind"]; name: string }
   | { type: "RENAME_FOLDER"; folderId: string; name: string }
   | { type: "DELETE_FOLDER"; folderId: string }
@@ -1499,7 +1519,7 @@ export function normalizeGameState(state: GameState & LegacyGameStateFields): Ga
       Boolean(folder) &&
       typeof folder.id === "string" &&
       typeof folder.name === "string" &&
-      (folder.kind === "actor" || folder.kind === "item"),
+      (folder.kind === "actor" || folder.kind === "npc" || folder.kind === "item"),
   );
   const folderIds = new Set(folders.map((folder) => folder.id));
 
@@ -1517,6 +1537,9 @@ export function normalizeGameState(state: GameState & LegacyGameStateFields): Ga
   for (const record of Object.values(sheets)) {
     if (record.folderId && !folderIds.has(record.folderId)) {
       record.folderId = null;
+    }
+    if (record.npcFolderId && !folderIds.has(record.npcFolderId)) {
+      record.npcFolderId = null;
     }
   }
 

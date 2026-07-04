@@ -10,6 +10,7 @@ import { TokenEditor } from "./components/TokenEditor";
 import { dockPanelsForRole, PANELS, type PanelContext, type PanelId } from "./panels/registry";
 import { PlayersPage } from "./pages/PlayersPage";
 import { NpcsPage } from "./pages/NpcsPage";
+import { ItemsPage } from "./pages/ItemsPage";
 import { ScenesPage } from "./pages/ScenesPage";
 import { PageSwitcher, type PageId } from "./pages/PageSwitcher";
 import { useDiceOverlay } from "./dice/useDiceOverlay";
@@ -579,6 +580,9 @@ export default function App() {
             </div>
             <div className={`page${activePage === "npcs" ? " page--active" : ""}`}>
               <NpcsPage ctx={panelContext} activePage={activePage} onNavigate={setPage} />
+            </div>
+            <div className={`page${activePage === "items" ? " page--active" : ""}`}>
+              <ItemsPage ctx={panelContext} activePage={activePage} onNavigate={setPage} />
             </div>
             <div className={`page${activePage === "scenes" ? " page--active" : ""}`}>
               <ScenesPage

@@ -1,9 +1,10 @@
-export type PageId = "board" | "players" | "npcs" | "scenes";
+export type PageId = "board" | "players" | "npcs" | "items" | "scenes";
 
 export const DM_PAGES: Array<{ id: PageId; label: string }> = [
   { id: "board", label: "Board" },
   { id: "players", label: "Players" },
   { id: "npcs", label: "NPCs" },
+  { id: "items", label: "Items" },
   { id: "scenes", label: "Scenes" },
 ];
 

@@ -46,6 +46,8 @@ export function NpcsPage({
               openSheet={open}
               dropActorAt={ctx.dropActorAt}
               filterKind="npc"
+              // The NPCs page has its OWN folder tree, independent of the Actors sidebar.
+              folderKind="npc"
             />
           }
         >
