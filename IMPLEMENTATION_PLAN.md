@@ -1144,10 +1144,41 @@ per-light background saturation/contrast/shadow adjustments (needs per-region pi
 
 ---
 
+## Phase 6.7 — Token & item UX: shapes, image tokens, item duplicate/drag, Item Sheet — ✅ SHIPPED
+
+> **As built (2026-07-03):** five tabletop-UX asks, machine-verified (`unit-scene-editor.test.ts`
+> 58/58 incl. 16 new token/item checks; new `check-items` WS smoke green for DUPLICATE_ITEM /
+> SET_TOKEN_DEFAULTS / item-token round-trip; `npm run build` + full `tsc` pass). Mostly mirrors
+> existing patterns. Partially delivers Phase 7's items/tokens scope.
+>
+> - **Click split:** single-click a token = select (DM Token panel); **double-click = open sheet**
+>   (`onDblClick`/`onDblTap` on `TokenNode` → `onOpenTokenSheet` → `openTokenSheet`, which routes
+>   item tokens to the Item Sheet, else the character sheet). `selectToken` no longer auto-opens.
+> - **Token shapes/image (`src/lib/types.ts`, `MapCanvas.tsx`):** `Token.shape`
+>   (circle/square/diamond/triangle/hexagon/octagon), `imageFit` ("framed" clips the image in the
+>   shape, "raw" shows the bare picture), and `kind:"item"`. `TokenShapeNode` renders via
+>   `Circle`/`Rect`/`RegularPolygon`; effective shape = `token.shape ?? tokenShapeDefaults[kind]`.
+>   Per-group defaults (`GameState.tokenShapeDefaults`, `SET_TOKEN_DEFAULTS`) edited in Settings.
+>   `TokenEditor` gained shape picker + image upload/clear (`uploadTokenImage`) + framed/raw toggle.
+> - **Items:** `ItemRecord` gained Item-Sheet fields (type/rarity/quantity/weight/value/attunement);
+>   new **`ItemSheetPanel`** (DM-only registry panel `itemSheet`, opened via `viewItemId`/`openItemSheet`
+>   + a FloatingWindow). `ItemsPanel` gained a **duplicate** button (`DUPLICATE_ITEM`, mirrors
+>   `DUPLICATE_SHEET`), an open-sheet button, and **drag-onto-board** (reuses the Directory external-drop
+>   → `dropItemAt` → an "item" token, mirroring `dropActorAt`). Item tokens are excluded from combat
+>   auto-add and the NPC avatar strip; the Item Sheet is DM-only so secret text doesn't leak.
+>
+> **Files:** `src/lib/types.ts`, `partykit/server.ts`, `src/hooks/useGameRoom.ts`,
+> `src/components/{MapCanvas,TokenEditor,ItemsPanel,SettingsPanel,InitiativeTracker}.tsx`,
+> **new** `src/components/ItemSheetPanel.tsx`, `src/panels/registry.tsx`, `src/App.tsx`, `src/index.css`.
+
+---
+
 ## Phase 7 — Game-content depth: sheets, items, rolls, DM tools — planned
 
 The "make it playable for a real campaign" phase (user, 2026-07-02). Each item follows
 the fixed recipe (GameState field → normalize → message → redaction → cap).
+**Note:** Phase 6.7 already shipped part of the items/tokens scope (Item Sheet, item tokens,
+token shapes, item duplicate/drag).
 
 ### Tabbed character-sheet redesign (reference layout — user 2026-07-02)
 

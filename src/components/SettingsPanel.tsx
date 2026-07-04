@@ -1,5 +1,20 @@
 import { useState } from "react";
 import type { PanelContext } from "../panels/registry";
+import {
+  DEFAULT_TOKEN_SHAPES,
+  TOKEN_SHAPES,
+  type TokenShape,
+  type TokenShapeDefaults,
+} from "../lib/types";
+
+const SHAPE_LABEL: Record<TokenShape, string> = {
+  circle: "● Circle",
+  square: "■ Square",
+  diamond: "◆ Diamond",
+  triangle: "▲ Triangle",
+  hexagon: "⬢ Hexagon",
+  octagon: "⯃ Octagon",
+};
 
 /** One labeled on/off row, matching the ScenePanel toggle idiom. */
 function ToggleRow({
@@ -86,6 +101,34 @@ export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
             on={state.playersCanDraw}
             onToggle={(on) => room.send({ type: "SET_PLAYERS_CAN_DRAW", enabled: on })}
           />
+
+          <div className="section-title">Default token shapes</div>
+          {(
+            [
+              ["player", "PCs"],
+              ["enemy", "NPCs"],
+              ["item", "Items"],
+            ] as Array<[keyof TokenShapeDefaults, string]>
+          ).map(([group, label]) => {
+            const defaults = state.tokenShapeDefaults ?? DEFAULT_TOKEN_SHAPES;
+            return (
+              <div className="field" key={group}>
+                <label>{label}</label>
+                <select
+                  value={defaults[group]}
+                  onChange={(e) =>
+                    ctx.dm.setTokenDefaults({ ...defaults, [group]: e.target.value as TokenShape })
+                  }
+                >
+                  {TOKEN_SHAPES.map((shape) => (
+                    <option key={shape} value={shape}>
+                      {SHAPE_LABEL[shape]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
         </>
       ) : null}
 

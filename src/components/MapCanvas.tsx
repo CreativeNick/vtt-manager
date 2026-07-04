@@ -1,14 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Arrow, Circle, Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text } from "react-konva";
+import {
+  Arrow,
+  Circle,
+  Group,
+  Image as KonvaImage,
+  Layer,
+  Line,
+  Rect,
+  RegularPolygon,
+  Stage,
+  Text,
+} from "react-konva";
 import type Konva from "konva";
 import {
   ANNOTATION_FADE_MS,
   CONDITIONS,
+  DEFAULT_TOKEN_SHAPES,
   type Annotation,
   type ClientMessage,
   type GameState,
   type HitPoints,
   type Light,
+  type TokenShape,
   type Viewport,
 } from "../lib/types";
 import {
@@ -118,6 +131,8 @@ type MapCanvasProps = {
   onViewportChange?: (viewport: Viewport) => void;
   onMoveToken: (tokenId: string, x: number, y: number) => void;
   onSelectToken?: (tokenId: string | null) => void;
+  /** Double-click a token: open its linked sheet (character or item). */
+  onOpenTokenSheet?: (token: GameState["tokens"][number]) => void;
   selectedTokenId?: string | null;
   /** When set, the next map click places a token at the returned world coords. */
   onPlaceToken?: (x: number, y: number) => void;
@@ -195,9 +210,80 @@ function useElementSize(ref: React.RefObject<HTMLDivElement | null>) {
 /// combat state — current-turn ring, HP bar (from the linked sheet), condition
 /// badges, and a desaturated skull overlay at 0 HP.
 /// </summary>
+/** Konva sides for the RegularPolygon token shapes (square uses a Rect instead). */
+const TOKEN_POLY_SIDES: Partial<Record<TokenShape, number>> = {
+  diamond: 4,
+  triangle: 3,
+  hexagon: 6,
+  octagon: 8,
+};
+
+/**
+ * Renders a token's silhouette: circle / square / diamond / triangle / hexagon / octagon,
+ * filled with a solid color or (for framed image tokens) the portrait clipped to the shape.
+ * All primitives are centered on the group origin so the shared portrait pattern math works.
+ */
+function TokenShapeNode({
+  shape,
+  radius,
+  img,
+  fill,
+  stroke,
+  strokeWidth,
+}: {
+  shape: TokenShape;
+  radius: number;
+  img: HTMLImageElement | null | undefined;
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+}) {
+  const common = { stroke, strokeWidth };
+  if (shape === "square") {
+    // Rect anchors its fill pattern at the top-left corner, so no centered offset here.
+    const imgFill = img
+      ? {
+          fillPatternImage: img,
+          fillPatternScale: { x: (radius * 2) / img.width, y: (radius * 2) / img.height },
+        }
+      : { fill };
+    return (
+      <Rect
+        x={-radius}
+        y={-radius}
+        width={radius * 2}
+        height={radius * 2}
+        cornerRadius={radius * 0.14}
+        {...imgFill}
+        {...common}
+      />
+    );
+  }
+  // Center-origin shapes share the portrait pattern math (image centered on the origin).
+  const imgFill = img
+    ? {
+        fillPatternImage: img,
+        fillPatternScale: { x: (radius * 2) / img.width, y: (radius * 2) / img.height },
+        fillPatternOffset: { x: img.width / 2, y: img.height / 2 },
+      }
+    : { fill };
+  if (shape === "circle") {
+    return <Circle radius={radius} {...imgFill} {...common} />;
+  }
+  return (
+    <RegularPolygon
+      sides={TOKEN_POLY_SIDES[shape] ?? 6}
+      radius={radius}
+      {...imgFill}
+      {...common}
+    />
+  );
+}
+
 function TokenNode({
   token,
   imageUrl,
+  shapeDefaults,
   radius,
   draggable,
   selected,
@@ -205,11 +291,14 @@ function TokenNode({
   hp,
   showHpValues,
   onSelect,
+  onOpenSheet,
   onMove,
 }: {
   token: GameState["tokens"][number];
   /** Portrait to render on the token (resolved live from the linked sheet). */
   imageUrl: string | null;
+  /** Per-group default shapes; used when the token has no explicit `shape`. */
+  shapeDefaults: GameState["tokenShapeDefaults"];
   radius: number;
   draggable: boolean;
   selected: boolean;
@@ -218,6 +307,8 @@ function TokenNode({
   hp: HitPoints | null;
   showHpValues: boolean;
   onSelect?: () => void;
+  /** Double-click: open the linked sheet (character or item). */
+  onOpenSheet?: () => void;
   onMove: (x: number, y: number) => void;
 }) {
   const img = useImage(imageUrl);
@@ -239,6 +330,8 @@ function TokenNode({
       opacity={token.hidden ? 0.4 : dead ? 0.55 : 1}
       onClick={onSelect}
       onTap={onSelect}
+      onDblClick={onOpenSheet}
+      onDblTap={onOpenSheet}
       onDragStart={(e) => {
         // Shift-drag draws a pointer arrow instead of moving the token.
         if (e.evt.shiftKey) {
@@ -250,20 +343,24 @@ function TokenNode({
       {isCurrentTurn ? (
         <Circle radius={radius + 4} stroke={CURRENT_TURN_COLOR} strokeWidth={2.5} listening={false} />
       ) : null}
-      {img ? (
-        <Circle
-          radius={radius}
-          fillPatternImage={img}
-          fillPatternScale={{ x: (radius * 2) / img.width, y: (radius * 2) / img.height }}
-          fillPatternOffset={{ x: img.width / 2, y: img.height / 2 }}
-          stroke={selected ? "#4a9eff" : token.color}
-          strokeWidth={selected ? 3 : 2}
+      {img && token.imageFit === "raw" ? (
+        // Raw image token: the bare picture, no shape frame (selection border only).
+        <KonvaImage
+          image={img}
+          width={radius * 2}
+          height={radius * 2}
+          offsetX={radius}
+          offsetY={radius}
+          stroke={selected ? "#4a9eff" : undefined}
+          strokeWidth={selected ? 3 : 0}
         />
       ) : (
-        <Circle
+        <TokenShapeNode
+          shape={token.shape ?? (shapeDefaults ?? DEFAULT_TOKEN_SHAPES)[token.kind]}
           radius={radius}
+          img={img}
           fill={token.color}
-          stroke={selected ? "#4a9eff" : "#00000066"}
+          stroke={selected ? "#4a9eff" : img ? token.color : "#00000066"}
           strokeWidth={selected ? 3 : 2}
         />
       )}
@@ -351,6 +448,7 @@ export function MapCanvas({
   onViewportChange,
   onMoveToken,
   onSelectToken,
+  onOpenTokenSheet,
   selectedTokenId,
   onPlaceToken,
   send,
@@ -1027,6 +1125,7 @@ export function MapCanvas({
                 key={token.id}
                 token={token}
                 imageUrl={sheet?.data.iconUrl ?? token.imageUrl ?? null}
+                shapeDefaults={state.tokenShapeDefaults}
                 radius={radius}
                 draggable={draggable}
                 selected={selectedTokenId === token.id}
@@ -1034,6 +1133,7 @@ export function MapCanvas({
                 hp={hp}
                 showHpValues={token.showHp === "values"}
                 onSelect={() => onSelectToken?.(token.id)}
+                onOpenSheet={() => onOpenTokenSheet?.(token)}
                 onMove={(x, y) => {
                   const snapped = snapPoint(x, y);
                   onMoveToken(token.id, snapped.x, snapped.y);

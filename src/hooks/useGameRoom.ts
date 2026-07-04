@@ -14,6 +14,7 @@ import type {
   ServerMessage,
   SheetSectionId,
   Token,
+  TokenShapeDefaults,
   Viewport,
   Wall,
 } from "../lib/types";
@@ -468,7 +469,11 @@ export function useDmActions(room: GameRoom) {
       deleteFolder: (folderId: string) => send({ type: "DELETE_FOLDER", folderId }),
       createItem: (itemId: string, name: string) => send({ type: "CREATE_ITEM", itemId, name }),
       updateItem: (item: ItemRecord) => send({ type: "UPDATE_ITEM", item }),
+      duplicateItem: (itemId: string, newItemId: string) =>
+        send({ type: "DUPLICATE_ITEM", itemId, newItemId }),
       deleteItem: (itemId: string) => send({ type: "DELETE_ITEM", itemId }),
+      setTokenDefaults: (defaults: TokenShapeDefaults) =>
+        send({ type: "SET_TOKEN_DEFAULTS", defaults }),
       clearAnnotations: (sceneId: string) => send({ type: "CLEAR_ANNOTATIONS", sceneId }),
       setFogEnabled: (sceneId: string, enabled: boolean, inverted?: boolean) =>
         send({ type: "FOG_SET", sceneId, enabled, inverted }),

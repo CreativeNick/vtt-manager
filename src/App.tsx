@@ -17,7 +17,13 @@ import { useDmActions, useGameRoom, type JoinParams } from "./hooks/useGameRoom"
 import { buildInverse, useHistory } from "./lib/history";
 import { readLocalFlag, writeLocalFlag } from "./lib/localFlags";
 import { fitViewportToScene } from "./lib/sceneUtils";
-import { DEFAULT_VIEWPORT, TOKEN_ENEMY_COLOR, type Viewport } from "./lib/types";
+import {
+  DEFAULT_VIEWPORT,
+  TOKEN_ENEMY_COLOR,
+  TOKEN_ITEM_COLOR,
+  type GameState,
+  type Viewport,
+} from "./lib/types";
 
 type SessionParams = JoinParams & { roomId: string };
 
@@ -50,6 +56,8 @@ export default function App() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [viewSheetId, setViewSheetId] = useState<string | null>(null);
+  const [itemSheetOpen, setItemSheetOpen] = useState(false);
+  const [viewItemId, setViewItemId] = useState<string | null>(null);
   const [secretRolls, setSecretRolls] = useState(false);
   const [trayOpen, setTrayOpen] = useState(true);
   const [page, setPage] = useState<PageId>("board");
@@ -289,15 +297,26 @@ export default function App() {
     setSheetOpen(true);
   };
 
-  /** Select a token; if it has a linked sheet, open that sheet (redacted for players). */
+  /** Open the Item Sheet window for a catalog item (DM-only). */
+  const openItemSheet = (itemId: string) => {
+    setViewItemId(itemId);
+    setItemSheetOpen(true);
+  };
+
+  /** Single-click a token: just select it (the DM's Token panel shows). No sheet. */
   const selectToken = (tokenId: string | null) => {
     setSelectedTokenId(tokenId);
-    if (!tokenId) {
+  };
+
+  /** Double-click a token: open its linked sheet — item sheet for item tokens, else character. */
+  const openTokenSheet = (token: GameState["tokens"][number]) => {
+    if (token.itemId && state.items[token.itemId]) {
+      if (isDm) openItemSheet(token.itemId);
       return;
     }
-    const token = state.tokens.find((item) => item.id === tokenId);
-    if (token?.sheetId && state.sheets[token.sheetId]) {
-      openSheet(token.sheetId);
+    const sheetId = token.sheetId ?? (token.ownerPlayerId ? token.ownerPlayerId : null);
+    if (sheetId && state.sheets[sheetId]) {
+      openSheet(sheetId);
     }
   };
 
@@ -327,6 +346,34 @@ export default function App() {
     });
   };
 
+  /** DM dropped a catalog item from the Items directory onto the map → an "item" token. */
+  const dropItemAt = (itemId: string, clientX: number, clientY: number) => {
+    if (!isDm) {
+      return;
+    }
+    const item = state.items[itemId];
+    if (!item) {
+      return;
+    }
+    const x = (clientX - viewport.x) / viewport.scale;
+    const y = (clientY - viewport.y) / viewport.scale;
+    dm.addToken({
+      id: `token-${crypto.randomUUID().slice(0, 8)}`,
+      sceneId: state.activeSceneId,
+      x,
+      y,
+      label: item.name || "Item",
+      color: TOKEN_ITEM_COLOR,
+      kind: "item",
+      imageUrl: item.iconUrl ?? null,
+      ownerPlayerId: null,
+      sheetId: null,
+      itemId,
+      conditions: [],
+      showHp: "none",
+    });
+  };
+
   const handleViewportChange = (next: Viewport) => {
     setViewport(next);
     if (isDm) {
@@ -342,11 +389,14 @@ export default function App() {
     isDm,
     viewSheetId,
     openSheet,
+    viewItemId,
+    openItemSheet,
     updateSheet: (sheetId, sheet) => room.send({ type: "UPDATE_SHEET", sheetId, sheet }),
     // The DM's persistent Secret toggle applies to every roll, sheet-clicks included.
     rollDice: (expression, options) =>
       room.rollDice(expression, { ...options, private: isDm && secretRolls }),
     dropActorAt,
+    dropItemAt,
     dice,
     snap,
     toggleSnap,
@@ -359,6 +409,7 @@ export default function App() {
   const dockPanels = yourRole ? dockPanelsForRole(yourRole) : [];
   const sheetPanel = PANELS.find((panel) => panel.id === "sheet")!;
   const settingsPanel = PANELS.find((panel) => panel.id === "settings")!;
+  const itemSheetPanel = PANELS.find((panel) => panel.id === "itemSheet")!;
 
   const toggleSheet = () => {
     if (sheetOpen) {
@@ -426,6 +477,7 @@ export default function App() {
           (isDm ? historySend : room.send)({ type: "MOVE_TOKEN", tokenId, x, y })
         }
         onSelectToken={selectToken}
+        onOpenTokenSheet={openTokenSheet}
         selectedTokenId={selectedTokenId}
         send={isDm ? historySend : room.send}
         subscribeMeasure={room.subscribeMeasure}
@@ -594,6 +646,21 @@ export default function App() {
           </FloatingWindow>
         ) : null}
 
+        {onBoard && isDm && itemSheetOpen ? (
+          <FloatingWindow
+            key={`itemSheet:${layoutEpoch}`}
+            id="itemSheet"
+            title={itemSheetPanel.title(panelContext)}
+            width={itemSheetPanel.width}
+            minWidth={itemSheetPanel.minWidth}
+            minHeight={itemSheetPanel.minHeight}
+            defaultPos={itemSheetPanel.defaultPos}
+            onClose={() => setItemSheetOpen(false)}
+          >
+            {itemSheetPanel.render(panelContext)}
+          </FloatingWindow>
+        ) : null}
+
         {isDm && selectedToken ? (
           <FloatingCluster anchor="bottom-left">
             <TokenEditor
@@ -601,6 +668,7 @@ export default function App() {
               state={state}
               dm={dm}
               openSheet={openSheet}
+              openItemSheet={openItemSheet}
               onClose={() => setSelectedTokenId(null)}
             />
           </FloatingCluster>

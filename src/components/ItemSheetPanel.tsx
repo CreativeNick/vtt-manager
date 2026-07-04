@@ -1,0 +1,177 @@
+import { useRef, useState } from "react";
+import {
+  ITEM_RARITIES,
+  ITEM_TYPES,
+  type ItemRarity,
+  type ItemRecord,
+  type ItemType,
+} from "../lib/types";
+import { uploadTokenImage } from "../lib/uploadAsset";
+
+/// <summary>
+/// Phase 6.7 Item Sheet: a compact editor for a catalog `ItemRecord` — icon, name, type,
+/// rarity, quantity, weight, value, attunement, and description. DM-only (mounted from the
+/// panel registry with roles ["dm"]); edits stream through `onChange` → UPDATE_ITEM.
+/// </summary>
+export function ItemSheetPanel({
+  item,
+  roomId,
+  onChange,
+}: {
+  item: ItemRecord;
+  roomId: string;
+  onChange: (item: ItemRecord) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const patch = (fields: Partial<ItemRecord>) => onChange({ ...item, ...fields });
+
+  const handleIcon = async (file: File) => {
+    setUploading(true);
+    try {
+      const { url } = await uploadTokenImage(roomId, item.id, file);
+      patch({ iconUrl: url });
+    } catch {
+      // Non-fatal: icon stays unchanged.
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace("-", " ");
+
+  return (
+    <div className="panel-body stack">
+      <div className="row" style={{ gap: "0.6rem", alignItems: "flex-start" }}>
+        <div className="item-sheet-icon">
+          {item.iconUrl ? (
+            <img src={item.iconUrl} alt="" />
+          ) : (
+            <span aria-hidden>🎒</span>
+          )}
+        </div>
+        <div className="stack" style={{ flex: 1 }}>
+          <div className="field">
+            <label>Name</label>
+            <input
+              key={item.id + item.name}
+              defaultValue={item.name}
+              onBlur={(e) => patch({ name: e.target.value.trim() || "Item" })}
+            />
+          </div>
+          <div className="row">
+            <button onClick={() => fileRef.current?.click()} disabled={uploading}>
+              {uploading ? "Uploading…" : item.iconUrl ? "Change icon" : "Upload icon"}
+            </button>
+            {item.iconUrl ? (
+              <button className="btn-ghost" onClick={() => patch({ iconUrl: null })}>
+                Clear
+              </button>
+            ) : null}
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleIcon(file);
+                e.target.value = "";
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="row">
+        <div className="field" style={{ flex: 1 }}>
+          <label>Type</label>
+          <select
+            value={item.type ?? ""}
+            onChange={(e) => patch({ type: (e.target.value || undefined) as ItemType | undefined })}
+          >
+            <option value="">—</option>
+            {ITEM_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {titleCase(t)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field" style={{ flex: 1 }}>
+          <label>Rarity</label>
+          <select
+            value={item.rarity ?? ""}
+            onChange={(e) =>
+              patch({ rarity: (e.target.value || undefined) as ItemRarity | undefined })
+            }
+          >
+            <option value="">—</option>
+            {ITEM_RARITIES.map((r) => (
+              <option key={r} value={r}>
+                {titleCase(r)}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="row">
+        <div className="field" style={{ flex: 1 }}>
+          <label>Quantity</label>
+          <input
+            type="number"
+            min={0}
+            key={`q${item.id}${item.quantity ?? ""}`}
+            defaultValue={item.quantity ?? ""}
+            onBlur={(e) =>
+              patch({ quantity: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value) || 0) })
+            }
+          />
+        </div>
+        <div className="field" style={{ flex: 1 }}>
+          <label>Weight (lb)</label>
+          <input
+            type="number"
+            min={0}
+            step={0.1}
+            key={`w${item.id}${item.weight ?? ""}`}
+            defaultValue={item.weight ?? ""}
+            onBlur={(e) =>
+              patch({ weight: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value) || 0) })
+            }
+          />
+        </div>
+        <div className="field" style={{ flex: 1 }}>
+          <label>Value</label>
+          <input
+            key={`v${item.id}${item.value ?? ""}`}
+            defaultValue={item.value ?? ""}
+            placeholder="50 gp"
+            onBlur={(e) => patch({ value: e.target.value.trim() || undefined })}
+          />
+        </div>
+      </div>
+
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <label style={{ margin: 0 }}>Requires attunement</label>
+        <button
+          className={item.attunement ? "btn-active" : ""}
+          onClick={() => patch({ attunement: !item.attunement })}
+        >
+          {item.attunement ? "Yes" : "No"}
+        </button>
+      </div>
+
+      <div className="field">
+        <label>Description</label>
+        <textarea
+          key={`d${item.id}`}
+          defaultValue={item.description}
+          rows={6}
+          onBlur={(e) => patch({ description: e.target.value })}
+        />
+      </div>
+    </div>
+  );
+}

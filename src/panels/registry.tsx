@@ -3,6 +3,7 @@ import { ActorsPanel } from "../components/ActorsPanel";
 import { CharacterSheetPanel } from "../components/CharacterSheet";
 import { InitiativeTracker } from "../components/InitiativeTracker";
 import { ItemsPanel } from "../components/ItemsPanel";
+import { ItemSheetPanel } from "../components/ItemSheetPanel";
 import { LogPanel } from "../components/LogPanel";
 import { NotesPanel } from "../components/NotesPanel";
 import { PartyPanel } from "../components/PartyPanel";
@@ -15,6 +16,7 @@ import type { CharacterSheet, GameState, Role } from "../lib/types";
 
 export type PanelId =
   | "sheet"
+  | "itemSheet"
   | "log"
   | "initiative"
   | "scenes"
@@ -33,12 +35,17 @@ export type PanelContext = {
   /** Which sheet the sheet window is showing (null → own sheet for players). */
   viewSheetId: string | null;
   openSheet: (sheetId: string) => void;
+  /** Which item the Item Sheet window is showing (DM-only). */
+  viewItemId: string | null;
+  openItemSheet: (itemId: string) => void;
   /** Sends UPDATE_SHEET — the server authorizes (DM: any sheet, player: own only). */
   updateSheet: (sheetId: string, sheet: CharacterSheet) => void;
   /** Rolls dice with the DM's secret toggle already applied. */
   rollDice: (expression: string, options?: Omit<RollOptions, "private">) => void;
   /** DM: place a token for a sheet (null → blank) at screen coordinates on the map. */
   dropActorAt: (sheetId: string | null, clientX: number, clientY: number) => void;
+  /** DM: place an "item" token at screen coordinates on the map. */
+  dropItemAt: (itemId: string, clientX: number, clientY: number) => void;
   /** The 3D dice controller (settings: 3D on/off, mute). */
   dice: DiceOverlayController;
   /** Per-client snap-to-grid (shared by the map toolbar 🧲 and settings). */
@@ -138,6 +145,32 @@ export const PANELS: PanelDef[] = [
     },
   },
   {
+    id: "itemSheet",
+    label: "Item",
+    icon: "🎒",
+    dockable: false,
+    roles: ["dm"],
+    title: (ctx) => {
+      const item = ctx.viewItemId ? ctx.state.items[ctx.viewItemId] : null;
+      return item ? item.name || "Item" : "Item";
+    },
+    defaultPos: (vw) => ({ x: Math.max(16, vw - 760), y: 96 }),
+    width: 320,
+    render: (ctx) => {
+      const item = ctx.viewItemId ? ctx.state.items[ctx.viewItemId] : null;
+      if (!item) {
+        return (
+          <div className="panel-body">
+            <span className="muted">Pick an item from the Items tab, or double-click an item token.</span>
+          </div>
+        );
+      }
+      return (
+        <ItemSheetPanel item={item} roomId={ctx.state.roomId} onChange={ctx.dm.updateItem} />
+      );
+    },
+  },
+  {
     id: "log",
     label: "Log",
     icon: "💬",
@@ -213,7 +246,14 @@ export const PANELS: PanelDef[] = [
     title: () => "Items",
     defaultPos: (vw) => ({ x: vw - 392, y: 156 }),
     width: 340,
-    render: (ctx) => <ItemsPanel state={ctx.state} dm={ctx.dm} />,
+    render: (ctx) => (
+      <ItemsPanel
+        state={ctx.state}
+        dm={ctx.dm}
+        openItemSheet={ctx.openItemSheet}
+        dropItemAt={ctx.dropItemAt}
+      />
+    ),
   },
   {
     id: "party",

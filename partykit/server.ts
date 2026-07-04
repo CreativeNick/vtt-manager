@@ -19,6 +19,7 @@ import {
   normalizeItem,
   normalizeScene,
   normalizeToken,
+  normalizeTokenShapeDefaults,
   playerTokenColorForSlot,
   sanitizeAnnotation,
   sanitizeFogReveal,
@@ -1384,9 +1385,29 @@ export default class GameServer implements Party.Server {
         void this.broadcastState();
         break;
       }
+      case "DUPLICATE_ITEM": {
+        const source = this.state.items[parsed.itemId];
+        const newItemId = parsed.newItemId?.trim();
+        if (!source || !newItemId || this.state.items[newItemId]) {
+          this.sendTo(sender, { type: "ERROR", message: "Cannot duplicate that item." });
+          return;
+        }
+        this.state.items[newItemId] = normalizeItem({
+          ...source,
+          id: newItemId,
+          name: `${source.name || "Item"} (copy)`.slice(0, 200),
+        });
+        void this.broadcastState();
+        break;
+      }
       case "DELETE_ITEM": {
         // Sheet inventories keep their name copies, so this is always safe.
         delete this.state.items[parsed.itemId];
+        void this.broadcastState();
+        break;
+      }
+      case "SET_TOKEN_DEFAULTS": {
+        this.state.tokenShapeDefaults = normalizeTokenShapeDefaults(parsed.defaults);
         void this.broadcastState();
         break;
       }

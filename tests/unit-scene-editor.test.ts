@@ -8,7 +8,10 @@ import {
   MAX_LIGHTS,
   MAX_WALLS,
   normalizeGameState,
+  normalizeItem,
   normalizeScene,
+  normalizeToken,
+  normalizeTokenShapeDefaults,
   sanitizeFogReveal,
   type ClientMessage,
   type GameState,
@@ -219,6 +222,55 @@ function check(name: string, ok: boolean, detail = "") {
   check("explicit darkness wins over the boolean", explicit.darkness === 0.35);
   const over = normalizeScene({ id: "o", darkness: 9 } as never);
   check("darkness clamps to [0,1]", over.darkness === 1);
+}
+
+// ---------------------------------------------------------------------------
+// 3c. Phase 6.7 tokens & items: new Token/Item fields + token shape defaults
+// ---------------------------------------------------------------------------
+{
+  const itemTok = normalizeToken({
+    id: "t", sceneId: "s", x: 0, y: 0, label: "Sword", color: "", kind: "item",
+    imageUrl: null, ownerPlayerId: null, sheetId: null, conditions: [], showHp: "none",
+    shape: "hexagon", imageFit: "raw", itemId: "item-1",
+  } as never);
+  check("item token kind kept", itemTok.kind === "item");
+  check("item token has no default vision", itemTok.vision === undefined);
+  check("token shape whitelisted", itemTok.shape === "hexagon");
+  check("token imageFit raw kept", itemTok.imageFit === "raw");
+  check("token itemId kept", itemTok.itemId === "item-1");
+  check("item token default color", itemTok.color === "#8a7a5c");
+
+  const badShape = normalizeToken({
+    id: "t2", sceneId: "s", x: 0, y: 0, label: "x", color: "#fff", kind: "enemy",
+    imageUrl: null, ownerPlayerId: null, sheetId: null, conditions: [], showHp: "none",
+    shape: "blob", imageFit: "weird",
+  } as never);
+  check("invalid shape dropped", badShape.shape === undefined);
+  check("invalid imageFit dropped", badShape.imageFit === undefined);
+
+  const unknownKind = normalizeToken({
+    id: "t3", sceneId: "s", x: 0, y: 0, label: "x", color: "", kind: "bogus",
+    imageUrl: null, ownerPlayerId: "slot-1", sheetId: null, conditions: [], showHp: "none",
+  } as never);
+  check("unknown kind with owner → player", unknownKind.kind === "player");
+
+  const item = normalizeItem({
+    id: "i1", name: "Flametongue", description: "burns", iconUrl: null, folderId: null,
+    type: "weapon", rarity: "rare", quantity: 1, weight: 3, value: "5000 gp", attunement: true,
+  } as never);
+  check("item type/rarity round-trip", item.type === "weapon" && item.rarity === "rare");
+  check("item quantity/weight/value/attunement round-trip",
+    item.quantity === 1 && item.weight === 3 && item.value === "5000 gp" && item.attunement === true);
+  const badItem = normalizeItem({ id: "i2", name: "X", type: "sock", rarity: "shiny", quantity: -5 } as never);
+  check("invalid item type/rarity dropped", badItem.type === undefined && badItem.rarity === undefined);
+  check("negative quantity clamped to 0", badItem.quantity === 0);
+
+  const defs = normalizeTokenShapeDefaults({ player: "square", enemy: "bogus", item: "octagon" });
+  check("token shape defaults: valid kept", defs.player === "square" && defs.item === "octagon");
+  check("token shape defaults: invalid → built-in", defs.enemy === "circle");
+  const emptyDefs = normalizeTokenShapeDefaults(undefined);
+  check("token shape defaults: absent → all built-ins",
+    emptyDefs.player === "circle" && emptyDefs.enemy === "circle" && emptyDefs.item === "diamond");
 }
 
 // ---------------------------------------------------------------------------

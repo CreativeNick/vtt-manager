@@ -162,10 +162,15 @@ export type Scene = {
   lightBlendMode?: LightBlendMode;
 };
 
-export type TokenKind = "player" | "enemy";
+/** Token groups. "item" = a catalog object dropped on the board (Phase 6.7). */
+export type TokenKind = "player" | "enemy" | "item";
 
 /** How a token's HP (from its linked sheet) is shown to players. DM always sees bars. */
 export type TokenHpDisplay = "none" | "bar" | "values";
+
+/** Token silhouette (Phase 6.7). Unset on a token = use the group default. */
+export const TOKEN_SHAPES = ["circle", "square", "diamond", "triangle", "hexagon", "octagon"] as const;
+export type TokenShape = (typeof TOKEN_SHAPES)[number];
 
 export type Token = {
   id: string;
@@ -186,6 +191,20 @@ export type Token = {
   hidden?: boolean;
   /** Phase 6 vision: this token sees in the dark up to `rangeFt` (0 = only lit areas). */
   vision?: TokenVision;
+  /** Silhouette override (Phase 6.7); unset falls back to the group's default shape. */
+  shape?: TokenShape;
+  /** For image tokens: "framed" clips the image in the shape, "raw" shows the bare image. */
+  imageFit?: "framed" | "raw";
+  /** For "item" tokens: the catalog item this represents (double-click → Item Sheet). */
+  itemId?: string | null;
+};
+
+/** Per-group default token shape (Phase 6.7). */
+export type TokenShapeDefaults = { player: TokenShape; enemy: TokenShape; item: TokenShape };
+export const DEFAULT_TOKEN_SHAPES: TokenShapeDefaults = {
+  player: "circle",
+  enemy: "circle",
+  item: "diamond",
 };
 
 export type TokenVision = {
@@ -241,6 +260,27 @@ export type Folder = {
   kind: "actor" | "item";
 };
 
+/** Item Sheet categories & rarities (Phase 6.7). */
+export const ITEM_TYPES = [
+  "weapon",
+  "armor",
+  "consumable",
+  "gear",
+  "treasure",
+  "tool",
+  "wondrous",
+] as const;
+export type ItemType = (typeof ITEM_TYPES)[number];
+export const ITEM_RARITIES = [
+  "common",
+  "uncommon",
+  "rare",
+  "very-rare",
+  "legendary",
+  "artifact",
+] as const;
+export type ItemRarity = (typeof ITEM_RARITIES)[number];
+
 /** A catalog item (DM-side library). Dragging one onto a sheet copies its name. */
 export type ItemRecord = {
   id: string;
@@ -250,6 +290,14 @@ export type ItemRecord = {
   folderId: string | null;
   /** Manual directory ordering (fractional insertion); unset sorts last by name. */
   sortOrder?: number;
+  /** Item Sheet fields (Phase 6.7), all optional for back-compat. */
+  type?: ItemType;
+  rarity?: ItemRarity;
+  quantity?: number;
+  weight?: number;
+  /** Free-form worth, e.g. "5000 gp". */
+  value?: string;
+  attunement?: boolean;
 };
 
 /** One row of a sheet's inventory. `name` is a copy, so catalog deletions are safe. */
@@ -465,6 +513,10 @@ export function normalizeSheetRecord(
 /// Validates a persisted catalog item.
 /// </summary>
 export function normalizeItem(item: Partial<ItemRecord> & { id: string }): ItemRecord {
+  const num = (v: unknown, max: number) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.min(Math.max(v, 0), max) : undefined;
+  const quantity = num(item.quantity, 100000);
+  const weight = num(item.weight, 100000);
   return {
     id: item.id,
     name: typeof item.name === "string" && item.name.trim() ? item.name : "Item",
@@ -474,6 +526,12 @@ export function normalizeItem(item: Partial<ItemRecord> & { id: string }): ItemR
     ...(typeof item.sortOrder === "number" && Number.isFinite(item.sortOrder)
       ? { sortOrder: item.sortOrder }
       : {}),
+    ...(ITEM_TYPES.includes(item.type as ItemType) ? { type: item.type } : {}),
+    ...(ITEM_RARITIES.includes(item.rarity as ItemRarity) ? { rarity: item.rarity } : {}),
+    ...(quantity !== undefined ? { quantity } : {}),
+    ...(weight !== undefined ? { weight } : {}),
+    ...(typeof item.value === "string" && item.value.trim() ? { value: item.value.slice(0, 60) } : {}),
+    ...(item.attunement ? { attunement: true } : {}),
   };
 }
 
@@ -553,6 +611,8 @@ export type GameState = {
   folders: Folder[];
   /** Item catalog (DM-only; sheets copy item names into their inventories). */
   items: Record<string, ItemRecord>;
+  /** Per-group default token shapes (Phase 6.7). */
+  tokenShapeDefaults?: TokenShapeDefaults;
   /**
    * Whether players may use the Draw tool (persistent/scribble annotations). Off by
    * default; the shift-drag pointer arrow is always allowed regardless of this.
@@ -594,7 +654,9 @@ export type ClientMessage =
   | { type: "DELETE_FOLDER"; folderId: string }
   | { type: "CREATE_ITEM"; itemId: string; name: string }
   | { type: "UPDATE_ITEM"; item: ItemRecord }
+  | { type: "DUPLICATE_ITEM"; itemId: string; newItemId: string }
   | { type: "DELETE_ITEM"; itemId: string }
+  | { type: "SET_TOKEN_DEFAULTS"; defaults: TokenShapeDefaults }
   | { type: "UPDATE_DM_NOTES"; notes: string }
   | { type: "IMPORT_CAMPAIGN"; manifest: CampaignManifest }
   | { type: "ADD_PLAYER_SLOT"; name: string }
@@ -705,6 +767,7 @@ export const TOKEN_COLORS = [
 
 export const TOKEN_PLAYER_COLOR = "#c9a227";
 export const TOKEN_ENEMY_COLOR = "#c45c5c";
+export const TOKEN_ITEM_COLOR = "#8a7a5c";
 
 /// <summary>
 /// Returns a distinct token color for a player slot.
@@ -740,16 +803,36 @@ export function syncPlayerTokenFromState(token: Token, state: GameState): Token 
 /// Ensures tokens include kind, image, sheet-link, and combat fields from older
 /// persisted rooms. Unknown condition ids are dropped.
 /// </summary>
+/** Validates the per-group default shapes, falling back per-group to the built-in default. */
+export function normalizeTokenShapeDefaults(value: unknown): TokenShapeDefaults {
+  const v = (value ?? {}) as Partial<TokenShapeDefaults>;
+  const pick = (s: unknown, fallback: TokenShape): TokenShape =>
+    TOKEN_SHAPES.includes(s as TokenShape) ? (s as TokenShape) : fallback;
+  return {
+    player: pick(v.player, DEFAULT_TOKEN_SHAPES.player),
+    enemy: pick(v.enemy, DEFAULT_TOKEN_SHAPES.enemy),
+    item: pick(v.item, DEFAULT_TOKEN_SHAPES.item),
+  };
+}
+
+const TOKEN_KINDS = new Set<TokenKind>(["player", "enemy", "item"]);
+
 export function normalizeToken(token: Token): Token {
-  const kind = token.kind ?? (token.ownerPlayerId ? "player" : "enemy");
+  const kind: TokenKind = TOKEN_KINDS.has(token.kind)
+    ? token.kind
+    : token.ownerPlayerId
+      ? "player"
+      : "enemy";
   // Player-owned tokens default to sight (see lit areas; 0ft darkvision) so a player
   // isn't stranded in the dark the moment the DM turns on dynamic lighting. The DM can
-  // still turn it off or add darkvision per token. Enemies default to no vision.
+  // still turn it off or add darkvision per token. Enemies/items default to no vision.
   const vision = token.vision
     ? sanitizeTokenVision(token.vision)
-    : token.ownerPlayerId
+    : kind === "player"
       ? { enabled: true, rangeFt: 0 }
       : undefined;
+  const defaultColor =
+    kind === "enemy" ? TOKEN_ENEMY_COLOR : kind === "item" ? TOKEN_ITEM_COLOR : TOKEN_PLAYER_COLOR;
   return {
     ...token,
     kind,
@@ -759,9 +842,13 @@ export function normalizeToken(token: Token): Token {
       ? token.conditions.filter((id) => CONDITION_IDS.has(id))
       : [],
     showHp: token.showHp === "bar" || token.showHp === "values" ? token.showHp : "none",
-    color: token.color || (kind === "enemy" ? TOKEN_ENEMY_COLOR : TOKEN_PLAYER_COLOR),
+    color: token.color || defaultColor,
     ...(token.hidden ? { hidden: true } : { hidden: undefined }),
     ...(vision ? { vision } : {}),
+    // Override (not conditional-add) so the spread above can't carry invalid values through.
+    shape: TOKEN_SHAPES.includes(token.shape as TokenShape) ? token.shape : undefined,
+    imageFit: token.imageFit === "raw" ? "raw" : undefined,
+    itemId: typeof token.itemId === "string" ? token.itemId : undefined,
   };
 }
 
@@ -1449,6 +1536,7 @@ export function normalizeGameState(state: GameState & LegacyGameStateFields): Ga
     folders,
     items,
     playersCanDraw: Boolean(state.playersCanDraw),
+    tokenShapeDefaults: normalizeTokenShapeDefaults(state.tokenShapeDefaults),
     tokens: [],
   };
   base.tokens = (state.tokens ?? []).map((token) => {
@@ -1496,5 +1584,6 @@ export function createInitialState(roomId: string): GameState {
     folders: [],
     items: {},
     playersCanDraw: false,
+    tokenShapeDefaults: { ...DEFAULT_TOKEN_SHAPES },
   };
 }

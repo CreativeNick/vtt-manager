@@ -6,6 +6,10 @@ import type { useDmActions } from "../hooks/useGameRoom";
 type ItemsPanelProps = {
   state: GameState;
   dm: ReturnType<typeof useDmActions>;
+  /** Open the full Item Sheet window for an item. */
+  openItemSheet: (itemId: string) => void;
+  /** Place an "item" token on the map (drag an item onto the board). */
+  dropItemAt: (itemId: string, clientX: number, clientY: number) => void;
 };
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -25,7 +29,7 @@ const nextName = (prefix: string, taken: string[]) => {
 /// inline editing, and drag-onto-a-sheet to hand items out (drop on the
 /// Inventory section of any open character sheet).
 /// </summary>
-export function ItemsPanel({ state, dm }: ItemsPanelProps) {
+export function ItemsPanel({ state, dm, openItemSheet, dropItemAt }: ItemsPanelProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const rows: DirectoryRowData[] = Object.values(state.items)
@@ -92,16 +96,39 @@ export function ItemsPanel({ state, dm }: ItemsPanelProps) {
           dm.updateItem({ ...item, folderId, sortOrder });
         }
       }}
-      onExternalDrop={(itemId, element) => dropOnSheet(itemId, element)}
+      onExternalDrop={(itemId, element, x, y) => {
+        // Onto the board → place an item token; onto a sheet's Inventory → hand out a copy.
+        if (element?.closest(".map-root")) {
+          dropItemAt(itemId, x, y);
+        } else {
+          dropOnSheet(itemId, element);
+        }
+      }}
       onRowClick={(itemId) => setExpandedId((current) => (current === itemId ? null : itemId))}
       renderRowActions={(itemId) => (
-        <button
-          className="btn-ghost icon-btn"
-          title="Delete item (sheet inventories keep their copies)"
-          onClick={() => dm.deleteItem(itemId)}
-        >
-          ✕
-        </button>
+        <>
+          <button
+            className="btn-ghost icon-btn"
+            title="Open item sheet"
+            onClick={() => openItemSheet(itemId)}
+          >
+            🪪
+          </button>
+          <button
+            className="btn-ghost icon-btn"
+            title="Duplicate item"
+            onClick={() => dm.duplicateItem(itemId, newId("item"))}
+          >
+            ⧉
+          </button>
+          <button
+            className="btn-ghost icon-btn"
+            title="Delete item (sheet inventories keep their copies)"
+            onClick={() => dm.deleteItem(itemId)}
+          >
+            ✕
+          </button>
+        </>
       )}
       renderExpanded={(itemId) => {
         if (itemId !== expandedId) {

@@ -27,7 +27,7 @@ export function InitiativeTracker({ state, isDm, room, dm, openSheet }: Initiati
       );
     }
     const sceneTokenIds = state.tokens
-      .filter((token) => token.sceneId === state.activeSceneId)
+      .filter((token) => token.sceneId === state.activeSceneId && token.kind !== "item")
       .map((token) => token.id);
     return (
       <div className="panel-body stack">
