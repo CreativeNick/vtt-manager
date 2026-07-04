@@ -39,6 +39,13 @@ type MapToolbarProps = {
   /** Phase 6 dynamic vision (walls/lights tools). */
   globalIllumination: boolean;
   onToggleGlobalIllumination: () => void;
+  /** Phase 6.6: ambient darkness 0..1 (slider value, incl. the DM's live drag draft). */
+  darkness: number;
+  onDarknessInput: (value: number) => void;
+  onDarknessCommit: (value: number) => void;
+  /** Phase 6.6: per-frame light animations (client toggle / low-end escape hatch). */
+  lightAnimations: boolean;
+  onToggleLightAnimations: () => void;
   visionPreview: boolean;
   onToggleVisionPreview: () => void;
   wallKind: "wall" | "door";
@@ -116,6 +123,11 @@ export function MapToolbar({
   onTogglePlayersCanDraw,
   globalIllumination,
   onToggleGlobalIllumination,
+  darkness,
+  onDarknessInput,
+  onDarknessCommit,
+  lightAnimations,
+  onToggleLightAnimations,
   visionPreview,
   onToggleVisionPreview,
   wallKind,
@@ -158,6 +170,40 @@ export function MapToolbar({
           No vision tokens: players see nothing. Give a token vision — lit areas show here as
           a glow.
         </span>
+      ) : null}
+      {!globalIllumination ? (
+        <>
+          <Label>Darkness ({Math.round(darkness * 100)}%)</Label>
+          <Row>
+            <OptBtn title="Transition to full daylight" onClick={() => onDarknessCommit(0)}>
+              ☀
+            </OptBtn>
+            <input
+              className="map-darkness-slider"
+              type="range"
+              min={0}
+              max={1}
+              step={0.02}
+              value={darkness}
+              title="Ambient darkness — drag for day↔night"
+              onChange={(e) => onDarknessInput(Number(e.target.value))}
+              onPointerUp={(e) => onDarknessCommit(Number((e.target as HTMLInputElement).value))}
+              onBlur={(e) => onDarknessCommit(Number(e.target.value))}
+            />
+            <OptBtn title="Transition to full darkness" onClick={() => onDarknessCommit(1)}>
+              🌙
+            </OptBtn>
+          </Row>
+          <Row>
+            <OptBtn
+              active={lightAnimations}
+              title="Animate flickering/pulsing lights (turn off on low-end machines)"
+              onClick={onToggleLightAnimations}
+            >
+              ✨ Animations {lightAnimations ? "on" : "off"}
+            </OptBtn>
+          </Row>
+        </>
       ) : null}
     </>
   );
@@ -383,7 +429,7 @@ export function MapToolbar({
             </OptBtn>
           </Row>
           <span className="map-toolbar-hint">
-            Click to place · drag a light to move · right-click to delete
+            Click to place · drag to move · double-click to edit · right-click to delete
           </span>
         </div>
       ) : null}

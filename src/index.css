@@ -136,6 +136,23 @@ label {
   font-family: var(--font-display);
 }
 
+/* Phase 6.6: per-light config panel — floats over the map, clear of the left toolbar. */
+.map-light-config {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+}
+
+/* Phase 6.6: darkness day↔night slider in the lighting toolbar. */
+.map-darkness-slider {
+  flex: 1;
+  min-width: 90px;
+  accent-color: #ffd166;
+}
+
 /* --- Floating overlay + clusters ----------------------------------------- */
 .overlay {
   position: fixed;

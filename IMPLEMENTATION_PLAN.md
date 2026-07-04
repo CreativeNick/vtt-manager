@@ -17,7 +17,9 @@ round ✅ (pulled the fog brush + scenes-editor depth forward from 7; also Playe
 Phase 7). Each shipped phase below carries an "as built" note where reality diverged from
 the original spec — trust those notes over the older prose. Phase 6 shipped a focused v1;
 its "as built" note lists the deferred stretches (server-side LOS redaction, dim/bright
-shading, light shadows, directional cones, low-spec mode).
+shading, light shadows, directional cones, low-spec mode). **Phase 6.6 (SHIPPED)** then took
+the lighting revamp: gradual falloff, colored/animated/directional lights, a per-light config
+panel, and a continuous 0–1 darkness level with day↔night transitions.
 
 - **Verification:** `tests/` holds the WS smoke suites + unit tests with a README on how
   to run them (partykit dev server + `node tests/smoke-*.mjs`). All pass as of this date
@@ -89,7 +91,7 @@ shading, light shadows, directional cones, low-spec mode).
 | DM grid size change | 5 ✅ — calibration gesture + numeric inputs |
 | Measure distance | 5 ✅ — synced ruler, Chebyshev feet |
 | Annotations | 5 ✅ — freehand draw; DM persists, players fade |
-| Walls, lights, vision (+directional) | 6 ✅ (v1: walls/doors/lights + LOS mask; directional cones deferred to 7 with token facing) |
+| Walls, lights, vision (+directional) | 6 ✅ (v1: walls/doors/lights + LOS mask) · 6.6 ✅ (gradual falloff, color, animation, directional wedges, darkness 0–1 + day/night) |
 | Soundboard (idea) | 9 |
 | Custom CSS themes (idea) | 9 (enabled by 0; themed after 8) |
 | Actors/Items directories, folders, inventory *(added via UX feedback)* | 1–2 (shipped: `Directory`, folders, `sortOrder`, sheet inventory) |
@@ -800,6 +802,11 @@ every edge/corner, maximize/restore, and a wide sheet window goes multi-column;
 >   explored-area memory, and directional cones (`Token.facing` lands with the Phase 7
 >   token-rotation work and will clip the LOS to a wedge then). Door toggle is DM-only for
 >   now (players opening doors is a later nicety).
+>
+> **Phase 6.6 update:** dim/bright two-level shading, directional cones (as per-light emission
+> wedges, independent of token facing), and a low-spec animation toggle are now DONE — see the
+> Phase 6.6 section below. Still deferred: server-side LOS redaction and lights casting their
+> own shadows (a light's reach is still gated by the *viewer's* LOS, not the light's own walls).
 
 **Data model:**
 ```ts
@@ -913,13 +920,20 @@ within range only; (if built) LOS redaction verified at WS-frame level.
 >   with it on (default), the whole scene is already lit. Order: Lights tool → 🌙 Dynamic →
 >   place lights (dimmed pools appear immediately for the DM); add a player token with
 >   vision + 👁 Preview to check the LOS-gated player view.
-> - **Player tokens default to vision** (`normalizeToken`: `ownerPlayerId` set + no explicit
->   vision → `{enabled:true, rangeFt:0}`) so a player isn't stranded in black the instant the
->   DM turns on dynamic lighting — they see lit areas within their token's line of sight
->   automatically; the DM still overrides (off / add darkvision) per token. Enemies default
->   to no vision. Applied client-side on every STATE receive, so existing player tokens gain
->   it too. (Was the root cause of "player view is completely black" — the player's token had
->   no vision.)
+> - **"Player view is completely black" bug — issue & fix.**
+>   *Issue:* the DM sets up lights + dynamic lighting, the DM's own lighting overview looks
+>   right, but a real player in another tab sees an all-black map.
+>   *Cause:* the vision mask is LOS-gated — it only reveals inside the viewer's *own*
+>   vision-enabled tokens. New player tokens were created with **no** vision, so a player's
+>   token contributed no reveals → the whole scene stayed black for them. (Nothing was
+>   actually broken in the renderer; the token simply had no eyes.)
+>   *Fix:* `normalizeToken` now **defaults player-owned tokens** (`ownerPlayerId` set + no
+>   explicit vision) to `{enabled:true, rangeFt:0}` — they see lit areas within their line of
+>   sight automatically the moment dynamic lighting turns on. Enemies still default to no
+>   vision; the DM can still override per token (turn off, or add darkvision range). It's
+>   applied client-side on every STATE receive, so **existing** player tokens gain it too
+>   (just reload the player tab). Verified by `smoke-phase6` (player token defaults to
+>   vision-enabled, then an explicit range overrides it).
 > - **Clicking an existing light/wall no longer places a new one** — markers are tagged
 >   `name="map-handle"` and the stage `onPointerDown` skips the active tool when the target
 >   is a handle, so a click drags the light / toggles the door instead.
@@ -1010,6 +1024,58 @@ new `tests/smoke-scenes.mjs` (player frames contain exactly the active scene, br
 round-trip + DM-only, Apply-path full-scene UPDATE_SCENE); re-run ALL suites (redaction
 changed); two-window manual — brush feel, editor pan/zoom independence, Live-ON instant /
 Live-OFF staged edits, Set Live flow, hotkey isolation, Players tabs.
+
+---
+
+## Phase 6.6 — Lighting revamp: gradual falloff, color, animation, directional, darkness level — ✅ SHIPPED
+
+> **As built (2026-07-03):** Foundry-inspired lighting upgrade, machine-verified
+> (`unit-scene-editor.test.ts` 38/38 incl. 13 new lighting checks; `smoke-phase6.mjs` +
+> `smoke-scenes.mjs` green; `npm run build` passes). Motivation: Phase 6 lights were hard-edged
+> black circles (only `dimR` used, `color`/`brightR` ignored, scene darkness a binary toggle).
+> The user asked for a smooth light→dark transition plus the surrounding feature set, with two
+> constraints: cheap on low-end machines, and no hit to the Cloudflare R2 10 GB image budget.
+>
+> - **Data model (`src/lib/types.ts`):** `Light` gained optional `colorIntensity`, `angle`
+>   (emission°, default 360), `rotation`, `gradual` (falloff on/off), and `animation`
+>   (`{ type: "none"|"flicker"|"pulse"; speed; intensity }`) — all optional, so existing lights &
+>   saved state stay valid. `Scene` gained `darkness` (0 day … 1 dark), migrated from the legacy
+>   `globalIllumination` boolean (`true→0`, `false→1`) in `normalizeScene`. `sanitizeLight`
+>   clamps/whitelists the new fields; a new `sanitizeLightAnimation` helper validates the block.
+>   **No new server messages** — `UPDATE_LIGHT`/`UPDATE_SCENE` already re-sanitize + broadcast, and
+>   the client mirror (`sceneMessages.ts`) reuses the same sanitizers, so fields flow through
+>   untouched.
+> - **Rendering (`src/components/MapVision.tsx`):** the `destination-out` reveals are now **radial
+>   gradients** (`radialFill` + `eraseStops`) — fully lit through `brightR`, smooth ramp to dark at
+>   `dimR` (Foundry "Gradual Illumination"); `gradual:false` restores a hard edge. Colored lights
+>   add a second `"lighter"` tint pass (`tintStops`) — only colored lights pay. Directed lights
+>   (`angle < 360`) render a `Konva.Wedge` instead of a `Circle`, same gradient. Scene darkness
+>   drives an ambient reveal *inside each viewer's LOS clip* (so token-hiding outside LOS is
+>   preserved at any darkness) and the DM overlay's dim opacity.
+> - **Animation:** an internal `useAnimationClock` ticks ~30 fps **only** while an enabled animated
+>   light exists AND `prefers-reduced-motion` is off AND the client toggle is on. Per frame only the
+>   gradient radius/alpha vary (`animModulation`) — the expensive `computeVisibility` sweep stays
+>   memoized on `(pos, walls)` and never re-runs, so animation is cheap. The day↔night transition is
+>   a client-side `useEased` tween in `MapCanvas` toward the committed `scene.darkness` (one
+>   `UPDATE_SCENE`, everyone eases — no server spam).
+> - **UX:** double-click a light marker → `LightConfigPanel` (radii, color+intensity, angle+rotation,
+>   gradual, animation, delete). Hovering a marker shows a Konva tooltip
+>   ("Dbl-click: edit · R-click: delete · drag: move") — right-click stays delete, now discoverable.
+>   Editor rings become wedges for directed lights and tint to the light's color. The lights toolbar
+>   gained a **darkness slider + ☀/🌙 day/night buttons** and an **✨ Animations on/off** toggle
+>   (persisted via `localFlags`, the low-end escape hatch). Presets seed atmosphere (torch/candle =
+>   warm + flicker, lantern = steady neutral).
+> - **Cost:** lights are procedural — state grew a few floats/strings per light (≤50/scene), a few KB
+>   worst case, in Durable Object storage. **Zero R2 impact** (R2 holds only uploaded images; no baked
+>   lightmaps). Low-end: reduced-motion honoured, animations toggleable, no extra LOS sweeps.
+>
+> **Files:** `src/lib/types.ts`, `src/components/MapVision.tsx`, `src/components/MapCanvas.tsx`,
+> `src/components/MapToolbar.tsx`, **new** `src/components/LightConfigPanel.tsx`,
+> `src/map/tools/{lights.tsx,types.ts}`, `src/index.css`, `tests/unit-scene-editor.test.ts`.
+
+**Still deferred (into Phase 7+):** lights casting their *own* wall shadows (reach is gated by the
+viewer's LOS, not the light's), server-side LOS redaction, "is darkness source" negative lights, and
+the richer color-blending/coloration techniques Foundry offers.
 
 ---
 

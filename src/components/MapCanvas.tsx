@@ -26,6 +26,8 @@ import type { ToolPointerEvent, ToolRuntime } from "../map/tools/types";
 import { MapToolbar } from "./MapToolbar";
 import { FogLayer } from "./MapFog";
 import { DmLightingOverlay, VisionMaskLayer, WallsLightsEditor } from "./MapVision";
+import { LightConfigPanel } from "./LightConfigPanel";
+import { readLocalFlag, writeLocalFlag } from "../lib/localFlags";
 import {
   annotationOpacity,
   annotationPathLength,
@@ -39,6 +41,42 @@ import {
 
 /** The classic pointer-arrow palette (dark outline + cream fill), from the v1 system. */
 const ARROW_COLOR = "#f0e6d2";
+
+/** A scene's effective darkness 0..1, migrating the legacy `globalIllumination` boolean. */
+function sceneDarkness(scene: { darkness?: number; globalIllumination: boolean }): number {
+  if (scene.darkness !== undefined) return Math.min(Math.max(scene.darkness, 0), 1);
+  return scene.globalIllumination ? 0 : 1;
+}
+
+/**
+ * Eases a displayed value toward `target`, scheduling frames only while they differ — so a
+ * settled value costs nothing. Drives the smooth day↔night darkness transition for everyone.
+ */
+function useEased(target: number, rate = 2.5): number {
+  const [value, setValue] = useState(target);
+  const valueRef = useRef(target);
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    const loop = () => {
+      const now = performance.now();
+      const dt = (now - last) / 1000;
+      last = now;
+      const diff = target - valueRef.current;
+      if (Math.abs(diff) < 0.002) {
+        valueRef.current = target;
+        setValue(target);
+        return;
+      }
+      valueRef.current += diff * Math.min(1, rate * dt);
+      setValue(valueRef.current);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [target, rate]);
+  return value;
+}
 
 /** One remote client's live ruler, kept until cleared or stale (~2.5s). */
 type RemoteRuler = {
@@ -340,6 +378,7 @@ export function MapCanvas({
     (id: string) => send({ type: "REMOVE_LIGHT", sceneId, lightId: id }),
     [send, sceneId],
   );
+  const onConfigureLight = useCallback((light: Light) => setEditingLightId(light.id), []);
 
   const canControlView = Boolean(onViewportChange);
   const placing = Boolean(onPlaceToken);
@@ -357,11 +396,45 @@ export function MapCanvas({
   const [wallKind, setWallKind] = useState<"wall" | "door">("wall");
   /** Lights tool: which preset a freshly placed light uses. */
   const [lightPreset, setLightPreset] = useState<LightPreset>("torch");
+  /** Which light's config panel is open (double-click a light marker). */
+  const [editingLightId, setEditingLightId] = useState<string | null>(null);
+  /** DM-local darkness while dragging the slider (before it's committed to the scene). */
+  const [darknessDraft, setDarknessDraft] = useState<number | null>(null);
+  /** Client toggle: run per-frame light animations (off = low-end escape hatch). */
+  const [lightAnimations, setLightAnimations] = useState(() =>
+    readLocalFlag("lightAnimations", true),
+  );
   /** DM-only: preview dynamic vision as a player would see it. */
   const [visionPreview, setVisionPreview] = useState(false);
   const [rulers, setRulers] = useState<Record<string, RemoteRuler>>({});
   /** Active middle-mouse pan: pointer start + the viewport frozen at press. */
   const panRef = useRef<{ x: number; y: number; vp: Viewport } | null>(null);
+
+  // ---- Ambient darkness 0..1 + smooth day↔night tween (Phase 6.6) ----
+  const committedDarkness = scene ? sceneDarkness(scene) : 0;
+  const sliderDarkness = darknessDraft ?? committedDarkness;
+  const displayDarkness = useEased(sliderDarkness);
+  // Drop the DM's local draft once the committed value catches up (post round-trip).
+  useEffect(() => {
+    if (darknessDraft !== null && Math.abs(committedDarkness - darknessDraft) < 0.005) {
+      setDarknessDraft(null);
+    }
+  }, [committedDarkness, darknessDraft]);
+  const commitDarkness = useCallback(
+    (value: number) => {
+      if (!scene) return;
+      const darknessLevel = Math.min(Math.max(value, 0), 1);
+      setDarknessDraft(darknessLevel);
+      send({ type: "UPDATE_SCENE", scene: { ...scene, darkness: darknessLevel } });
+    },
+    [send, scene],
+  );
+  const toggleLightAnimations = useCallback(() => {
+    setLightAnimations((on) => {
+      writeLocalFlag("lightAnimations", !on);
+      return !on;
+    });
+  }, []);
 
   // ---- Shift-drag pointer arrow (always available; fades ~10s, like v1) ----
   const [shiftHeld, setShiftHeld] = useState(false);
@@ -764,6 +837,9 @@ export function MapCanvas({
   const dmLightingActive = dark && isDm && !visionPreview;
   const sceneVisionTokens = sceneTokens.filter((token) => token.vision?.enabled);
   const hasVisionTokens = sceneVisionTokens.length > 0;
+  const editingLight = editingLightId
+    ? scene.lights.find((l) => l.id === editingLightId) ?? null
+    : null;
 
   const emitViewportFromStage = () => {
     const stage = stageRef.current;
@@ -947,12 +1023,24 @@ export function MapCanvas({
         {/* Dynamic vision: a darkness sheet above tokens (also hides tokens in the dark),
             erased inside each viewer token's line of sight where light/darkvision reach. */}
         {maskActive ? (
-          <VisionMaskLayer scene={scene} tokens={viewerVisionTokens} ftToPx={ftToPx} />
+          <VisionMaskLayer
+            scene={scene}
+            tokens={viewerVisionTokens}
+            ftToPx={ftToPx}
+            darkness={displayDarkness}
+            animationsEnabled={lightAnimations}
+          />
         ) : null}
 
         {/* DM dynamic-lighting overview: dimmed map with lit pools cut bright. */}
         {dmLightingActive ? (
-          <DmLightingOverlay scene={scene} tokens={sceneVisionTokens} ftToPx={ftToPx} />
+          <DmLightingOverlay
+            scene={scene}
+            tokens={sceneVisionTokens}
+            ftToPx={ftToPx}
+            darkness={displayDarkness}
+            animationsEnabled={lightAnimations}
+          />
         ) : null}
 
         {/* DM wall/door lines + light markers; interactive only with the matching tool. */}
@@ -966,6 +1054,7 @@ export function MapCanvas({
             onToggleDoor={onToggleDoor}
             onMoveLight={onMoveLight}
             onDeleteLight={onDeleteLight}
+            onConfigureLight={onConfigureLight}
           />
         ) : null}
 
@@ -1030,9 +1119,20 @@ export function MapCanvas({
           send({ type: "SET_PLAYERS_CAN_DRAW", enabled: !playersCanDraw })
         }
         globalIllumination={scene.globalIllumination}
-        onToggleGlobalIllumination={() =>
-          send({ type: "UPDATE_SCENE", scene: { ...scene, globalIllumination: !scene.globalIllumination } })
-        }
+        onToggleGlobalIllumination={() => {
+          const next = !scene.globalIllumination;
+          // Toggling the master switch snaps darkness to the matching extreme (🌙 Dynamic =
+          // fully dark, ☀ Fully lit = day); the slider then fine-tunes within dynamic mode.
+          send({
+            type: "UPDATE_SCENE",
+            scene: { ...scene, globalIllumination: next, darkness: next ? 0 : 1 },
+          });
+        }}
+        darkness={sliderDarkness}
+        onDarknessInput={setDarknessDraft}
+        onDarknessCommit={commitDarkness}
+        lightAnimations={lightAnimations}
+        onToggleLightAnimations={toggleLightAnimations}
         visionPreview={visionPreview}
         onToggleVisionPreview={() => setVisionPreview((v) => !v)}
         wallKind={wallKind}
@@ -1046,6 +1146,17 @@ export function MapCanvas({
         hasVisionTokens={hasVisionTokens}
         history={history}
       />
+
+      {isDm && editingLight ? (
+        <div className="map-light-config">
+          <LightConfigPanel
+            light={editingLight}
+            onChange={onMoveLight}
+            onDelete={() => onDeleteLight(editingLight.id)}
+            onClose={() => setEditingLightId(null)}
+          />
+        </div>
+      ) : null}
 
       {!scene.mapUrl ? <div className="map-empty">No map image for “{scene.name}”</div> : null}
     </div>

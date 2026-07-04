@@ -168,6 +168,53 @@ function check(name: string, ok: boolean, detail = "") {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. Phase 6.6 lighting: new light fields round-trip/clamp + scene darkness migration
+// ---------------------------------------------------------------------------
+{
+  const scene: Scene = normalizeScene({ id: "lit" });
+  const added = applySceneMessage(scene, {
+    type: "ADD_LIGHT",
+    sceneId: "lit",
+    light: {
+      id: "L", x: 0, y: 0, brightR: 10, dimR: 20, enabled: true,
+      color: "#ff9900", colorIntensity: 0.7, angle: 90, rotation: 45, gradual: false,
+      animation: { type: "flicker", speed: 2, intensity: 0.8 },
+    } as never,
+  });
+  const light = added.lights.find((l) => l.id === "L");
+  check("light color/intensity/angle/rotation round-trip",
+    light?.color === "#ff9900" && light?.colorIntensity === 0.7 && light?.angle === 90 && light?.rotation === 45);
+  check("light gradual=false round-trips", light?.gradual === false);
+  check("light animation round-trips",
+    light?.animation?.type === "flicker" && light?.animation?.speed === 2 && light?.animation?.intensity === 0.8);
+
+  const clamped = applySceneMessage(scene, {
+    type: "ADD_LIGHT",
+    sceneId: "lit",
+    light: {
+      id: "C", x: 0, y: 0, brightR: 10, dimR: 20, enabled: true,
+      colorIntensity: 5, angle: 999, rotation: -30,
+      animation: { type: "bogus", speed: 99, intensity: 9 },
+    } as never,
+  });
+  const c = clamped.lights.find((l) => l.id === "C");
+  check("colorIntensity clamps to 1", c?.colorIntensity === 1);
+  check("angle clamps to 360", c?.angle === 360);
+  check("rotation wraps into [0,360)", c?.rotation === 330);
+  check("unknown animation type falls back to none", c?.animation?.type === "none");
+  check("animation speed clamps to 10", c?.animation?.speed === 10);
+
+  const day = normalizeScene({ id: "d", globalIllumination: true });
+  check("globalIllumination true → darkness 0", day.darkness === 0);
+  const night = normalizeScene({ id: "n", globalIllumination: false });
+  check("globalIllumination false → darkness 1", night.darkness === 1);
+  const explicit = normalizeScene({ id: "e", globalIllumination: false, darkness: 0.35 } as never);
+  check("explicit darkness wins over the boolean", explicit.darkness === 0.35);
+  const over = normalizeScene({ id: "o", darkness: 9 } as never);
+  check("darkness clamps to [0,1]", over.darkness === 1);
+}
+
+// ---------------------------------------------------------------------------
 // 4. Redaction: players receive only the active scene + its tokens
 // ---------------------------------------------------------------------------
 {

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { ClientMessage, Scene } from "../../lib/types";
+import type { ClientMessage, Light, Scene } from "../../lib/types";
 
 /// <summary>
 /// The plug-in interface every map tool implements (Phase 5 architecture; Phase 6
@@ -35,8 +35,8 @@ export type ToolRuntime = {
   fogBrushR: number;
   /** Walls tool: what a plain drag draws (Shift always forces the other kind). */
   wallKind: "wall" | "door";
-  /** Lights tool: radii (feet) a freshly placed light gets, from the chosen preset. */
-  lightRadii: { brightR: number; dimR: number };
+  /** Lights tool: the preset a freshly placed light gets (radii in feet + Phase 6.6 style). */
+  lightRadii: Omit<Light, "id" | "x" | "y" | "enabled">;
 };
 
 export type MapTool = {

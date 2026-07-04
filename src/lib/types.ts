@@ -62,6 +62,15 @@ export type Wall = {
   open?: boolean;
 };
 
+/** Per-light animation (Phase 6.6). Only runs while the light is enabled + type !== "none". */
+export type LightAnimation = {
+  type: "none" | "flicker" | "pulse";
+  /** Cycle speed multiplier (0 = frozen). Default 1. */
+  speed?: number;
+  /** How pronounced the effect is (0..1). Default 0.5. */
+  intensity?: number;
+};
+
 /** A light source. Radii are in FEET (converted to world px via the scene grid). */
 export type Light = {
   id: string;
@@ -73,6 +82,15 @@ export type Light = {
   dimR: number;
   color?: string;
   enabled: boolean;
+  /** Strength of the color tint (0..1). Default 0.5. Only used when `color` is set. */
+  colorIntensity?: number;
+  /** Emission angle in degrees (default 360 = full circle). <360 makes a directed wedge. */
+  angle?: number;
+  /** Rotation of the emission wedge, degrees (default 0). Only visible when angle < 360. */
+  rotation?: number;
+  /** Gradual illumination: smooth bright→dim→dark falloff (default true). Off = hard edge. */
+  gradual?: boolean;
+  animation?: LightAnimation;
 };
 
 export const MAX_SCENE_ANNOTATIONS = 200;
@@ -119,6 +137,11 @@ export type Scene = {
   lights: Light[];
   /** When true (default), the scene is lit everywhere — the vision pass is skipped. */
   globalIllumination: boolean;
+  /**
+   * Ambient darkness level, 0 (full day) … 1 (full dark). Phase 6.6. Drives the darkness
+   * overlay opacity when dynamic lighting is on. Migrated from `globalIllumination` when absent.
+   */
+  darkness?: number;
 };
 
 export type TokenKind = "player" | "enemy";
@@ -1216,6 +1239,30 @@ export function sanitizeLight(light: unknown): Light | null {
     dimR,
     ...(typeof l.color === "string" ? { color: l.color.slice(0, 32) } : {}),
     enabled: l.enabled !== false,
+    ...(l.colorIntensity !== undefined
+      ? { colorIntensity: Math.min(Math.max(numberOr(l.colorIntensity, 0.5), 0), 1) }
+      : {}),
+    ...(l.angle !== undefined
+      ? { angle: Math.min(Math.max(numberOr(l.angle, 360), 0), 360) }
+      : {}),
+    ...(l.rotation !== undefined
+      ? { rotation: ((numberOr(l.rotation, 0) % 360) + 360) % 360 }
+      : {}),
+    ...(l.gradual !== undefined ? { gradual: l.gradual !== false } : {}),
+    ...(l.animation && typeof l.animation === "object"
+      ? { animation: sanitizeLightAnimation(l.animation) }
+      : {}),
+  };
+}
+
+/// <summary>Validates a light's animation block (Phase 6.6).</summary>
+function sanitizeLightAnimation(anim: Partial<LightAnimation>): LightAnimation {
+  const type =
+    anim.type === "flicker" || anim.type === "pulse" ? anim.type : "none";
+  return {
+    type,
+    speed: Math.min(Math.max(numberOr(anim.speed, 1), 0), 10),
+    intensity: Math.min(Math.max(numberOr(anim.intensity, 0.5), 0), 1),
   };
 }
 
@@ -1287,6 +1334,13 @@ export function normalizeScene(scene: Partial<Scene> & Record<string, unknown>):
     lights,
     // Default ON so existing scenes stay fully lit until the DM opts into dynamic vision.
     globalIllumination: scene.globalIllumination !== false,
+    // Ambient darkness 0..1. Migrate from the legacy boolean when absent: lit → 0, dark → 1.
+    darkness:
+      scene.darkness !== undefined
+        ? Math.min(Math.max(numberOr(scene.darkness, 0), 0), 1)
+        : scene.globalIllumination === false
+          ? 1
+          : 0,
   };
 }
 
