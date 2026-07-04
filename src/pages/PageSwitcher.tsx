@@ -1,4 +1,4 @@
-export type PageId = "board" | "players" | "npcs" | "items" | "scenes";
+export type PageId = "board" | "players" | "npcs" | "items" | "scenes" | "assets";
 
 export const DM_PAGES: Array<{ id: PageId; label: string }> = [
   { id: "board", label: "Board" },
@@ -6,6 +6,7 @@ export const DM_PAGES: Array<{ id: PageId; label: string }> = [
   { id: "npcs", label: "NPCs" },
   { id: "items", label: "Items" },
   { id: "scenes", label: "Scenes" },
+  { id: "assets", label: "Assets" },
 ];
 
 /// <summary>

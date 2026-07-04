@@ -12,7 +12,8 @@ import { SettingsPanel } from "../components/SettingsPanel";
 import type { WindowPos } from "../components/FloatingWindow";
 import type { DiceOverlayController } from "../dice/useDiceOverlay";
 import type { GameRoom, RollOptions, useDmActions } from "../hooks/useGameRoom";
-import type { CharacterSheet, GameState, Role } from "../lib/types";
+import type { CharacterSheet, CheckSpec, GameState, Role } from "../lib/types";
+import { buildConditionsControl } from "../components/sheet/conditionsControl";
 
 export type PanelId =
   | "sheet"
@@ -42,6 +43,8 @@ export type PanelContext = {
   updateSheet: (sheetId: string, sheet: CharacterSheet) => void;
   /** Rolls dice with the DM's secret toggle already applied. */
   rollDice: (expression: string, options?: Omit<RollOptions, "private">) => void;
+  /** Rolls a structured sheet check (server resolves the parts), secret toggle applied. */
+  rollCheck: (sheetId: string, check: CheckSpec, adv?: "adv" | "dis") => void;
   /** DM: place a token for a sheet (null → blank) at screen coordinates on the map. */
   dropActorAt: (sheetId: string | null, clientX: number, clientY: number) => void;
   /** DM: place an "item" token at screen coordinates on the map. */
@@ -84,6 +87,7 @@ function resolveSheetId(ctx: PanelContext): string | null {
   return ctx.viewSheetId ?? (ctx.isDm ? null : ctx.room.yourPlayerId);
 }
 
+
 /// <summary>
 /// The panel registry. The dock renders tabs and App renders pop-out windows
 /// from this list generically — adding a panel is one entry here plus its
@@ -105,7 +109,9 @@ export const PANELS: PanelDef[] = [
       return record.data.characterName || (record.redacted ? "???" : "Character");
     },
     defaultPos: (vw) => ({ x: Math.max(16, vw - 760), y: 60 }),
-    width: 360,
+    width: 560,
+    minWidth: 420,
+    minHeight: 480,
     render: (ctx) => {
       const sheetId = resolveSheetId(ctx);
       if (!sheetId) {
@@ -131,15 +137,9 @@ export const PANELS: PanelDef[] = [
               ? (section, revealed) => ctx.dm.setSheetReveal(sheetId, section, revealed)
               : undefined
           }
-          onRoll={
-            canEdit
-              ? (label, modifier, adv) =>
-                  ctx.rollDice(`1d20${modifier >= 0 ? `+${modifier}` : modifier}`, {
-                    context: { sheetId, label },
-                    adv,
-                  })
-              : undefined
-          }
+          onRollCheck={canEdit ? (check, adv) => ctx.rollCheck(sheetId, check, adv) : undefined}
+          onRest={canEdit ? (kind) => ctx.room.send({ type: "REST", sheetId, kind }) : undefined}
+          conditions={buildConditionsControl(ctx.state.tokens, sheetId, canEdit, ctx.room.send)}
         />
       );
     },

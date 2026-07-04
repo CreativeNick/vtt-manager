@@ -231,6 +231,36 @@ export function DiceTray({
           ↩
         </button>
 
+        {(() => {
+          const count = controller.selection[2] ?? 0;
+          return (
+            <button
+              key="coin"
+              className={`die-btn die-btn--coin${count > 0 ? " die-btn--sel" : ""}`}
+              title={
+                controller.enabled
+                  ? "Coin — click to ready it (right-click puts it back), then drag it out of the tray to flip"
+                  : "Coin flip"
+              }
+              onClick={() => {
+                if (controller.enabled) {
+                  controller.adjustSelection(2, 1);
+                } else {
+                  textRoll("1d2");
+                }
+              }}
+              onContextMenu={(event) => {
+                if (controller.enabled) {
+                  event.preventDefault();
+                  controller.adjustSelection(2, -1);
+                }
+              }}
+            >
+              🪙
+              {count > 0 ? <span className="die-count">{count}</span> : null}
+            </button>
+          );
+        })()}
         {DICE_QUICK_SIDES.map((sides) => {
           const count = controller.selection[sides] ?? 0;
           return (

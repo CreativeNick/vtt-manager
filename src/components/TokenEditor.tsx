@@ -11,6 +11,7 @@ import {
 } from "../lib/types";
 import { uploadTokenImage } from "../lib/uploadAsset";
 import type { useDmActions } from "../hooks/useGameRoom";
+import { HpStepper } from "./HpStepper";
 
 type TokenEditorProps = {
   token: Token;
@@ -153,6 +154,33 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
         </div>
 
         <div className="field">
+          <label>Facing</label>
+          <div className="row">
+            <input
+              type="range"
+              min={0}
+              max={359}
+              step={15}
+              value={token.facing ?? 0}
+              onChange={(e) => dm.updateToken({ ...token, facing: Number(e.target.value) })}
+              aria-label="Facing degrees"
+            />
+            <span className="muted" style={{ minWidth: "3rem", textAlign: "right" }}>
+              {token.facing === undefined ? "—" : `${Math.round(token.facing)}°`}
+            </span>
+            {token.facing !== undefined ? (
+              <button
+                className="btn-ghost"
+                title="Clear facing arrow"
+                onClick={() => dm.updateToken({ ...token, facing: undefined })}
+              >
+                ✕
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="field">
           <label>Token image</label>
           <div className="row">
             <button onClick={() => fileRef.current?.click()} disabled={uploading}>
@@ -242,6 +270,16 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
                 </div>
               </div>
             )}
+            {token.sheetId && state.sheets[token.sheetId] ? (
+              <div className="field">
+                <label>Hit Points</label>
+                <HpStepper
+                  hp={state.sheets[token.sheetId]!.data.hp}
+                  canEdit
+                  onAdjust={(delta) => dm.adjustHp(token.sheetId!, delta)}
+                />
+              </div>
+            ) : null}
             {token.sheetId ? (
               <div className="field">
                 <label>Show HP to players</label>

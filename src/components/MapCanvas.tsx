@@ -21,6 +21,8 @@ import {
   type GameState,
   type HitPoints,
   type Light,
+  type TemplateKind,
+  type TemplateShape,
   type TokenShape,
   type Viewport,
 } from "../lib/types";
@@ -29,12 +31,13 @@ import {
   loadImageForCanvas,
   tokenRadius,
 } from "../lib/sceneUtils";
-import type { MeasureEvent } from "../hooks/useGameRoom";
+import type { MeasureEvent, TemplateEvent } from "../hooks/useGameRoom";
 import type { History } from "../lib/history";
 import { toolsForRole } from "../map/tools/registry";
 import { selectTool } from "../map/tools/select";
 import { LIGHT_PRESETS, type LightPreset } from "../map/tools/lights";
 import { RulerShape } from "../map/tools/measure";
+import { TemplateShapeView } from "../map/tools/template";
 import type { ToolPointerEvent, ToolRuntime } from "../map/tools/types";
 import { MapToolbar } from "./MapToolbar";
 import { FogLayer } from "./MapFog";
@@ -109,6 +112,14 @@ type RemoteRuler = {
   at: number;
 };
 
+type RemoteTemplate = {
+  shape: TemplateShape;
+  name: string;
+  color: string;
+  sceneId: string;
+  at: number;
+};
+
 const CURRENT_TURN_COLOR = "#e9c176";
 
 const CONDITION_EMOJI = new Map<string, string>(
@@ -129,7 +140,7 @@ type MapCanvasProps = {
   viewport: Viewport;
   /** Provided for the DM (pan/zoom enabled); omitted for players (read-only mirror). */
   onViewportChange?: (viewport: Viewport) => void;
-  onMoveToken: (tokenId: string, x: number, y: number) => void;
+  onMoveToken: (tokenId: string, x: number, y: number, facing?: number) => void;
   onSelectToken?: (tokenId: string | null) => void;
   /** Double-click a token: open its linked sheet (character or item). */
   onOpenTokenSheet?: (token: GameState["tokens"][number]) => void;
@@ -140,6 +151,8 @@ type MapCanvasProps = {
   send: (message: ClientMessage) => void;
   /** Live-ruler relay subscription (transient MEASURE messages). */
   subscribeMeasure: (listener: (event: MeasureEvent) => void) => () => void;
+  /** Live area-template relay subscription (transient TEMPLATE messages). */
+  subscribeTemplate: (listener: (event: TemplateEvent) => void) => () => void;
   /** Per-client snap-to-grid — owned by App (settings + the toolbar 🧲 share it). */
   snap: boolean;
   onToggleSnap: () => void;
@@ -293,6 +306,7 @@ function TokenNode({
   onSelect,
   onOpenSheet,
   onMove,
+  onRotate,
 }: {
   token: GameState["tokens"][number];
   /** Portrait to render on the token (resolved live from the linked sheet). */
@@ -310,8 +324,14 @@ function TokenNode({
   /** Double-click: open the linked sheet (character or item). */
   onOpenSheet?: () => void;
   onMove: (x: number, y: number) => void;
+  /** Rotate handle (selected + controllable): commit a new facing on pointer-up. */
+  onRotate?: (facing: number) => void;
 }) {
   const img = useImage(imageUrl);
+  const [dragFacing, setDragFacing] = useState<number | null>(null);
+  const facing = dragFacing ?? token.facing;
+  const rad = (deg: number) => (deg * Math.PI) / 180;
+  const handleR = radius + 14;
   const dead = hp !== null && hp.max > 0 && hp.current <= 0;
   const showBar = hp !== null && hp.max > 0;
   const ratio = showBar ? Math.min(Math.max(hp.current / hp.max, 0), 1) : 0;
@@ -342,6 +362,56 @@ function TokenNode({
     >
       {isCurrentTurn ? (
         <Circle radius={radius + 4} stroke={CURRENT_TURN_COLOR} strokeWidth={2.5} listening={false} />
+      ) : null}
+      {facing !== undefined ? (
+        // Facing arrow: a wide wedge on the token rim, pointing the way it faces
+        // (0 = up/north, clockwise). Shares its heading with Phase 6 directional vision.
+        <RegularPolygon
+          sides={3}
+          radius={Math.max(6, radius * 0.4)}
+          x={(radius + radius * 0.28) * Math.sin(rad(facing))}
+          y={-(radius + radius * 0.28) * Math.cos(rad(facing))}
+          rotation={facing}
+          fill={token.color}
+          stroke="#000000aa"
+          strokeWidth={1}
+          listening={false}
+        />
+      ) : null}
+      {selected && onRotate ? (
+        // Rotate handle: drag around the token to set facing; commit on pointer-up
+        // only (never per-frame — every MOVE_TOKEN is a full-state broadcast).
+        <Circle
+          x={handleR * Math.sin(rad(facing ?? 0))}
+          y={-handleR * Math.cos(rad(facing ?? 0))}
+          radius={6}
+          fill="#4a9eff"
+          stroke="#fff"
+          strokeWidth={1.5}
+          draggable
+          onClick={(e) => {
+            e.cancelBubble = true;
+          }}
+          onDragStart={(e) => {
+            e.cancelBubble = true;
+          }}
+          onDragMove={(e) => {
+            e.cancelBubble = true;
+            let deg = (Math.atan2(e.target.x(), -e.target.y()) * 180) / Math.PI;
+            deg = ((deg % 360) + 360) % 360;
+            if (e.evt.shiftKey) {
+              deg = (Math.round(deg / 45) * 45) % 360;
+            }
+            setDragFacing(deg);
+          }}
+          onDragEnd={(e) => {
+            e.cancelBubble = true;
+            const commit = dragFacing ?? token.facing ?? 0;
+            onRotate(commit);
+            setDragFacing(null);
+            e.target.position({ x: handleR * Math.sin(rad(commit)), y: -handleR * Math.cos(rad(commit)) });
+          }}
+        />
       ) : null}
       {img && token.imageFit === "raw" ? (
         // Raw image token: the bare picture, no shape frame (selection border only).
@@ -453,6 +523,7 @@ export function MapCanvas({
   onPlaceToken,
   send,
   subscribeMeasure,
+  subscribeTemplate,
   snap,
   onToggleSnap,
   hotkeysEnabled = true,
@@ -513,6 +584,10 @@ export function MapCanvas({
   /** DM-only: preview dynamic vision as a player would see it. */
   const [visionPreview, setVisionPreview] = useState(false);
   const [rulers, setRulers] = useState<Record<string, RemoteRuler>>({});
+  const [templates, setTemplates] = useState<Record<string, RemoteTemplate>>({});
+  /** Templates tool: which shape to draw, and whether to pin it as an annotation. */
+  const [templateKind, setTemplateKind] = useState<TemplateKind>("circle");
+  const [templatePin, setTemplatePin] = useState(false);
   /** Active middle-mouse pan: pointer start + the viewport frozen at press. */
   const panRef = useRef<{ x: number; y: number; vp: Viewport } | null>(null);
 
@@ -615,9 +690,35 @@ export function MapCanvas({
           ? current
           : Object.fromEntries(keep);
       });
+      setTemplates((current) => {
+        const cutoff = Date.now() - 2500;
+        const keep = Object.entries(current).filter(([, tpl]) => tpl.at >= cutoff);
+        return keep.length === Object.keys(current).length ? current : Object.fromEntries(keep);
+      });
     }, 800);
     return () => clearInterval(timer);
   }, []);
+
+  // Other clients' live area templates arrive over the same transient relay.
+  useEffect(() => {
+    return subscribeTemplate((event) => {
+      setTemplates((current) => {
+        const next = { ...current };
+        if (!event.shape) {
+          delete next[event.clientId];
+        } else {
+          next[event.clientId] = {
+            shape: event.shape,
+            name: event.name,
+            color: event.color,
+            sceneId: event.sceneId,
+            at: Date.now(),
+          };
+        }
+        return next;
+      });
+    });
+  }, [subscribeTemplate]);
 
   // Snapshot removed arrows as fading "ghosts" so they fade out instead of popping.
   const sceneAnnotationsForGhosts = scene?.annotations;
@@ -717,6 +818,21 @@ export function MapCanvas({
         setDraft(null);
         return;
       }
+      // Rotate the selected token's facing: [ / ] nudge 15°, { / } (shift) 45°.
+      if (
+        selectedTokenId &&
+        (event.key === "[" || event.key === "]" || event.key === "{" || event.key === "}")
+      ) {
+        const tok = state.tokens.find((item) => item.id === selectedTokenId);
+        if (tok && (isDm || tok.ownerPlayerId === yourPlayerId)) {
+          const step = event.key === "{" || event.key === "}" ? 45 : 15;
+          const dir = event.key === "[" || event.key === "{" ? -1 : 1;
+          const next = (((tok.facing ?? 0) + dir * step) % 360 + 360) % 360;
+          onMoveToken(tok.id, tok.x, tok.y, next);
+          event.preventDefault();
+        }
+        return;
+      }
       const tool = availableTools.find((item) => item.hotkey === event.key.toLowerCase());
       if (tool) {
         setActiveToolId(tool.id);
@@ -725,7 +841,7 @@ export function MapCanvas({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [availableTools, hotkeysEnabled]);
+  }, [availableTools, hotkeysEnabled, selectedTokenId, state.tokens, isDm, yourPlayerId, onMoveToken]);
 
   const gridLines = useMemo(() => {
     const lines: number[][] = [];
@@ -771,6 +887,8 @@ export function MapCanvas({
     fogBrushR,
     wallKind,
     lightRadii: LIGHT_PRESETS[lightPreset],
+    templateKind,
+    templatePin,
   };
 
   /** Snaps a world point to the nearest grid cell center when snap is on. */
@@ -996,6 +1114,9 @@ export function MapCanvas({
   const sceneRulers = Object.entries(rulers).filter(
     ([, ruler]) => ruler.sceneId === scene.id,
   );
+  const sceneTemplates = Object.entries(templates).filter(
+    ([, tpl]) => tpl.sceneId === scene.id,
+  );
 
   return (
     <div
@@ -1141,6 +1262,7 @@ export function MapCanvas({
                   const snapped = snapPoint(x, y);
                   onMoveToken(token.id, snapped.x, snapped.y);
                 }}
+                onRotate={draggable ? (facing) => onMoveToken(token.id, token.x, token.y, facing) : undefined}
               />
             );
           })}
@@ -1187,7 +1309,7 @@ export function MapCanvas({
           />
         ) : null}
 
-        {/* Topmost overlay: everyone's live rulers + the active tool's draft. */}
+        {/* Topmost overlay: everyone's live rulers + templates + the active tool's draft. */}
         <Layer listening={false}>
           {sceneRulers.map(([clientId, ruler]) => (
             <RulerShape
@@ -1197,6 +1319,9 @@ export function MapCanvas({
               color={ruler.color}
               name={ruler.name}
             />
+          ))}
+          {sceneTemplates.map(([clientId, tpl]) => (
+            <TemplateShapeView key={clientId} scene={scene} shape={tpl.shape} color={tpl.color} name={tpl.name} />
           ))}
           {ghosts.map((g) => (
             <MapAnnotationArrow
@@ -1226,6 +1351,10 @@ export function MapCanvas({
         onDrawColor={setDrawColor}
         drawWidth={drawWidth}
         onDrawWidth={setDrawWidth}
+        templateKind={templateKind}
+        onTemplateKind={setTemplateKind}
+        templatePin={templatePin}
+        onToggleTemplatePin={() => setTemplatePin((v) => !v)}
         fogEnabled={scene.fog.enabled}
         onToggleFog={() => send({ type: "FOG_SET", sceneId: scene.id, enabled: !scene.fog.enabled })}
         onResetFog={() => send({ type: "FOG_RESET", sceneId: scene.id })}
@@ -1407,6 +1536,18 @@ function AnnotationNode({
           opacity={opacity}
           onContextMenu={onContextMenu}
         />
+      );
+    case "pin":
+      return (
+        <Group x={annotation.x ?? 0} y={annotation.y ?? 0} onContextMenu={onContextMenu}>
+          <Text text="📍" fontSize={24} offsetX={12} offsetY={24} />
+          {annotation.text ? (
+            <>
+              <Rect x={12} y={-10} width={annotation.text.length * 7 + 12} height={20} cornerRadius={4} fill="rgba(10,12,16,0.85)" stroke={annotation.color} strokeWidth={1} />
+              <Text x={17} y={-6} text={annotation.text} fontSize={12} fill="#e6e6e8" />
+            </>
+          ) : null}
+        </Group>
       );
   }
 }

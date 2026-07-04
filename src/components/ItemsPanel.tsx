@@ -1,5 +1,5 @@
 import { Directory, type DirectoryRowData } from "./Directory";
-import type { GameState } from "../lib/types";
+import { inventoryRowFromItem, type GameState } from "../lib/types";
 import type { useDmActions } from "../hooks/useGameRoom";
 
 type ItemsPanelProps = {
@@ -55,10 +55,7 @@ export function ItemsPanel({ state, dm, openItemSheet, dropItemAt }: ItemsPanelP
     }
     dm.updateSheet(record.id, {
       ...record.data,
-      inventory: [
-        ...record.data.inventory,
-        { itemId: item.id, name: item.name, qty: 1, note: "" },
-      ],
+      inventory: [...record.data.inventory, inventoryRowFromItem(item)],
     });
   };
 

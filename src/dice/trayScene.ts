@@ -12,8 +12,8 @@ import type { Quat } from "../lib/dice3d";
 /// which highlights, lifts, and throws as one unit.
 /// </summary>
 
-/** Die sizes shown in the tray, one slot each. */
-export const TRAY_SIDES = [4, 6, 8, 10, 12, 20, 100] as const;
+/** Die sizes shown in the tray, one slot each (the coin sits far-left, before d4). */
+export const TRAY_SIDES = [2, 4, 6, 8, 10, 12, 20, 100] as const;
 
 /** On-screen die diameter inside the tray (slightly under the arena's 77px, so dice
  * visually "grow" a touch when picked up). */
@@ -159,6 +159,8 @@ export class DiceTrayScene {
         this.buildPart("d10", true, -15, -9, PAIR_SCALE, sides),
         this.buildPart("d10", false, 15, 10, PAIR_SCALE, sides + 3),
       ];
+    } else if (sides === 2) {
+      parts = [this.buildPart("coin", false, 0, 0, 1, sides)];
     } else if (sides === 4 || sides === 6 || sides === 8 || sides === 10 || sides === 12 || sides === 20) {
       parts = [this.buildPart(`d${sides}` as DieKind, false, 0, 0, 1, sides)];
     } else {

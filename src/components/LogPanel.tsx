@@ -123,7 +123,26 @@ export function LogPanel({ log, isDm, yourPlayerId, playerSlots, onSendChat }: L
                 </span>
                 <span className="total">{entry.roll.total}</span>
               </div>
-              <span className="expr">{formatDiceRoll(entry.roll)}</span>
+              {entry.roll.parts && entry.roll.parts.length > 0 ? (
+                <div className="roll-parts">
+                  {entry.roll.parts.map((part, i) => (
+                    <span key={i} className={`roll-chip roll-chip--${part.kind}`} title={part.kind}>
+                      {part.label ? <span className="roll-chip-label">{part.label}</span> : null}
+                      <span className="roll-chip-value">
+                        {i > 0 && part.value >= 0 ? "+" : ""}
+                        {part.value}
+                      </span>
+                    </span>
+                  ))}
+                  {entry.roll.adv ? (
+                    <span className="roll-chip roll-chip--adv" title="Advantage/disadvantage">
+                      {entry.roll.adv === "adv" ? "adv" : "dis"} · dropped {entry.roll.otherTotal}
+                    </span>
+                  ) : null}
+                </div>
+              ) : (
+                <span className="expr">{formatDiceRoll(entry.roll)}</span>
+              )}
             </div>
           );
         })}

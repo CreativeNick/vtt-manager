@@ -82,6 +82,50 @@ export async function uploadCampaignIcon(roomId: string, file: File): Promise<{ 
 }
 
 /// <summary>
+/// Uploads a standalone image for the Assets library (stored under the room's token
+/// prefix). Returns its public URL.
+/// </summary>
+export async function uploadLibraryImage(roomId: string, file: File): Promise<{ url: string }> {
+  return uploadTokenImage(roomId, `asset-${crypto.randomUUID().slice(0, 8)}`, file);
+}
+
+export type AssetInfo = { key: string; url: string; kind: string; size: number; uploaded: string };
+
+/// <summary>
+/// Lists a room's uploaded R2 assets (Phase 7 Assets page). Resilient in dev where the
+/// Pages function + R2 aren't served — returns an empty, unconfigured list instead of throwing.
+/// </summary>
+export async function listAssets(roomId: string): Promise<{ assets: AssetInfo[]; unconfigured: boolean }> {
+  try {
+    const response = await fetch("/api/list-assets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomId }),
+    });
+    if (!response.ok) {
+      return { assets: [], unconfigured: true };
+    }
+    const payload = (await response.json()) as { assets?: AssetInfo[]; unconfigured?: boolean };
+    return { assets: payload.assets ?? [], unconfigured: Boolean(payload.unconfigured) };
+  } catch {
+    return { assets: [], unconfigured: true };
+  }
+}
+
+/// <summary>Deletes one uploaded asset by key (server validates the room prefix).</summary>
+export async function deleteAsset(roomId: string, key: string): Promise<void> {
+  const response = await fetch("/api/delete-asset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roomId, key }),
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error ?? "Delete failed.");
+  }
+}
+
+/// <summary>
 /// Uploads a map layer image and returns its URL plus layer metadata.
 /// </summary>
 export async function uploadMapImage(

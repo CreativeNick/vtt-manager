@@ -6,6 +6,7 @@
    ========================================================================== */
 
 @import "./styles/tokens.css";
+@import "./styles/sheet7.css";
 
 :root {
   color-scheme: dark;
@@ -914,12 +915,29 @@ button.mod.roll-btn {
   display: flex;
   flex-direction: column;
   max-height: min(78vh, 720px);
+  /* Chrome + content clip moved to .window-inner so a side rail can protrude outside. */
+  overflow: hidden;
+}
+/* A window that hosts a protruding side rail (portaled `.window-siderail`) stops clipping
+   so the rail can hang off its right edge over the tabletop (FoundryVTT-style). */
+.window:has(> .window-siderail) {
+  overflow: visible;
+}
+.window-inner {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--elev-3);
   backdrop-filter: var(--blur);
   overflow: hidden;
+  /* Above the side rail so the rail's overlap (and the active button's tab) hides
+     BEHIND the sheet panel — the button reads as docked into it. */
+  position: relative;
+  z-index: 1;
 }
 .window-header {
   display: flex;
@@ -949,8 +967,24 @@ button.mod.roll-btn {
   /* Size container: wide windows re-flow their content (multi-column sheet). */
   container-type: inline-size;
 }
-.window--maximized {
+.window--maximized .window-inner {
   border-radius: var(--radius);
+}
+
+/* The sheet's page rail, portaled to hang off the window's right edge over the tabletop.
+   Positioned just outside the window; its buttons overlap the window's right border a
+   touch, and the active one docks fully into the sheet (see .sheet-rail-btn rules). */
+.window-siderail {
+  position: absolute;
+  top: 46px;
+  left: 100%;
+  /* How far the rail sits from the window's right edge. More positive = further right
+     (bigger gap); more negative = it slides back over the sheet (overlap). */
+  margin-left: 10px;
+  /* BELOW the sheet panel (z 1) so a button's left overlap — and the active button's wider
+     "tab" — tucks BEHIND the panel; the protruding right part still shows over the tabletop. */
+  z-index: 0;
+  pointer-events: auto;
 }
 
 /* Invisible resize grab zones on every edge and corner (hidden when maximized). */

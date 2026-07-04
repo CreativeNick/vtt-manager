@@ -27,6 +27,7 @@ teardown artifact.
 - `smoke-phase5.mjs` — map tools: hidden-token redaction, MEASURE relay, annotations (forced-ephemeral + TTL, authz, 200 cap), fog authz/reset, grid fields, hidden combatants (takes ~15s — waits out the ephemeral TTL)
 - `smoke-phase6.mjs` — dynamic vision: walls/doors + lights are DM-only, reach players (client-side LOS), enforce caps (600 walls / 50 lights), drop degenerate segments; door toggle; global-illumination + token-vision propagation
 - `smoke-scenes.mjs` — Phase 6.5 prep secrecy + fog brush: players receive ONLY the active scene + its tokens, Set Live swaps atomically; brush/cover/inverted fog round-trips (points trimmed at 120) and stays DM-only; full-scene UPDATE_SCENE (the editor's Apply path) carries walls+lights+fog at once
+- `smoke-phase7.mjs` — Phase 7 game-content depth: UPDATE_SHEET 20KB cap, SET_TOKEN_CONDITIONS + REST authz, ROLL_CHECK color-part breakdown (+ secret no-leak), ADJUST_HP clamp/temp-first/authz, MOVE_TOKEN facing (both paths), TEMPLATE transient relay (coalesce/clear/oversize-drop), coin flip (values ∈{1,2}, secret strip, Heads/Tails log), DM-only map pins stripped from players, pre-staged tokens hidden until Set Live, and the EXPORT→mutate→IMPORT v2 round-trip (+ player-export deny)
 
 ## Unit tests (`unit-*.test.ts`)
 
@@ -40,6 +41,11 @@ npx esbuild tests/unit-sheets.test.ts --bundle --format=esm --platform=node \
 
 (Same for `unit-redaction.test.ts`, `unit-visibility.test.ts` — the Phase 6 line-of-sight
 polygon: walls block, corner-peek, gaps/corridors, closed vs open doors —
+`unit-sheets-phase7.test.ts` — the Phase 7 sheet model: the every-field-in-exactly-one-
+section guard, new-field normalization + caps, deterministic row-id backfill,
+`inventoryRowFromItem`, per-page NPC redaction, `Token.facing` wrapping, dmOnly-pin
+redaction, and the assets in-use scanner — `unit-rollcheck.test.ts` — the ROLL_CHECK
+resolver (parts sum to total for skill/attack/damage/adv) —
 `unit-scene-editor.test.ts` — Phase 6.5 fog-brush sanitization, `fog.inverted`, the
 `applySceneMessage` staging reducer incl. caps, and active-scene-only player redaction —
 and `unit-history.test.ts` — the DM undo/redo command/inverse builder for scene edits +

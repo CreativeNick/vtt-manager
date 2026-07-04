@@ -52,18 +52,10 @@ export function NpcsPage({
           }
         >
           <SheetCards
+            ctx={ctx}
             records={records}
-            isDm
-            roomId={state.roomId}
             onClose={close}
-            onChange={(id, sheet) => ctx.updateSheet(id, sheet)}
-            onToggleReveal={(id, section, revealed) => dm.setSheetReveal(id, section, revealed)}
-            onRoll={(id, label, modifier, adv) =>
-              ctx.rollDice(`1d20${modifier >= 0 ? `+${modifier}` : modifier}`, {
-                context: { sheetId: id, label },
-                adv,
-              })
-            }
+            allowReveal
             emptyHint="Pick an actor from the directory — or create an NPC — to edit its sheet. Open several to compare side by side."
           />
         </PageShell>

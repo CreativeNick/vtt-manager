@@ -18,7 +18,8 @@ export type Annotation = {
   id: string;
   /** playerId or "dm" — authors (and the DM) may remove their own. */
   authorId: string;
-  kind: "stroke" | "arrow" | "rect" | "circle" | "text";
+  /** "pin" is a DM map note (📍 + text) — persistent, optionally DM-only (Phase 7). */
+  kind: "stroke" | "arrow" | "rect" | "circle" | "text" | "pin";
   /** Flat [x0,y0,x1,y1,…] world coords for strokes/arrows. */
   points?: number[];
   x?: number;
@@ -31,6 +32,8 @@ export type Annotation = {
   createdAt: number;
   /** Auto-removed by the server ~10s after creation. Forced true for players. */
   ephemeral: boolean;
+  /** DM-only: stripped from player frames by redactStateFor (map pins). */
+  dmOnly?: boolean;
 };
 
 /**
@@ -120,6 +123,21 @@ export const MAX_FOG_REVEALS = 300;
 /** Flat x,y numbers per fog brush stroke (60 samples) — 300×120 ≈ 290KB worst case. */
 export const MAX_FOG_BRUSH_POINTS = 120;
 export const MAX_MEASURE_NUMBERS = 48; // flat x,y numbers → 24 ruler points
+
+/**
+ * A spell/area measurement template (Phase 7). Transient — relayed like MEASURE, never
+ * in GameState (unless the drafter "pins" it, which commits a stroke annotation instead).
+ * `points` are flat world coords; their meaning depends on `kind`:
+ * - circle: [cx, cy, edgeX, edgeY] (radius = distance)
+ * - cone:   [ox, oy, tipX, tipY]  (direction + length; 5e cone width = length)
+ * - line:   [ox, oy, endX, endY]  (drawn as a 1-square-wide band)
+ * - rect:   [x0, y0, x1, y1]      (opposite corners)
+ */
+export const TEMPLATE_KINDS = ["circle", "cone", "line", "rect"] as const;
+export type TemplateKind = (typeof TEMPLATE_KINDS)[number];
+export type TemplateShape = { kind: TemplateKind; points: number[] };
+/** Max absolute world coordinate accepted on a template (guards degenerate/huge shapes). */
+export const MAX_TEMPLATE_EXTENT = 20000;
 export const MAX_WALLS = 600;
 export const MAX_LIGHTS = 50;
 
@@ -199,6 +217,11 @@ export type Token = {
   itemId?: string | null;
   /** Size in grid cells (diameter). Unset → the scene/campaign default. 1 = Medium. */
   size?: number;
+  /**
+   * Heading in degrees (0 = up/north, clockwise). Absent = no facing arrow. Phase 7.
+   * Shares the heading with Phase 6's directional-vision wedge.
+   */
+  facing?: number;
 };
 
 /** Named token sizes (grid cells across). Used by the size pickers. */
@@ -236,10 +259,14 @@ export type TokenVision = {
 export const CONDITIONS = [
   { id: "blinded", label: "Blinded", emoji: "🙈" },
   { id: "charmed", label: "Charmed", emoji: "💘" },
+  { id: "deafened", label: "Deafened", emoji: "🙉" },
+  { id: "exhaustion", label: "Exhaustion", emoji: "🥵" },
   { id: "frightened", label: "Frightened", emoji: "😱" },
   { id: "grappled", label: "Grappled", emoji: "✊" },
+  { id: "incapacitated", label: "Incapacitated", emoji: "😵" },
   { id: "invisible", label: "Invisible", emoji: "👻" },
   { id: "paralyzed", label: "Paralyzed", emoji: "⚡" },
+  { id: "petrified", label: "Petrified", emoji: "🗿" },
   { id: "poisoned", label: "Poisoned", emoji: "🤢" },
   { id: "prone", label: "Prone", emoji: "🛌" },
   { id: "restrained", label: "Restrained", emoji: "⛓️" },
@@ -271,7 +298,7 @@ export type CombatState = {
   entries: CombatEntry[];
 };
 
-export type HitPoints = { current: number; max: number };
+export type HitPoints = { current: number; max: number; temp?: number };
 
 /**
  * Directory folder. Flat for now. `kind` is the tree it belongs to:
@@ -325,15 +352,166 @@ export type ItemRecord = {
   /** Free-form worth, e.g. "5000 gp". */
   value?: string;
   attunement?: boolean;
+  /** Weapon damage expression, e.g. "1d6+3" (Phase 7). */
+  damage?: string;
+  /** Damage type, e.g. "slashing". */
+  damageType?: string;
+  /** Free-form properties/tags (e.g. "Finesse", "Two-Handed"). */
+  properties?: string[];
+  /** Whether this item can be equipped (weapons/armor). */
+  equippable?: boolean;
+  /** Attack roll bonus for weapons. */
+  toHit?: number;
 };
 
-/** One row of a sheet's inventory. `name` is a copy, so catalog deletions are safe. */
+/** Inventory row category (Phase 7) — drives the grouped Inventory tables. */
+export const INVENTORY_CATEGORIES = ["weapon", "equipment", "consumable", "loot"] as const;
+export type InventoryCategory = (typeof INVENTORY_CATEGORIES)[number];
+
+/**
+ * One row of a sheet's inventory (Phase 7 v2). Rows are SELF-CONTAINED display copies —
+ * the item catalog is DM-only redacted, so a player's rows must carry their own
+ * name/weight/price/damage. `itemId` is a DM-side catalog link only.
+ */
 export type InventoryEntry = {
+  /** Stable row key (expand/drag/favorites). Legacy rows backfilled `inv-${index}`. */
+  id: string;
   itemId: string | null;
   name: string;
   qty: number;
   note: string;
+  category: InventoryCategory;
+  /** Per-unit weight (lb). */
+  weight?: number;
+  /** Free-form price, e.g. "5 gp". */
+  price?: string;
+  charges?: { current: number; max: number };
+  equipped?: boolean;
+  attuned?: boolean;
+  /** Weapon-ish: an equipped row with `damage` surfaces as a derived attack row. */
+  toHit?: number;
+  damage?: string;
+  damageType?: string;
+  /** Expand-body text. */
+  description?: string;
 };
+
+/** A PC attack or NPC action row (shared model). */
+export type AttackEntry = {
+  id: string;
+  name: string;
+  toHit: number;
+  damage: string;
+  damageType?: string;
+  uses?: { current: number; max: number };
+  /** Subtitle / expand body, e.g. "Natural · Action". */
+  notes?: string;
+  itemId?: string | null;
+};
+
+/** A class/species feature or feat row. */
+export type FeatureEntry = {
+  id: string;
+  name: string;
+  source: "class" | "species" | "feat" | "other";
+  uses?: { current: number; max: number };
+  recovery?: "sr" | "lr";
+  description: string;
+};
+
+/** A spell row (manual — no derived slot math). */
+export type SpellEntry = {
+  id: string;
+  name: string;
+  /** 0 = cantrip … 9. */
+  level: number;
+  components?: string;
+  time?: string;
+  range?: string;
+  target?: string;
+  /** Damage/heal expression. */
+  roll?: string;
+  prepared?: boolean;
+  description?: string;
+};
+
+/** A passive/active effect row. */
+export type EffectEntry = {
+  id: string;
+  name: string;
+  source?: string;
+  enabled: boolean;
+  description?: string;
+};
+
+/** A tool proficiency row. */
+export type ToolEntry = { id: string; name: string; abilityId?: string; mod: number };
+
+/** Generates a stable client-side row id, e.g. "inv-1a2b3c4d". */
+export function rowId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+/** Builds a new inventory row with defaults (Phase 7). */
+export function createInventoryRow(partial: Partial<InventoryEntry> = {}): InventoryEntry {
+  return {
+    id: rowId("inv"),
+    itemId: null,
+    name: "New item",
+    qty: 1,
+    note: "",
+    category: "equipment",
+    ...partial,
+  };
+}
+
+/** Maps a catalog item's `type` to the inventory table category it lands in. */
+export function inventoryCategoryForItemType(type: ItemType | undefined): InventoryCategory {
+  switch (type) {
+    case "weapon":
+      return "weapon";
+    case "consumable":
+      return "consumable";
+    case "treasure":
+      return "loot";
+    default:
+      return "equipment";
+  }
+}
+
+/**
+ * Builds a self-contained inventory row from a catalog item (drop-onto-sheet). Copies
+ * display fields so the row survives catalog deletion and player redaction.
+ */
+export function inventoryRowFromItem(item: ItemRecord): InventoryEntry {
+  return createInventoryRow({
+    itemId: item.id,
+    name: item.name,
+    qty: 1,
+    category: inventoryCategoryForItemType(item.type),
+    ...(typeof item.weight === "number" ? { weight: item.weight } : {}),
+    ...(item.value ? { price: item.value } : {}),
+    ...(item.damage ? { damage: item.damage } : {}),
+    ...(item.damageType ? { damageType: item.damageType } : {}),
+    ...(typeof item.toHit === "number" ? { toHit: item.toHit } : {}),
+    ...(item.equippable ? { equipped: false } : {}),
+  });
+}
+
+/** A class resource chip (name + current/max). */
+export type ResourceEntry = { id: string; name: string; current: number; max: number };
+
+/** Coin purse. */
+export type Currency = { cp: number; sp: number; ep: number; gp: number; pp: number };
+
+/** Death-save tracker: filled success/failure slots (0..3 each). PC-only. */
+export type DeathSaves = { successes: number; failures: number };
+
+/** Hit-dice pool (die is free text, e.g. "d8"). */
+export type HitDice = { current: number; max: number; die: string };
+
+/** Manual spellcasting numbers (no derivation). */
+export type Spellcasting = { abilityId: string; attackBonus: number; saveDc: number };
 
 export type CharacterSheet = {
   characterName: string;
@@ -343,6 +521,16 @@ export type CharacterSheet = {
   level: number;
   xp: number;
   race: string;
+  /** Background (Priest, Acolyte …). */
+  background: string;
+  /** Creature type line, e.g. "Humanoid" / "Construct". */
+  creatureType: string;
+  /** Challenge rating (NPC). "" for PCs. */
+  cr: string;
+  /** Source ref, e.g. "MM pg. 19". */
+  source: string;
+  /** Original class for multiclassing (Special Traits page). */
+  originalClass: string;
   alignment: string;
   size: string;
   age: string;
@@ -351,6 +539,14 @@ export type CharacterSheet = {
   eyes: string;
   skin: string;
   hair: string;
+  /** Biography detail fields (Phase 7). */
+  faith: string;
+  gender: string;
+  ideals: string;
+  bonds: string;
+  flaws: string;
+  personality: string;
+  appearance: string;
   backstoryPersonality: string;
   notes: string;
   inventory: InventoryEntry[];
@@ -359,12 +555,48 @@ export type CharacterSheet = {
   hp: HitPoints;
   ac: number;
   initiative: number;
+  /** Walking speed (ft). */
+  speed: number;
+  proficiencyBonus: number;
+  deathSaves: DeathSaves;
+  hitDice: HitDice;
+  /** Free-form senses line, e.g. "Blindsight 60 ft, Passive Perception 6". */
+  senses: string;
+  resources: ResourceEntry[];
   /** Player-entered ability scores keyed by AbilityDef.id (e.g. 16). */
   abilityScores: Record<string, number>;
   /** Manual modifiers added to each skill, keyed by DerivedStatDef.id. */
   skillMods: Record<string, number>;
   /** Manual modifiers added to each saving throw, keyed by DerivedStatDef.id. */
   saveMods: Record<string, number>;
+  /** Proficiency dots per skill: 0 none / 1 proficient / 2 expertise (display-only). */
+  skillProfs: Record<string, number>;
+  /** Proficiency dots per save: 0 none / 1 proficient (display-only). */
+  saveProfs: Record<string, number>;
+  tools: ToolEntry[];
+  languages: string[];
+  weaponProfs: string[];
+  armorProfs: string[];
+  resistances: string[];
+  immunities: string[];
+  conditionImmunities: string[];
+  vulnerabilities: string[];
+  currency: Currency;
+  /** Manual carry capacity (lb); carried weight is a client-side display sum. */
+  carryCapacity: number;
+  carryMultiplier: number;
+  attunementMax: number;
+  attacks: AttackEntry[];
+  features: FeatureEntry[];
+  spells: SpellEntry[];
+  /** Spell slots per level, keys "1".."9". */
+  spellSlots: Record<string, { current: number; max: number }>;
+  spellcasting: Spellcasting;
+  effects: EffectEntry[];
+  /** Feat/species-trait toggle + numeric-override map (defs live client-side). */
+  traits: Record<string, boolean | number>;
+  /** Favorited action/item ids, e.g. "item:<id>". */
+  favorites: string[];
 };
 
 export type AbilityDef = {
@@ -391,19 +623,13 @@ type LegacyCharacterSheet = Partial<CharacterSheet> & {
   name?: string;
   species?: string;
   campaign?: string;
-  background?: string;
   deityPatron?: string;
   pronouns?: string;
   portraitUrl?: string | null;
   backstory?: string;
   personalityTraits?: string;
-  ideals?: string;
-  bonds?: string;
-  flaws?: string;
   allies?: string;
   treasureGoals?: string;
-  hp?: { current: number; max: number };
-  ac?: number;
 };
 
 /** The reveal/collapse granularity of a character sheet. */
@@ -414,6 +640,11 @@ export type SheetSectionId =
   | "saves"
   | "skills"
   | "inventory"
+  | "features"
+  | "spells"
+  | "effects"
+  | "traits"
+  | "biography"
   | "notes";
 
 export const SHEET_SECTIONS: Array<{ id: SheetSectionId; label: string }> = [
@@ -423,10 +654,20 @@ export const SHEET_SECTIONS: Array<{ id: SheetSectionId; label: string }> = [
   { id: "saves", label: "Saving throws" },
   { id: "skills", label: "Skills" },
   { id: "inventory", label: "Inventory" },
+  { id: "features", label: "Features" },
+  { id: "spells", label: "Spells" },
+  { id: "effects", label: "Effects" },
+  { id: "traits", label: "Special traits" },
+  { id: "biography", label: "Biography" },
   { id: "notes", label: "Notes" },
 ];
 
-/** Which CharacterSheet fields belong to each section — drives server-side redaction. */
+/**
+ * Which CharacterSheet fields belong to each section — drives server-side redaction.
+ * INVARIANT: every CharacterSheet key must appear in EXACTLY ONE section (a unit test
+ * guards this). A field missing from every section vanishes for players via the
+ * redaction copy-loop; a field in two sections is ambiguous.
+ */
 export const SHEET_SECTION_FIELDS: Record<SheetSectionId, Array<keyof CharacterSheet>> = {
   identity: [
     "characterName",
@@ -436,6 +677,44 @@ export const SHEET_SECTION_FIELDS: Record<SheetSectionId, Array<keyof CharacterS
     "level",
     "xp",
     "race",
+    "background",
+    "creatureType",
+    "cr",
+    "source",
+    "originalClass",
+    "iconUrl",
+  ],
+  combat: [
+    "hp",
+    "ac",
+    "initiative",
+    "speed",
+    "proficiencyBonus",
+    "deathSaves",
+    "hitDice",
+    "senses",
+    "resources",
+  ],
+  abilities: ["abilityScores"],
+  saves: ["saveMods", "saveProfs"],
+  skills: [
+    "skillMods",
+    "skillProfs",
+    "tools",
+    "languages",
+    "weaponProfs",
+    "armorProfs",
+    "resistances",
+    "immunities",
+    "conditionImmunities",
+    "vulnerabilities",
+  ],
+  inventory: ["inventory", "currency", "carryCapacity", "carryMultiplier", "attunementMax"],
+  features: ["features", "attacks"],
+  spells: ["spells", "spellSlots", "spellcasting"],
+  effects: ["effects"],
+  traits: ["traits", "favorites"],
+  biography: [
     "alignment",
     "size",
     "age",
@@ -444,14 +723,16 @@ export const SHEET_SECTION_FIELDS: Record<SheetSectionId, Array<keyof CharacterS
     "eyes",
     "skin",
     "hair",
-    "iconUrl",
+    "faith",
+    "gender",
+    "ideals",
+    "bonds",
+    "flaws",
+    "personality",
+    "appearance",
+    "backstoryPersonality",
   ],
-  combat: ["hp", "ac", "initiative"],
-  abilities: ["abilityScores"],
-  saves: ["saveMods"],
-  skills: ["skillMods"],
-  inventory: ["inventory"],
-  notes: ["notes", "backstoryPersonality"],
+  notes: ["notes"],
 };
 
 export type SheetKind = "pc" | "npc";
@@ -567,6 +848,22 @@ export function normalizeItem(item: Partial<ItemRecord> & { id: string }): ItemR
     ...(weight !== undefined ? { weight } : {}),
     ...(typeof item.value === "string" && item.value.trim() ? { value: item.value.slice(0, 60) } : {}),
     ...(item.attunement ? { attunement: true } : {}),
+    ...(typeof item.damage === "string" && item.damage.trim() ? { damage: item.damage.slice(0, 40) } : {}),
+    ...(typeof item.damageType === "string" && item.damageType.trim()
+      ? { damageType: item.damageType.slice(0, 40) }
+      : {}),
+    ...(Array.isArray(item.properties)
+      ? {
+          properties: item.properties
+            .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
+            .slice(0, 12)
+            .map((p) => p.slice(0, 30)),
+        }
+      : {}),
+    ...(item.equippable ? { equippable: true } : {}),
+    ...(typeof item.toHit === "number" && Number.isFinite(item.toHit)
+      ? { toHit: Math.round(item.toHit) }
+      : {}),
   };
 }
 
@@ -581,6 +878,35 @@ export type ConnectedPlayer = {
   displayName: string;
 };
 
+/**
+ * One labeled component of a roll's total (Phase 7). Built server-side so the LogPanel
+ * can render color-coded chips that sum to the total. `die` = a die result, `ability`/
+ * `prof`/`item` = typed modifiers, `flat` = a bare number.
+ */
+export type RollPart = {
+  kind: "die" | "ability" | "prof" | "item" | "flat";
+  value: number;
+  label?: string;
+};
+
+/** Max labeled parts kept on a roll (server-enforced). */
+export const MAX_ROLL_PARTS = 24;
+
+/**
+ * A structured sheet roll (Phase 7). The server resolves it FROM the sheet it owns and
+ * builds the color-coded `parts` breakdown — the client never declares the modifiers.
+ * The seam for a future rules engine (it reads `traits`); `ROLL_DICE` stays for freeform.
+ */
+export type CheckSpec =
+  | { kind: "ability"; abilityId: string }
+  | { kind: "skill"; statId: string }
+  | { kind: "save"; statId: string }
+  | { kind: "tool"; toolId: string }
+  | { kind: "initiative" }
+  | { kind: "attack"; rowId: string }
+  | { kind: "damage"; rowId: string }
+  | { kind: "spell-attack" };
+
 export type DiceRoll = {
   id: string;
   rollerName: string;
@@ -594,6 +920,8 @@ export type DiceRoll = {
   adv?: "adv" | "dis";
   /** The discarded roll's total when adv/dis was used. */
   otherTotal?: number;
+  /** Color-coded breakdown (Phase 7). Absent on freeform/legacy rolls. */
+  parts?: RollPart[];
 };
 
 /** One entry in the unified roll/action/chat log. */
@@ -659,6 +987,15 @@ export type GameState = {
 
 export const MAX_LOG_ENTRIES = 100;
 
+/**
+ * A full-campaign backup (Phase 7). `state` is exactly what the server persists (durable
+ * GameState minus connection fields). Distinct from the v1 `CampaignManifest` (scenes only),
+ * which IMPORT_CAMPAIGN still accepts for back-compat.
+ */
+export type CampaignExport = { version: 2; exportedAt: number; state: GameState };
+/** Max serialized import size (under the WS frame limit; images are URLs, never blobs). */
+export const MAX_CAMPAIGN_BYTES = 900_000;
+
 /** Pre-Phase-1/2 persisted states: slot-keyed sheets, roll-only dice log. */
 type LegacyGameStateFields = {
   characterSheets?: Record<string, CharacterSheet>;
@@ -677,14 +1014,17 @@ export type ClientMessage =
   | { type: "UPDATE_SCENE"; scene: Scene }
   | { type: "REMOVE_SCENE"; sceneId: string }
   | { type: "ADD_TOKEN"; token: Token }
-  | { type: "MOVE_TOKEN"; tokenId: string; x: number; y: number }
+  | { type: "MOVE_TOKEN"; tokenId: string; x: number; y: number; facing?: number }
   | { type: "UPDATE_TOKEN"; token: Token }
   | { type: "REMOVE_TOKEN"; tokenId: string }
+  | { type: "SET_TOKEN_CONDITIONS"; tokenId: string; conditions: string[] }
   | { type: "UPDATE_SHEET"; sheetId: string; sheet: CharacterSheet }
   | { type: "CREATE_SHEET"; sheetId: string; name: string }
   | { type: "DUPLICATE_SHEET"; sheetId: string; newSheetId: string }
   | { type: "DELETE_SHEET"; sheetId: string }
   | { type: "SET_SHEET_REVEAL"; sheetId: string; section: SheetSectionId; revealed: boolean }
+  | { type: "REST"; sheetId: string; kind: "short" | "long" }
+  | { type: "ADJUST_HP"; sheetId: string; delta: number }
   | {
       type: "SET_SHEET_FOLDER";
       sheetId: string;
@@ -704,7 +1044,8 @@ export type ClientMessage =
   | { type: "SET_TOKEN_DEFAULTS"; defaults: TokenShapeDefaults }
   | { type: "SET_DEFAULT_TOKEN_SIZE"; size: number }
   | { type: "UPDATE_DM_NOTES"; notes: string }
-  | { type: "IMPORT_CAMPAIGN"; manifest: CampaignManifest }
+  | { type: "EXPORT_CAMPAIGN" }
+  | { type: "IMPORT_CAMPAIGN"; manifest: CampaignManifest | CampaignExport }
   | { type: "ADD_PLAYER_SLOT"; name: string }
   | { type: "UPDATE_PLAYER_SLOT"; slot: PlayerSlot }
   | { type: "REMOVE_PLAYER_SLOT"; slotId: string }
@@ -716,6 +1057,14 @@ export type ClientMessage =
       /** Roll attributed to a sheet (DM: any sheet; player: own only). */
       context?: { sheetId?: string; label?: string };
       adv?: "adv" | "dis";
+    }
+  | {
+      /** Structured sheet roll — the server resolves modifiers + builds color parts. */
+      type: "ROLL_CHECK";
+      sheetId: string;
+      check: CheckSpec;
+      adv?: "adv" | "dis";
+      private?: boolean;
     }
   | { type: "SEND_CHAT"; text: string; whisperTo?: string }
   | {
@@ -740,6 +1089,8 @@ export type ClientMessage =
   | { type: "COMBAT_END" }
   /** Live ruler points (world coords, flat x,y) — transient relay, null = cleared. */
   | { type: "MEASURE"; sceneId: string; points: number[] | null }
+  /** Live area template — transient relay like MEASURE, null = cleared. */
+  | { type: "TEMPLATE"; sceneId: string; shape: TemplateShape | null }
   | { type: "ADD_ANNOTATION"; sceneId: string; annotation: Annotation }
   | { type: "REMOVE_ANNOTATION"; sceneId: string; annotationId: string }
   | { type: "CLEAR_ANNOTATIONS"; sceneId: string }
@@ -783,9 +1134,20 @@ export type ServerMessage =
       sceneId: string;
       points: number[] | null;
     }
+  /** Another client's live area template (transient; null shape = cleared). */
+  | {
+      type: "TEMPLATE";
+      clientId: string;
+      name: string;
+      color: string;
+      sceneId: string;
+      shape: TemplateShape | null;
+    }
   | { type: "ERROR"; message: string }
   | { type: "JOINED"; role: Role; playerId: string }
-  | { type: "KICKED"; message: string };
+  | { type: "KICKED"; message: string }
+  /** Full-campaign backup, sent only to the requesting DM to download. */
+  | { type: "CAMPAIGN_EXPORT"; manifest: CampaignExport };
 
 export const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, scale: 1 };
 
@@ -861,6 +1223,11 @@ export function normalizeTokenShapeDefaults(value: unknown): TokenShapeDefaults 
   };
 }
 
+/** Wraps a heading into [0, 360). Shared by tokens and the directional-vision wedge. */
+export function normalizeFacing(deg: number): number {
+  return ((deg % 360) + 360) % 360;
+}
+
 const TOKEN_KINDS = new Set<TokenKind>(["player", "enemy", "item"]);
 
 export function normalizeToken(token: Token): Token {
@@ -898,6 +1265,10 @@ export function normalizeToken(token: Token): Token {
     size:
       typeof token.size === "number" && Number.isFinite(token.size)
         ? clampTokenSize(token.size)
+        : undefined,
+    facing:
+      typeof token.facing === "number" && Number.isFinite(token.facing)
+        ? ((token.facing % 360) + 360) % 360
         : undefined,
   };
 }
@@ -944,6 +1315,11 @@ export function createDefaultSheet(name: string): CharacterSheet {
     level: 1,
     xp: 0,
     race: "",
+    background: "",
+    creatureType: "",
+    cr: "",
+    source: "",
+    originalClass: "",
     alignment: "",
     size: "",
     age: "",
@@ -952,6 +1328,13 @@ export function createDefaultSheet(name: string): CharacterSheet {
     eyes: "",
     skin: "",
     hair: "",
+    faith: "",
+    gender: "",
+    ideals: "",
+    bonds: "",
+    flaws: "",
+    personality: "",
+    appearance: "",
     backstoryPersonality: "",
     notes: "",
     inventory: [],
@@ -959,9 +1342,37 @@ export function createDefaultSheet(name: string): CharacterSheet {
     hp: { current: 0, max: 0 },
     ac: 0,
     initiative: 0,
+    speed: 30,
+    proficiencyBonus: 2,
+    deathSaves: { successes: 0, failures: 0 },
+    hitDice: { current: 0, max: 0, die: "d8" },
+    senses: "",
+    resources: [],
     abilityScores: {},
     skillMods: {},
     saveMods: {},
+    skillProfs: {},
+    saveProfs: {},
+    tools: [],
+    languages: [],
+    weaponProfs: [],
+    armorProfs: [],
+    resistances: [],
+    immunities: [],
+    conditionImmunities: [],
+    vulnerabilities: [],
+    currency: { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 },
+    carryCapacity: 0,
+    carryMultiplier: 1,
+    attunementMax: 3,
+    attacks: [],
+    features: [],
+    spells: [],
+    spellSlots: {},
+    spellcasting: { abilityId: "", attackBonus: 0, saveDc: 0 },
+    effects: [],
+    traits: {},
+    favorites: [],
   };
 }
 
@@ -1054,77 +1465,305 @@ export function createDefaultSheetTemplate(): SheetTemplate {
 export const DEFAULT_SHEET_TEMPLATE: SheetTemplate = createDefaultSheetTemplate();
 
 /// <summary>
-/// Combines older multi-field story sections into the current backstory field.
+/// Combines older story fields that lack a dedicated Phase 7 home (backstory, allies,
+/// treasure/goals) into the current backstory field. Fields with a dedicated home
+/// (ideals/bonds/flaws/background/personality/faith) migrate individually.
 /// </summary>
 function mergeLegacyStoryFields(sheet: LegacyCharacterSheet): string {
-  return [
-    sheet.backstoryPersonality,
-    sheet.backstory,
-    sheet.personalityTraits,
-    sheet.ideals,
-    sheet.bonds,
-    sheet.flaws,
-    sheet.allies,
-    sheet.treasureGoals,
-    sheet.background,
-    sheet.deityPatron,
-  ]
+  return [sheet.backstoryPersonality, sheet.backstory, sheet.allies, sheet.treasureGoals]
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value))
     .join("\n\n");
 }
 
+/**
+ * Per-sheet server-side size cap (serialized JSON length). Bounds the full-state
+ * broadcast when a campaign has many NPC sheets. Enforced in the UPDATE_SHEET handler.
+ */
+export const MAX_SHEET_BYTES = 20_000;
+/** Client soft-warning threshold (below the hard server cap). */
+export const SHEET_SOFT_WARN_BYTES = 18_000;
+
+/** Row-count caps per sheet (server-enforced, oldest-first truncation). */
+export const SHEET_ROW_CAPS = {
+  inventory: 200,
+  attacks: 50,
+  features: 100,
+  spells: 200,
+  effects: 50,
+  resources: 20,
+  tools: 20,
+  favorites: 30,
+  pills: 40,
+} as const;
+
+const NAME_CAP = 120;
+const DESC_CAP = 1000;
+const SHORT_CAP = 40;
+const PILL_CAP = 60;
+const BIO_CAP = 5000;
+
 /// <summary>
-/// Returns whether two numeric records have the same keys and values.
+/// Returns a finite number, or the fallback when the value is missing or invalid.
 /// </summary>
-function numberRecordsEqual(
-  a: Record<string, number>,
-  b: Record<string, number>,
-): boolean {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  for (const key of keys) {
-    if (a[key] !== b[key]) {
-      return false;
+function numberOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+/** Clamp a value to an integer within [min, max], falling back when invalid. */
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function str(value: unknown, cap: number): string {
+  return typeof value === "string" ? value.slice(0, cap) : "";
+}
+
+/** Sanitize an array of rows: filter objects, cap count, map each, backfill ids. */
+function sanitizeRows<T>(
+  rows: unknown,
+  cap: number,
+  idPrefix: string,
+  mapOne: (raw: Record<string, unknown>, id: string) => T,
+): T[] {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+  return rows
+    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
+    .slice(0, cap)
+    .map((row, index) => {
+      const id = typeof row.id === "string" && row.id ? row.id : `${idPrefix}-${index}`;
+      return mapOne(row, id);
+    });
+}
+
+/** Sanitize a pill string list (cap count + per-entry length). */
+function sanitizePillList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .slice(0, SHEET_ROW_CAPS.pills)
+    .map((entry) => entry.slice(0, PILL_CAP));
+}
+
+/** Sanitize an optional {current,max} uses/charges object. */
+function sanitizeUses(value: unknown): { current: number; max: number } | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const v = value as { current?: unknown; max?: unknown };
+  return { current: clampInt(v.current, 0, 999, 0), max: clampInt(v.max, 0, 999, 0) };
+}
+
+/// <summary>
+/// Keeps only finite numeric entries from a persisted record (defaults to empty).
+/// </summary>
+function sanitizeNumberRecord(
+  record: Record<string, number> | undefined,
+): Record<string, number> {
+  if (!record || typeof record !== "object") {
+    return {};
+  }
+  const result: Record<string, number> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      result[key] = value;
     }
   }
-  return true;
+  return result;
+}
+
+/** Sanitize a proficiency-dot record (integer 0..2), capped at 64 keys. */
+function sanitizeDotRecord(record: unknown, maxDot: number): Record<string, number> {
+  if (!record || typeof record !== "object") {
+    return {};
+  }
+  const result: Record<string, number> = {};
+  for (const [key, value] of Object.entries(record as Record<string, unknown>)) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      result[key] = Math.min(Math.max(Math.round(value), 0), maxDot);
+    }
+    if (Object.keys(result).length >= 64) {
+      break;
+    }
+  }
+  return result;
+}
+
+/** Sanitize the feats/species-traits toggle+override map (bool | finite number). */
+function sanitizeTraits(record: unknown): Record<string, boolean | number> {
+  if (!record || typeof record !== "object") {
+    return {};
+  }
+  const result: Record<string, boolean | number> = {};
+  for (const [key, value] of Object.entries(record as Record<string, unknown>)) {
+    if (typeof value === "boolean") {
+      if (value) result[key] = true;
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      result[key] = Math.min(Math.max(value, -1000), 1000);
+    }
+    if (Object.keys(result).length >= 64) {
+      break;
+    }
+  }
+  return result;
 }
 
 /// <summary>
-/// Returns whether two character sheets have the same field values.
+/// Keeps only well-formed inventory rows (v2: self-contained display copies).
+/// Legacy rows without an id are backfilled deterministically (`inv-${index}`).
 /// </summary>
-export function characterSheetsEqual(a: CharacterSheet, b: CharacterSheet): boolean {
-  return (
-    a.hp.current === b.hp.current &&
-    a.hp.max === b.hp.max &&
-    a.ac === b.ac &&
-    a.initiative === b.initiative &&
-    numberRecordsEqual(a.abilityScores, b.abilityScores) &&
-    numberRecordsEqual(a.skillMods, b.skillMods) &&
-    numberRecordsEqual(a.saveMods, b.saveMods) &&
-    a.characterName === b.characterName &&
-    a.playerName === b.playerName &&
-    a.characterClass === b.characterClass &&
-    a.subclass === b.subclass &&
-    a.level === b.level &&
-    a.xp === b.xp &&
-    a.race === b.race &&
-    a.alignment === b.alignment &&
-    a.size === b.size &&
-    a.age === b.age &&
-    a.height === b.height &&
-    a.weight === b.weight &&
-    a.eyes === b.eyes &&
-    a.skin === b.skin &&
-    a.hair === b.hair &&
-    a.backstoryPersonality === b.backstoryPersonality &&
-    a.notes === b.notes &&
-    a.iconUrl === b.iconUrl
-  );
+function sanitizeInventory(inventory: unknown): InventoryEntry[] {
+  return sanitizeRows(inventory, SHEET_ROW_CAPS.inventory, "inv", (raw, id) => {
+    const category = INVENTORY_CATEGORIES.includes(raw.category as InventoryCategory)
+      ? (raw.category as InventoryCategory)
+      : "equipment";
+    const charges = sanitizeUses(raw.charges);
+    return {
+      id,
+      itemId: typeof raw.itemId === "string" ? raw.itemId : null,
+      name: str(raw.name, 200) || "Item",
+      qty:
+        typeof raw.qty === "number" && Number.isFinite(raw.qty) && raw.qty > 0
+          ? Math.floor(raw.qty)
+          : 1,
+      note: str(raw.note, 500),
+      category,
+      ...(typeof raw.weight === "number" && Number.isFinite(raw.weight)
+        ? { weight: Math.max(raw.weight, 0) }
+        : {}),
+      ...(typeof raw.price === "string" && raw.price.trim() ? { price: str(raw.price, SHORT_CAP) } : {}),
+      ...(charges ? { charges } : {}),
+      ...(raw.equipped ? { equipped: true } : {}),
+      ...(raw.attuned ? { attuned: true } : {}),
+      ...(typeof raw.toHit === "number" && Number.isFinite(raw.toHit) ? { toHit: Math.round(raw.toHit) } : {}),
+      ...(typeof raw.damage === "string" && raw.damage.trim() ? { damage: str(raw.damage, SHORT_CAP) } : {}),
+      ...(typeof raw.damageType === "string" && raw.damageType.trim()
+        ? { damageType: str(raw.damageType, SHORT_CAP) }
+        : {}),
+      ...(typeof raw.description === "string" && raw.description.trim()
+        ? { description: str(raw.description, DESC_CAP) }
+        : {}),
+    };
+  });
+}
+
+function sanitizeAttacks(value: unknown): AttackEntry[] {
+  return sanitizeRows(value, SHEET_ROW_CAPS.attacks, "atk", (raw, id) => {
+    const uses = sanitizeUses(raw.uses);
+    return {
+      id,
+      name: str(raw.name, NAME_CAP) || "Attack",
+      toHit: clampInt(raw.toHit, -100, 100, 0),
+      damage: str(raw.damage, SHORT_CAP),
+      ...(typeof raw.damageType === "string" && raw.damageType.trim()
+        ? { damageType: str(raw.damageType, SHORT_CAP) }
+        : {}),
+      ...(uses ? { uses } : {}),
+      ...(typeof raw.notes === "string" && raw.notes.trim() ? { notes: str(raw.notes, DESC_CAP) } : {}),
+      ...(typeof raw.itemId === "string" ? { itemId: raw.itemId } : {}),
+    };
+  });
+}
+
+function sanitizeFeatures(value: unknown): FeatureEntry[] {
+  const sources = new Set(["class", "species", "feat", "other"]);
+  return sanitizeRows(value, SHEET_ROW_CAPS.features, "feat", (raw, id) => {
+    const uses = sanitizeUses(raw.uses);
+    return {
+      id,
+      name: str(raw.name, NAME_CAP) || "Feature",
+      source: (sources.has(raw.source as string) ? raw.source : "other") as FeatureEntry["source"],
+      ...(uses ? { uses } : {}),
+      ...(raw.recovery === "sr" || raw.recovery === "lr" ? { recovery: raw.recovery } : {}),
+      description: str(raw.description, DESC_CAP),
+    };
+  });
+}
+
+function sanitizeSpells(value: unknown): SpellEntry[] {
+  return sanitizeRows(value, SHEET_ROW_CAPS.spells, "spell", (raw, id) => ({
+    id,
+    name: str(raw.name, NAME_CAP) || "Spell",
+    level: clampInt(raw.level, 0, 9, 0),
+    ...(typeof raw.components === "string" && raw.components.trim()
+      ? { components: str(raw.components, SHORT_CAP) }
+      : {}),
+    ...(typeof raw.time === "string" && raw.time.trim() ? { time: str(raw.time, SHORT_CAP) } : {}),
+    ...(typeof raw.range === "string" && raw.range.trim() ? { range: str(raw.range, SHORT_CAP) } : {}),
+    ...(typeof raw.target === "string" && raw.target.trim() ? { target: str(raw.target, SHORT_CAP) } : {}),
+    ...(typeof raw.roll === "string" && raw.roll.trim() ? { roll: str(raw.roll, SHORT_CAP) } : {}),
+    ...(raw.prepared ? { prepared: true } : {}),
+    ...(typeof raw.description === "string" && raw.description.trim()
+      ? { description: str(raw.description, DESC_CAP) }
+      : {}),
+  }));
+}
+
+function sanitizeEffects(value: unknown): EffectEntry[] {
+  return sanitizeRows(value, SHEET_ROW_CAPS.effects, "eff", (raw, id) => ({
+    id,
+    name: str(raw.name, NAME_CAP) || "Effect",
+    ...(typeof raw.source === "string" && raw.source.trim() ? { source: str(raw.source, NAME_CAP) } : {}),
+    enabled: raw.enabled !== false,
+    ...(typeof raw.description === "string" && raw.description.trim()
+      ? { description: str(raw.description, DESC_CAP) }
+      : {}),
+  }));
+}
+
+function sanitizeTools(value: unknown): ToolEntry[] {
+  return sanitizeRows(value, SHEET_ROW_CAPS.tools, "tool", (raw, id) => ({
+    id,
+    name: str(raw.name, NAME_CAP) || "Tool",
+    ...(typeof raw.abilityId === "string" ? { abilityId: str(raw.abilityId, SHORT_CAP) } : {}),
+    mod: clampInt(raw.mod, -100, 100, 0),
+  }));
+}
+
+function sanitizeResources(value: unknown): ResourceEntry[] {
+  return sanitizeRows(value, SHEET_ROW_CAPS.resources, "res", (raw, id) => ({
+    id,
+    name: str(raw.name, NAME_CAP) || "Resource",
+    current: clampInt(raw.current, 0, 999, 0),
+    max: clampInt(raw.max, 0, 999, 0),
+  }));
+}
+
+function sanitizeCurrency(value: unknown): Currency {
+  const v = (value ?? {}) as Partial<Record<keyof Currency, unknown>>;
+  const coin = (n: unknown) => clampInt(n, 0, 1_000_000, 0);
+  return { cp: coin(v.cp), sp: coin(v.sp), ep: coin(v.ep), gp: coin(v.gp), pp: coin(v.pp) };
+}
+
+function sanitizeSpellSlots(value: unknown): Record<string, { current: number; max: number }> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const result: Record<string, { current: number; max: number }> = {};
+  for (let level = 1; level <= 9; level += 1) {
+    const slot = (value as Record<string, unknown>)[String(level)];
+    if (slot && typeof slot === "object") {
+      const s = slot as { current?: unknown; max?: unknown };
+      const max = clampInt(s.max, 0, 12, 0);
+      const current = Math.min(clampInt(s.current, 0, 12, 0), max);
+      if (max > 0 || current > 0) {
+        result[String(level)] = { current, max };
+      }
+    }
+  }
+  return result;
 }
 
 /// <summary>
-/// Merges legacy and partial character sheets into the current schema.
+/// Merges legacy and partial character sheets into the current schema. All Phase 7
+/// fields are required + defaulted so the redaction copy-loop stays total.
 /// </summary>
 export function normalizeCharacterSheet(
   sheet: LegacyCharacterSheet | undefined,
@@ -1146,6 +1785,11 @@ export function normalizeCharacterSheet(
     level: typeof sheet.level === "number" && sheet.level > 0 ? sheet.level : defaults.level,
     xp: typeof sheet.xp === "number" && sheet.xp >= 0 ? sheet.xp : defaults.xp,
     race: sheet.race ?? sheet.species?.trim() ?? defaults.race,
+    background: sheet.background ?? defaults.background,
+    creatureType: sheet.creatureType ?? defaults.creatureType,
+    cr: sheet.cr ?? defaults.cr,
+    source: sheet.source ?? defaults.source,
+    originalClass: sheet.originalClass ?? defaults.originalClass,
     alignment: sheet.alignment ?? defaults.alignment,
     size: sheet.size ?? defaults.size,
     age: sheet.age ?? defaults.age,
@@ -1154,67 +1798,72 @@ export function normalizeCharacterSheet(
     eyes: sheet.eyes ?? defaults.eyes,
     skin: sheet.skin ?? defaults.skin,
     hair: sheet.hair ?? defaults.hair,
-    backstoryPersonality:
+    faith: sheet.faith ?? sheet.deityPatron ?? defaults.faith,
+    gender: sheet.gender ?? sheet.pronouns ?? defaults.gender,
+    ideals: str(sheet.ideals ?? defaults.ideals, BIO_CAP),
+    bonds: str(sheet.bonds ?? defaults.bonds, BIO_CAP),
+    flaws: str(sheet.flaws ?? defaults.flaws, BIO_CAP),
+    personality: str(sheet.personality ?? sheet.personalityTraits ?? defaults.personality, BIO_CAP),
+    appearance: str(sheet.appearance ?? defaults.appearance, BIO_CAP),
+    backstoryPersonality: str(
       sheet.backstoryPersonality ?? (legacyStory || defaults.backstoryPersonality),
-    notes: sheet.notes ?? defaults.notes,
+      BIO_CAP,
+    ),
+    notes: str(sheet.notes ?? defaults.notes, 20_000),
     inventory: sanitizeInventory(sheet.inventory),
     iconUrl: sheet.iconUrl ?? sheet.portraitUrl ?? null,
     hp: {
       current: numberOr(sheet.hp?.current, defaults.hp.current),
       max: numberOr(sheet.hp?.max, defaults.hp.max),
+      ...(typeof sheet.hp?.temp === "number" && Number.isFinite(sheet.hp.temp) && sheet.hp.temp > 0
+        ? { temp: Math.round(sheet.hp.temp) }
+        : {}),
     },
     ac: numberOr(sheet.ac, defaults.ac),
     initiative: numberOr(sheet.initiative, defaults.initiative),
+    speed: numberOr(sheet.speed, defaults.speed),
+    proficiencyBonus: numberOr(sheet.proficiencyBonus, defaults.proficiencyBonus),
+    deathSaves: {
+      successes: clampInt(sheet.deathSaves?.successes, 0, 3, 0),
+      failures: clampInt(sheet.deathSaves?.failures, 0, 3, 0),
+    },
+    hitDice: {
+      current: numberOr(sheet.hitDice?.current, defaults.hitDice.current),
+      max: numberOr(sheet.hitDice?.max, defaults.hitDice.max),
+      die: str(sheet.hitDice?.die, SHORT_CAP) || defaults.hitDice.die,
+    },
+    senses: sheet.senses ?? defaults.senses,
+    resources: sanitizeResources(sheet.resources),
     abilityScores: sanitizeNumberRecord(sheet.abilityScores),
     skillMods: sanitizeNumberRecord(sheet.skillMods),
     saveMods: sanitizeNumberRecord(sheet.saveMods),
+    skillProfs: sanitizeDotRecord(sheet.skillProfs, 2),
+    saveProfs: sanitizeDotRecord(sheet.saveProfs, 1),
+    tools: sanitizeTools(sheet.tools),
+    languages: sanitizePillList(sheet.languages),
+    weaponProfs: sanitizePillList(sheet.weaponProfs),
+    armorProfs: sanitizePillList(sheet.armorProfs),
+    resistances: sanitizePillList(sheet.resistances),
+    immunities: sanitizePillList(sheet.immunities),
+    conditionImmunities: sanitizePillList(sheet.conditionImmunities),
+    vulnerabilities: sanitizePillList(sheet.vulnerabilities),
+    currency: sanitizeCurrency(sheet.currency),
+    carryCapacity: numberOr(sheet.carryCapacity, defaults.carryCapacity),
+    carryMultiplier: numberOr(sheet.carryMultiplier, defaults.carryMultiplier),
+    attunementMax: clampInt(sheet.attunementMax, 0, 99, defaults.attunementMax),
+    attacks: sanitizeAttacks(sheet.attacks),
+    features: sanitizeFeatures(sheet.features),
+    spells: sanitizeSpells(sheet.spells),
+    spellSlots: sanitizeSpellSlots(sheet.spellSlots),
+    spellcasting: {
+      abilityId: str(sheet.spellcasting?.abilityId, SHORT_CAP),
+      attackBonus: clampInt(sheet.spellcasting?.attackBonus, -100, 100, 0),
+      saveDc: clampInt(sheet.spellcasting?.saveDc, 0, 100, 0),
+    },
+    effects: sanitizeEffects(sheet.effects),
+    traits: sanitizeTraits(sheet.traits),
+    favorites: sanitizePillList(sheet.favorites).slice(0, SHEET_ROW_CAPS.favorites),
   };
-}
-
-/// <summary>
-/// Returns a finite number, or the fallback when the value is missing or invalid.
-/// </summary>
-function numberOr(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-/// <summary>
-/// Keeps only well-formed inventory rows (capped at 200 per sheet).
-/// </summary>
-function sanitizeInventory(inventory: InventoryEntry[] | undefined): InventoryEntry[] {
-  if (!Array.isArray(inventory)) {
-    return [];
-  }
-  return inventory
-    .filter((entry) => entry && typeof entry === "object" && typeof entry.name === "string")
-    .slice(0, 200)
-    .map((entry) => ({
-      itemId: typeof entry.itemId === "string" ? entry.itemId : null,
-      name: entry.name.slice(0, 200),
-      qty:
-        typeof entry.qty === "number" && Number.isFinite(entry.qty) && entry.qty > 0
-          ? Math.floor(entry.qty)
-          : 1,
-      note: typeof entry.note === "string" ? entry.note.slice(0, 500) : "",
-    }));
-}
-
-/// <summary>
-/// Keeps only finite numeric entries from a persisted record (defaults to empty).
-/// </summary>
-function sanitizeNumberRecord(
-  record: Record<string, number> | undefined,
-): Record<string, number> {
-  if (!record || typeof record !== "object") {
-    return {};
-  }
-  const result: Record<string, number> = {};
-  for (const [key, value] of Object.entries(record)) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      result[key] = value;
-    }
-  }
-  return result;
 }
 
 /// <summary>
@@ -1251,7 +1900,8 @@ export function sanitizeAnnotation(annotation: unknown): Annotation | null {
     a.kind === "arrow" ||
     a.kind === "rect" ||
     a.kind === "circle" ||
-    a.kind === "text"
+    a.kind === "text" ||
+    a.kind === "pin"
       ? a.kind
       : null;
   if (!kind) {
@@ -1278,6 +1928,7 @@ export function sanitizeAnnotation(annotation: unknown): Annotation | null {
     width: Math.min(Math.max(numberOr(a.width, 3), 1), 12),
     createdAt: numberOr(a.createdAt, Date.now()),
     ephemeral: Boolean(a.ephemeral),
+    ...(a.dmOnly ? { dmOnly: true } : {}),
   };
 }
 

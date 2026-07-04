@@ -130,17 +130,9 @@ export function PlayersPage({
 
       <div className="players-page-body">
         <SheetCards
+          ctx={ctx}
           records={records}
-          isDm
-          roomId={state.roomId}
           onClose={close}
-          onChange={(id, sheet) => ctx.updateSheet(id, sheet)}
-          onRoll={(id, label, modifier, adv) =>
-            ctx.rollDice(`1d20${modifier >= 0 ? `+${modifier}` : modifier}`, {
-              context: { sheetId: id, label },
-              adv,
-            })
-          }
           emptyHint={
             state.playerSlots.length === 0
               ? "No character slots yet — click ＋ Add to create one for each player."

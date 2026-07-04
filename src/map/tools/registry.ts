@@ -1,10 +1,12 @@
 import { selectTool } from "./select";
 import { measureTool } from "./measure";
+import { templateTool } from "./template";
 import { drawTool } from "./draw";
 import { calibrateTool } from "./calibrate";
 import { fogTool } from "./fog";
 import { wallsTool } from "./walls";
 import { lightsTool } from "./lights";
+import { pinTool } from "./pin";
 import type { MapTool } from "./types";
 
 /// <summary>
@@ -14,9 +16,11 @@ import type { MapTool } from "./types";
 export const MAP_TOOLS: MapTool[] = [
   selectTool,
   measureTool,
+  templateTool,
   drawTool,
   calibrateTool,
   fogTool,
+  pinTool,
   wallsTool,
   lightsTool,
 ];

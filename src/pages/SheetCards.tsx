@@ -1,35 +1,25 @@
 import { CharacterSheetPanel } from "../components/CharacterSheet";
-import type { CharacterSheet, SheetRecord, SheetSectionId } from "../lib/types";
+import { buildConditionsControl } from "../components/sheet/conditionsControl";
+import type { PanelContext } from "../panels/registry";
+import type { SheetRecord } from "../lib/types";
 
 type SheetCardsProps = {
+  ctx: PanelContext;
   /** The open sheets, in the order they should appear left-to-right. */
   records: SheetRecord[];
-  isDm: boolean;
-  roomId: string;
   onClose: (id: string) => void;
-  onChange: (id: string, sheet: CharacterSheet) => void;
-  onRoll: (id: string, label: string, modifier: number, adv?: "adv" | "dis") => void;
-  /** NPC-only: per-section reveal toggle. */
-  onToggleReveal?: (id: string, section: SheetSectionId, revealed: boolean) => void;
+  /** NPC page: show the per-page reveal eyes. */
+  allowReveal?: boolean;
   emptyHint: string;
 };
 
 /// <summary>
 /// The prep-page main area: every open sheet is a fixed-width column, laid out
 /// left-to-right and horizontally scrollable when more are open than fit. Each
-/// column is its own CSS size container, so the sheet inside stays single-column
-/// and compact (the multi-column reflow is for wide floating windows).
+/// column is its own CSS size container, so the tabbed sheet inside adapts (sidebar
+/// collapses, single-column pages) exactly like a narrow floating window.
 /// </summary>
-export function SheetCards({
-  records,
-  isDm,
-  roomId,
-  onClose,
-  onChange,
-  onRoll,
-  onToggleReveal,
-  emptyHint,
-}: SheetCardsProps) {
+export function SheetCards({ ctx, records, onClose, allowReveal, emptyHint }: SheetCardsProps) {
   if (records.length === 0) {
     return <div className="page-empty muted">{emptyHint}</div>;
   }
@@ -54,15 +44,17 @@ export function SheetCards({
             <CharacterSheetPanel
               record={record}
               canEdit
-              isDm={isDm}
-              roomId={roomId}
-              onChange={(sheet) => onChange(record.id, sheet)}
+              isDm={ctx.isDm}
+              roomId={ctx.state.roomId}
+              onChange={(sheet) => ctx.updateSheet(record.id, sheet)}
               onToggleReveal={
-                onToggleReveal
-                  ? (section, revealed) => onToggleReveal(record.id, section, revealed)
+                allowReveal
+                  ? (section, revealed) => ctx.dm.setSheetReveal(record.id, section, revealed)
                   : undefined
               }
-              onRoll={(label, modifier, adv) => onRoll(record.id, label, modifier, adv)}
+              onRollCheck={(check, adv) => ctx.rollCheck(record.id, check, adv)}
+              onRest={(kind) => ctx.room.send({ type: "REST", sheetId: record.id, kind })}
+              conditions={buildConditionsControl(ctx.state.tokens, record.id, true, ctx.room.send)}
             />
           </div>
         </section>

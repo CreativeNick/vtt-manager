@@ -9,9 +9,11 @@ import {
 import { uploadTokenImage } from "../lib/uploadAsset";
 
 /// <summary>
-/// Phase 6.7 Item Sheet: a compact editor for a catalog `ItemRecord` — icon, name, type,
-/// rarity, quantity, weight, value, attunement, and description. DM-only (mounted from the
-/// panel registry with roles ["dm"]); edits stream through `onChange` → UPDATE_ITEM.
+/// Item Sheet: a compact editor for a catalog `ItemRecord` — icon, name, type, rarity,
+/// quantity, weight, value, attunement, and description (Phase 6.7) plus the Phase 7
+/// weapon fields (equippable, to-hit, damage, damage type, properties) that surface as a
+/// sheet attack when the item is equipped. DM-only (roles ["dm"]); edits stream through
+/// `onChange` → UPDATE_ITEM.
 /// </summary>
 export function ItemSheetPanel({
   item,
@@ -161,6 +163,60 @@ export function ItemSheetPanel({
         >
           {item.attunement ? "Yes" : "No"}
         </button>
+      </div>
+
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <label style={{ margin: 0 }}>Equippable</label>
+        <button
+          className={item.equippable ? "btn-active" : ""}
+          onClick={() => patch({ equippable: !item.equippable })}
+        >
+          {item.equippable ? "Yes" : "No"}
+        </button>
+      </div>
+
+      <div className="row">
+        <div className="field" style={{ flex: 1 }}>
+          <label>To hit</label>
+          <input
+            type="number"
+            key={`th${item.id}${item.toHit ?? ""}`}
+            defaultValue={item.toHit ?? ""}
+            placeholder="+5"
+            onBlur={(e) => patch({ toHit: e.target.value === "" ? undefined : Math.round(Number(e.target.value) || 0) })}
+          />
+        </div>
+        <div className="field" style={{ flex: 1 }}>
+          <label>Damage</label>
+          <input
+            key={`dm${item.id}${item.damage ?? ""}`}
+            defaultValue={item.damage ?? ""}
+            placeholder="1d8+2"
+            onBlur={(e) => patch({ damage: e.target.value.trim() || undefined })}
+          />
+        </div>
+        <div className="field" style={{ flex: 1 }}>
+          <label>Damage type</label>
+          <input
+            key={`dt${item.id}${item.damageType ?? ""}`}
+            defaultValue={item.damageType ?? ""}
+            placeholder="slashing"
+            onBlur={(e) => patch({ damageType: e.target.value.trim() || undefined })}
+          />
+        </div>
+      </div>
+
+      <div className="field">
+        <label>Properties (comma-separated)</label>
+        <input
+          key={`pr${item.id}${(item.properties ?? []).join(",")}`}
+          defaultValue={(item.properties ?? []).join(", ")}
+          placeholder="Finesse, Light"
+          onBlur={(e) => {
+            const list = e.target.value.split(",").map((p) => p.trim()).filter(Boolean);
+            patch({ properties: list.length ? list : undefined });
+          }}
+        />
       </div>
 
       <div className="field">

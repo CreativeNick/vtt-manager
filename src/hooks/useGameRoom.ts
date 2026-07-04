@@ -59,6 +59,8 @@ export type DiceThrowEvent = Extract<ServerMessage, { type: "DICE_THROW" }>;
 
 /** Another client's live ruler (transient relay), dispatched to map subscribers. */
 export type MeasureEvent = Extract<ServerMessage, { type: "MEASURE" }>;
+/** Another client's live area template (transient relay). */
+export type TemplateEvent = Extract<ServerMessage, { type: "TEMPLATE" }>;
 
 export type GameRoom = {
   status: ConnectionStatus;
@@ -74,6 +76,8 @@ export type GameRoom = {
   subscribeDice: (listener: (event: DiceThrowEvent) => void) => () => void;
   /** Listen for other clients' live rulers; returns an unsubscribe function. */
   subscribeMeasure: (listener: (event: MeasureEvent) => void) => () => void;
+  /** Listen for other clients' live area templates; returns an unsubscribe function. */
+  subscribeTemplate: (listener: (event: TemplateEvent) => void) => () => void;
   clearError: () => void;
 };
 
@@ -249,6 +253,7 @@ export function useGameRoom(roomId: string | null): GameRoom {
   const everJoinedRef = useRef(false);
   const diceListenersRef = useRef<Set<(event: DiceThrowEvent) => void>>(new Set());
   const measureListenersRef = useRef<Set<(event: MeasureEvent) => void>>(new Set());
+  const templateListenersRef = useRef<Set<(event: TemplateEvent) => void>>(new Set());
 
   const send = useCallback((message: ClientMessage) => {
     const socket = socketRef.current;
@@ -347,6 +352,26 @@ export function useGameRoom(roomId: string | null): GameRoom {
         for (const listener of measureListenersRef.current) {
           listener(message);
         }
+      } else if (message.type === "TEMPLATE") {
+        for (const listener of templateListenersRef.current) {
+          listener(message);
+        }
+      } else if (message.type === "CAMPAIGN_EXPORT") {
+        // The DM's full-campaign backup → download it as a JSON file.
+        try {
+          const json = JSON.stringify(message.manifest, null, 2);
+          const blob = new Blob([json], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = `campaign-${message.manifest.state.roomId}-${new Date().toISOString().slice(0, 10)}.json`;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          URL.revokeObjectURL(url);
+        } catch {
+          // Non-fatal: the download just doesn't start.
+        }
       } else if (message.type === "JOINED") {
         setYourRole(message.role);
         setYourPlayerId(message.playerId);
@@ -406,6 +431,13 @@ export function useGameRoom(roomId: string | null): GameRoom {
     };
   }, []);
 
+  const subscribeTemplate = useCallback((listener: (event: TemplateEvent) => void) => {
+    templateListenersRef.current.add(listener);
+    return () => {
+      templateListenersRef.current.delete(listener);
+    };
+  }, []);
+
   return {
     status,
     error,
@@ -418,6 +450,7 @@ export function useGameRoom(roomId: string | null): GameRoom {
     rollDice,
     subscribeDice,
     subscribeMeasure,
+    subscribeTemplate,
     clearError,
   };
 }
@@ -446,6 +479,7 @@ export function useDmActions(room: GameRoom) {
       kickPlayer: (playerId: string) => send({ type: "KICK_PLAYER", playerId }),
       updateSheet: (sheetId: string, sheet: CharacterSheet) =>
         send({ type: "UPDATE_SHEET", sheetId, sheet }),
+      adjustHp: (sheetId: string, delta: number) => send({ type: "ADJUST_HP", sheetId, delta }),
       createSheet: (sheetId: string, name: string) =>
         send({ type: "CREATE_SHEET", sheetId, name }),
       duplicateSheet: (sheetId: string, newSheetId: string) =>

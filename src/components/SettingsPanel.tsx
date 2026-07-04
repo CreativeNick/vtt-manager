@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { PanelContext } from "../panels/registry";
 import {
   DEFAULT_TOKEN_SHAPES,
   DEFAULT_TOKEN_SIZE,
   TOKEN_SHAPES,
   tokenSizeLabel,
+  type CampaignExport,
   type TokenShape,
   type TokenShapeDefaults,
 } from "../lib/types";
+import type { CampaignManifest } from "../lib/campaignManifest";
 
 const SHAPE_LABEL: Record<TokenShape, string> = {
   circle: "● Circle",
@@ -51,6 +53,25 @@ function ToggleRow({
 export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
   const { dice, isDm, state, room } = ctx;
   const [layoutReset, setLayoutReset] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
+
+  const handleImportFile = async (file: File) => {
+    setImportError(null);
+    try {
+      const text = await file.text();
+      const manifest = JSON.parse(text) as CampaignExport | CampaignManifest;
+      if (manifest.version !== 1 && manifest.version !== 2) {
+        throw new Error("Unrecognized campaign file.");
+      }
+      if (!window.confirm("Import this campaign? It REPLACES the current campaign's scenes (v1) or the entire campaign (v2). This can't be undone.")) {
+        return;
+      }
+      room.send({ type: "IMPORT_CAMPAIGN", manifest });
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : "Could not read that file.");
+    }
+  };
 
   return (
     <div className="panel-body stack">
@@ -142,6 +163,30 @@ export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
               onChange={(e) => ctx.dm.setDefaultTokenSize(Number(e.target.value))}
             />
           </div>
+
+          <div className="section-title">Campaign backup</div>
+          <p className="muted" style={{ fontSize: "0.75rem", margin: 0 }}>
+            Download the full campaign as a JSON file, or restore one. Images are referenced by
+            URL, never embedded.
+          </p>
+          <div className="row">
+            <button onClick={() => room.send({ type: "EXPORT_CAMPAIGN" })}>⬇ Export campaign</button>
+            <button onClick={() => importRef.current?.click()}>⬆ Import…</button>
+            <input
+              ref={importRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleImportFile(file);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          {importError ? (
+            <span className="muted" style={{ color: "var(--danger)", fontSize: "0.75rem" }}>{importError}</span>
+          ) : null}
         </>
       ) : null}
 

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { ClientMessage, Light, Scene } from "../../lib/types";
+import type { ClientMessage, Light, Scene, TemplateKind } from "../../lib/types";
 
 /// <summary>
 /// The plug-in interface every map tool implements (Phase 5 architecture; Phase 6
@@ -37,6 +37,10 @@ export type ToolRuntime = {
   wallKind: "wall" | "door";
   /** Lights tool: the preset a freshly placed light gets (radii in feet + Phase 6.6 style). */
   lightRadii: Omit<Light, "id" | "x" | "y" | "enabled">;
+  /** Templates tool: which area shape to draw. */
+  templateKind: TemplateKind;
+  /** Templates tool: pin the shape as a persistent annotation instead of a fading relay. */
+  templatePin: boolean;
 };
 
 export type MapTool = {

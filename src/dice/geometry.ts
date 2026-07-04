@@ -82,7 +82,7 @@ function crystalPoints(): number[][] {
   return pts;
 }
 
-function platonicPoints(kind: Exclude<DieKind, "d10" | "custom">): number[][] {
+function platonicPoints(kind: Exclude<DieKind, "d10" | "custom" | "coin">): number[][] {
   switch (kind) {
     case "d4":
       return [
@@ -328,6 +328,29 @@ function buildD10(): { geometry: THREE.BufferGeometry; points: THREE.Vector3[]; 
 }
 
 /// <summary>
+/// Builds a coin: a squat cylinder (axis along Y) thin enough that rim landings are
+/// negligible. Exactly two faces — the +Y cap (Heads, value 1) and the −Y cap (Tails,
+/// value 2). The hull points feed the physics collider + the visual drum mesh.
+/// </summary>
+function buildCoin(): { geometry: THREE.BufferGeometry; points: THREE.Vector3[]; faceData: { normal: THREE.Vector3; centroid: THREE.Vector3 }[] } {
+  const R = 1;
+  const halfH = 0.3;
+  const N = 20;
+  const points: THREE.Vector3[] = [];
+  for (let k = 0; k < N; k += 1) {
+    const a = (k * 2 * Math.PI) / N;
+    points.push(new THREE.Vector3(Math.cos(a) * R, halfH, Math.sin(a) * R));
+    points.push(new THREE.Vector3(Math.cos(a) * R, -halfH, Math.sin(a) * R));
+  }
+  const geometry = new ConvexGeometry(points);
+  const faceData = [
+    { normal: new THREE.Vector3(0, 1, 0), centroid: new THREE.Vector3(0, halfH, 0) },
+    { normal: new THREE.Vector3(0, -1, 0), centroid: new THREE.Vector3(0, -halfH, 0) },
+  ];
+  return { geometry, points, faceData };
+}
+
+/// <summary>
 /// Scales a geometry, its hull points, and face metadata so the die's circumscribed
 /// radius equals TARGET_RADIUS, keeping every die a consistent size.
 /// </summary>
@@ -378,6 +401,9 @@ function assignFaceValues(
     } else if (sides === 10) {
       // Standard d10 shows 0..9 where face value 10 reads "0".
       label = String(value % 10);
+    } else if (sides === 2) {
+      // Coin: the +Y cap (value 1) is Heads, the −Y cap (value 2) is Tails.
+      label = value === 1 ? "H" : "T";
     } else {
       label = String(value);
     }
@@ -410,6 +436,11 @@ export function buildDieGeometry(kind: DieKind, percentile = false): DieGeometry
 
   if (kind === "d10") {
     const built = buildD10();
+    geometry = built.geometry;
+    points = built.points;
+    faceData = built.faceData;
+  } else if (kind === "coin") {
+    const built = buildCoin();
     geometry = built.geometry;
     points = built.points;
     faceData = built.faceData;

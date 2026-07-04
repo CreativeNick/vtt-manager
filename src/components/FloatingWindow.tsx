@@ -323,45 +323,50 @@ export function FloatingWindow({
       style={style}
       onPointerDownCapture={() => setZ(bringToFront(id))}
     >
-      <div
-        className="window-header"
-        onPointerDown={startDrag}
-        onPointerMove={onDragMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onDoubleClick={resetGeom}
-      >
-        <span className="window-title">{title}</span>
-        <span className="row" style={{ gap: "0.15rem" }}>
-          {onDock ? (
+      {/* The visual chrome + content clip live on this inner wrapper, so a sheet's page
+          rail (portaled in as a `.window-siderail` sibling) can protrude OUTSIDE the
+          window over the tabletop without breaking the window's rounding/resize. */}
+      <div className="window-inner">
+        <div
+          className="window-header"
+          onPointerDown={startDrag}
+          onPointerMove={onDragMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onDoubleClick={resetGeom}
+        >
+          <span className="window-title">{title}</span>
+          <span className="row" style={{ gap: "0.15rem" }}>
+            {onDock ? (
+              <button
+                className="btn-ghost icon-btn"
+                title="Return to sidebar"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={onDock}
+              >
+                ⇥
+              </button>
+            ) : null}
             <button
               className="btn-ghost icon-btn"
-              title="Return to sidebar"
+              title={maximized ? "Restore" : "Maximize"}
               onPointerDown={(event) => event.stopPropagation()}
-              onClick={onDock}
+              onClick={() => setMaximized((current) => !current)}
             >
-              ⇥
+              {maximized ? "❐" : "⛶"}
             </button>
-          ) : null}
-          <button
-            className="btn-ghost icon-btn"
-            title={maximized ? "Restore" : "Maximize"}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={() => setMaximized((current) => !current)}
-          >
-            {maximized ? "❐" : "⛶"}
-          </button>
-          <button
-            className="btn-ghost icon-btn"
-            title="Close"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={onClose}
-          >
-            ✕
-          </button>
-        </span>
+            <button
+              className="btn-ghost icon-btn"
+              title="Close"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={onClose}
+            >
+              ✕
+            </button>
+          </span>
+        </div>
+        <div className="window-body">{children}</div>
       </div>
-      <div className="window-body">{children}</div>
       {maximized
         ? null
         : RESIZE_DIRS.map((dir) => (

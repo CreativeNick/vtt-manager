@@ -1,10 +1,16 @@
 import type { ReactNode } from "react";
 import type { MapTool } from "../map/tools/types";
 import type { LightPreset } from "../map/tools/lights";
-import type { LightBlendMode } from "../lib/types";
+import { TEMPLATE_KINDS, type LightBlendMode, type TemplateKind } from "../lib/types";
 import type { History } from "../lib/history";
 
 const DRAW_COLORS = ["#ffd166", "#ff6b6b", "#7cc4ff", "#8ce99a", "#f3f0ff"];
+const TEMPLATE_ICON: Record<TemplateKind, string> = {
+  circle: "○ Circle",
+  cone: "◁ Cone",
+  line: "／ Line",
+  rect: "▭ Rect",
+};
 const DRAW_WIDTHS = [2, 4, 7];
 /** CSP-style labels for the light tint blend modes (+ the tint-off escape hatch). */
 const LIGHT_BLEND_OPTIONS: Array<{ id: LightBlendMode; label: string }> = [
@@ -33,6 +39,11 @@ type MapToolbarProps = {
   onDrawColor: (color: string) => void;
   drawWidth: number;
   onDrawWidth: (width: number) => void;
+  /** Templates tool (Phase 7): shape + pin toggle. */
+  templateKind: TemplateKind;
+  onTemplateKind: (kind: TemplateKind) => void;
+  templatePin: boolean;
+  onToggleTemplatePin: () => void;
   fogEnabled: boolean;
   onToggleFog: () => void;
   onResetFog: () => void;
@@ -120,6 +131,10 @@ export function MapToolbar({
   onToggleSnap,
   drawColor,
   onDrawColor,
+  templateKind,
+  onTemplateKind,
+  templatePin,
+  onToggleTemplatePin,
   drawWidth,
   onDrawWidth,
   fogEnabled,
@@ -327,6 +342,34 @@ export function MapToolbar({
           <span className="map-toolbar-hint">
             {isDm ? "Right-click a drawing to erase it" : "Your drawings fade after ~10s"}
           </span>
+        </div>
+      ) : null}
+
+      {activeToolId === "template" ? (
+        <div className="map-toolbar-options">
+          <Label>Shape</Label>
+          <Row>
+            {TEMPLATE_KINDS.map((kind) => (
+              <OptBtn
+                key={kind}
+                active={templateKind === kind}
+                title={`${kind} template`}
+                onClick={() => onTemplateKind(kind)}
+              >
+                {TEMPLATE_ICON[kind]}
+              </OptBtn>
+            ))}
+          </Row>
+          <Row>
+            <OptBtn
+              active={templatePin}
+              title={templatePin ? "Pin: the shape stays until cleared" : "Fades ~2s after you release"}
+              onClick={onToggleTemplatePin}
+            >
+              {templatePin ? "📌 Pin ✓" : "📌 Pin"}
+            </OptBtn>
+          </Row>
+          <span className="map-toolbar-hint">Drag from the origin to size the area.</span>
         </div>
       ) : null}
 

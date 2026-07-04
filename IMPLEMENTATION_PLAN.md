@@ -5,11 +5,18 @@ Roadmap for building out the VTT from the `bare-bones` foundation. Covers everyt
 architecture reference — **historical**, describes the codebase before Phases 0–4 shipped),
 `DICE_PLAN.md` (v1 3D dice concepts — the shipped Phase 4 recovered its core).
 
-## STATUS (2026-07-02) — read this first in a fresh session
+## STATUS (2026-07-04) — read this first in a fresh session
 
-**Phases 0–6.5 are SHIPPED and machine-verified** (plus two UX-feedback rounds and a
-3D-dice feedback round). **Phase 7 (game-content depth: the tabbed character-sheet
-redesign, items, rolls, token facing, DM tools) is next.** The roadmap was restructured
+**Phases 0–7 are SHIPPED and machine-verified** (plus several UX-feedback rounds and a
+3D-dice feedback round). **Phase 7 (game-content depth) just shipped** as sub-rounds
+7a–7k: the tabbed character-sheet redesign (+ a FoundryVTT-style floating page rail),
+the fleshed-out sheet data model, item weapon fields, structured `ROLL_CHECK` with
+color-coded log chips, quick-HP steppers, token facing, measurement templates, coin flip,
+map pins + scene pre-staging, a DM Assets page, and full campaign export/import — see its
+"as built" note. **Phase 8 (full aesthetic revamp + sound design) is next.** Phases 6.6–6.8
+had already pulled a lot forward (lighting revamp; token shapes/sizing/image tokens; item
+tokens + Item Sheet + Items page; independent NPC folder trees; directory multi-select +
+folder reorder). The roadmap was restructured
 2026-07-02 (user): 5.5 = shell/layout fixes ✅, 6 = vision ✅ (v1), 6.5 = scene-editor
 round ✅ (pulled the fog brush + scenes-editor depth forward from 7; also Players tab bar
 + active-scene-only player redaction), 7 = game-content depth, 8 = full aesthetic revamp
@@ -22,9 +29,10 @@ the lighting revamp: gradual falloff, colored/animated/directional lights, a per
 panel, and a continuous 0–1 darkness level with day↔night transitions.
 
 - **Verification:** `tests/` holds the WS smoke suites + unit tests with a README on how
-  to run them (partykit dev server + `node tests/smoke-*.mjs`). All pass as of this date
-  (phase0–6 + scenes + ux2 + all five unit suites, all green as of 2026-07-03).
-  Re-run the full set after any server/redaction/protocol change.
+  to run them (partykit dev server + `node tests/smoke-*.mjs`). All pass (phase0–6 + scenes +
+  ux2 + the unit suites; `unit-scene-editor.test.ts` grew through 6.6–6.8 to cover lighting,
+  token/item fields, token sizing, npc-folder trees, and folder sortOrder — all green as of
+  2026-07-04). Re-run the full set after any server/redaction/protocol change.
 - **Shipped file map (orientation):** shared logic `src/lib/{types,redact,dice,dice3d,
   pointerDrag,sceneUtils,clampToViewport,visibility,sceneMessages,localFlags,history}.ts`;
   server `partykit/server.ts`; shell `src/App.tsx` + `src/panels/registry.tsx` (dock tabs +
@@ -1173,12 +1181,242 @@ per-light background saturation/contrast/shadow adjustments (needs per-region pi
 
 ---
 
-## Phase 7 — Game-content depth: sheets, items, rolls, DM tools — planned
+## Phase 6.8 — Directory pages, independent folder trees, multi-select, token sizing, folder reorder — ✅ SHIPPED
+
+> **As built (2026-07-03/04):** a run of directory/token QoL rounds on top of Phase 6.7,
+> machine-verified (`unit-scene-editor.test.ts` green incl. new npc-folder / token-size /
+> folder-sortOrder checks; `check-folders` WS smoke green for independent trees; `tsc` + `npm run
+> build` pass). Grouped by feature; all mirror existing patterns (Directory, messages,
+> normalizers).
+>
+> - **Independent folder trees (user: NPCs page ≠ Actors sidebar).** `Folder.kind` gained
+>   `"npc"`; `SheetRecord` gained `npcFolderId`/`npcSortOrder` so an NPC files independently in
+>   the Actors sidebar (`folderId`, "actor" tree) and the NPCs page ("npc" tree). `ActorsPanel`
+>   took a `folderKind` prop; `SET_SHEET_FOLDER` gained a `tree` param; `CREATE_FOLDER` accepts
+>   `"npc"`; `DELETE_FOLDER` orphans both trees. **Gotcha fixed:** `normalizeGameState` was
+>   filtering folders to `actor|item` only — silently dropping every `"npc"` folder on the next
+>   normalize (items worked, NPC folders vanished). Now allows `npc`, and reconciles `npcFolderId`.
+> - **Items page.** New `ItemsPage` mirrors `NpcsPage` (directory roster + side-by-side
+>   `ItemSheetPanel` cards), added to the page switcher; it **shares** the Items sidebar's `"item"`
+>   folders/items. `ItemsPanel` row-click now opens the Item Sheet (inline editor dropped).
+> - **Token sizing.** Tokens were `gridSize/4` (half a cell — too small); now `tokenRadius(gridSize,
+>   sizeCells)` with a size-1 (Medium) ≈ 0.9 cell. `Token.size` (per-token) + `GameState.defaultTokenSize`
+>   (campaign default, `SET_DEFAULT_TOKEN_SIZE`), both edited via **sliders** (0.5×–4×) in TokenEditor
+>   (with a Default/Custom toggle) and Settings. `TOKEN_SIZES`/`tokenSizeLabel` name the D&D sizes.
+> - **Directory multi-select.** Marquee rubber-band on empty list space + Ctrl/Shift-click; selected
+>   rows highlight; the search row **swaps in place** to a "N selected · Delete · Clear" bar (fixed
+>   `min-height` so nothing shifts); dragging a selected row drags the whole selection (folder move
+>   or fanned board drop). `.dir-list` fills its container so there's empty space to start a drag;
+>   marquee is scroll-corrected. Works in all directories (docks + pages).
+> - **Folder drag-to-reorder.** `Folder.sortOrder` + `MOVE_FOLDER`; the whole folder header drags
+>   (name field included — a click still focuses to rename since the drag needs a 4px move; an
+>   already-focused field keeps its caret). Directory sorts folders by `sortOrder`.
+> - **Small QoL:** board right-click no longer shows the browser save/copy/inspect menu
+>   (`map-root` `onContextMenu` preventDefault); folder-rename **Enter** blurs/commits (and only the
+>   focused name shows the input box); **"Create Player"** button in the Actors sidebar; the Scenes
+>   **map upload** is now a real dropzone button (icon + thumbnail) instead of bare text; item
+>   **duplicate** button.
+>
+> **Files:** `src/lib/types.ts`, `partykit/server.ts`, `src/hooks/useGameRoom.ts`, `src/lib/sceneUtils.ts`,
+> `src/components/{Directory,ActorsPanel,ItemsPanel,TokenEditor,SettingsPanel,SceneSettings,MapCanvas}.tsx`,
+> `src/pages/{ItemsPage,NpcsPage,PageSwitcher}.tsx`, **new** `src/pages/ItemsPage.tsx`, `src/App.tsx`,
+> `src/index.css`.
+>
+> **Still to do (noticed in testing):** the local dev loop leaves orphaned `workerd` processes that
+> squat on port 1999 and serve stale code — kill `workerd` between server restarts. Server-message
+> changes here (npc folders, `SET_DEFAULT_TOKEN_SIZE`, `MOVE_FOLDER`) need a PartyKit restart to take
+> effect, not just a browser refresh.
+
+---
+
+## Phase 7 — Game-content depth: sheets, items, rolls, DM tools — ✅ SHIPPED
 
 The "make it playable for a real campaign" phase (user, 2026-07-02). Each item follows
 the fixed recipe (GameState field → normalize → message → redaction → cap).
-**Note:** Phase 6.7 already shipped part of the items/tokens scope (Item Sheet, item tokens,
-token shapes, item duplicate/drag).
+
+> **As built (2026-07-04):** shipped in one run as sub-rounds 7a–7k; machine-verified
+> (`npx tsc` + `npm run build` clean; unit suites `unit-sheets`, **new**
+> `unit-sheets-phase7` + `unit-rollcheck`, `unit-redaction` all green; **new**
+> `tests/smoke-phase7.mjs` = 33 checks green; phase0–6 + scenes + ux2 smoke all still
+> green). Deltas & notes:
+> - **7a data model (`src/lib/types.ts`).** `CharacterSheet` grew ~40 fields (temp HP,
+>   death saves, hit dice, speed/prof/senses, currency/carry/attunement, prof-dots,
+>   pills, attacks/features/spells/spellSlots/spellcasting/effects, biography,
+>   `traits`, `favorites`). New row types (`InventoryEntry` v2 + Attack/Feature/Spell/
+>   Effect/Tool/Resource) each carry a stable `id` (legacy rows backfilled
+>   **deterministically** `inv-${index}`). All fields required + defaulted so the
+>   redaction copy-loop stays total. `SheetSectionId` +5 (features/spells/effects/
+>   traits/biography; bio moved off `identity`); a unit test asserts **every
+>   CharacterSheet key is in exactly one section**. `MAX_SHEET_BYTES = 20_000` enforced
+>   in `UPDATE_SHEET`; row/string caps in `normalizeCharacterSheet`. `ItemRecord` +=
+>   damage/damageType/properties/equippable/toHit. `Token.facing?`. `CONDITIONS` +4
+>   (deafened/exhaustion/incapacitated/petrified). `characterSheetsEqual` deleted (0
+>   callers). Inventory sanitizer is now more lenient (keeps a nameless row with a
+>   default name instead of dropping it — friendlier mid-edit; the redaction unit test
+>   was updated to match).
+> - **7b/7c tabbed sheet (`src/components/sheet/`).** Built as one effort: `SheetView`
+>   (shell) + `useSheetDraft` + `SheetSidebar`/`SheetHeader`/`SheetRail`/
+>   `DeathSaveTracker` + `pages/{Main,Inventory,Features,Spells,Effects,Biography,
+>   Traits}Page` + `RowTable` (the grouped-table workhorse) + `atoms.tsx` + `traitDefs.ts`.
+>   PC vs NPC is data-driven (NPC omits Main, leads Features with an ability-blocks +
+>   saves header). `CharacterSheet.tsx` is now a thin wrapper over `SheetView`; the old
+>   card body is gone. Responsive via container queries on `.sheet7` (sidebar collapses
+>   narrow; Main goes 3-region ≥680px). Registry sheet width 360→560 (min 420×480);
+>   page `.sheet-col` 400→520. Rest buttons send `REST` (log-only). Effects Conditions
+>   grid is a **view over linked tokens** → new `SET_TOKEN_CONDITIONS` (no sheet-side
+>   copy). ItemSheetPanel gained the weapon fields; drop-onto-sheet copies them.
+>   **Sheet page rail restyle (user, same day):** the rail is no longer a solid column —
+>   it's floating square buttons that protrude along the right edge, and the active one
+>   flattens + matches the panel bg so it reads as docked into the sheet.
+> - **7d rolls.** New `ROLL_CHECK {sheetId, check, adv?, private?}` — the server resolves
+>   modifiers **from the sheet it owns** (pure `src/lib/rollCheck.ts`, unit-tested) and
+>   builds `DiceRoll.parts` (die/ability/prof/item/flat). `ROLL_DICE` + `DICE_THROW`
+>   synthesize parts too. `LogPanel` renders color chips summing to the total; the
+>   masked-secret branch rebuilds the roll so parts can't leak. Sheet click-rolls swapped
+>   `onRoll(label, mod)` → `onRollCheck(check, adv)`; App/registry gained `rollCheck`
+>   (secret toggle applied).
+> - **7e quick HP.** `ADJUST_HP {sheetId, delta}` (temp eaten first, clamp 0..max,
+>   combat-logs; dmOnly when an NPC's HP is secret). Shared `HpStepper` on the
+>   TokenEditor + initiative rows. (Right-click token popover deferred — a Konva HTML
+>   overlay; the two steppers cover the workflow.)
+> - **7f token facing.** `Token.facing` on both `MOVE_TOKEN` server paths (undefined =
+>   keep); Konva wedge on the token rim; drag rotate-handle (commits on pointer-up only),
+>   `[`/`]` (15°) + `{`/`}` (45°) nudge, TokenEditor slider. (Alt+scroll deferred.)
+> - **7g templates.** `src/map/tools/template.tsx` (circle/cone/line/rect), transient
+>   `TEMPLATE` relay via a **generalized `relayTransient`** (renamed from `relayMeasure`,
+>   keyed `${sender}:${channel}`; MEASURE rides it too, still green), toolbar shape + pin
+>   options; "pin" commits a stroke annotation.
+> - **7h coin flip.** `"coin"` DieKind (sides 2) through DIE_SIDES/DIE_KINDS/decomposeDie/
+>   buildExpressionLabel; `buildCoin()` squat cylinder + H/T decals; far-left tray slot +
+>   🪙 button; server values ∈{1,2}, log "🪙 Coin flip — Heads/Tails" via a Heads/Tails
+>   part; secret + text fallback inherit from Phase 4. (Bespoke flip-in-place launch +
+>   metallic-clink audio variant deferred — drag-throw works; the default impact sound
+>   plays.)
+> - **7i scenes depth.** Map pins = annotation kind `"pin"` (📍 + text) + `dmOnly` field;
+>   **new redaction rule** strips `dmOnly` annotations from player scenes; DM-only `pinTool`.
+>   Pre-staging = a "Stage actors" list in the Scenes editor that drops real tokens on the
+>   **selected** (possibly non-active) scene — already player-invisible via the
+>   active-scene-only redaction (verified: hidden until Set Live).
+> - **7j assets page.** DM-only `AssetsPage` (page switcher) + `functions/api/{list,
+>   delete}-asset.ts` (R2 `.list`/`.delete`, delete guarded by the `{kind}/{roomId}--`
+>   key prefix) + `findAssetUsage` in-use scanner (pure, unit-tested) with a
+>   delete-with-warning confirm + Copy-URL. R2 lives in the deployed env; dev shows an
+>   empty list + a note. (Assign-to-portrait / drag-to-board / token presets deferred.)
+> - **7k export/import.** `EXPORT_CAMPAIGN`→`CAMPAIGN_EXPORT` (full persisted state,
+>   downloaded as JSON by the requesting DM); `IMPORT_CAMPAIGN` grew a **v2** full-state
+>   path (≤900KB, normalized, roomId pinned, vanished-slot players kicked, connected list
+>   rebuilt, persisted) alongside the kept v1 scenes-only path. Buttons in SettingsPanel.
+> - **Deferred polish (noted, not blocking):** right-click HP popover; token facing
+>   Alt+scroll; coin flip-in-place launch + metallic clink; assets assign/drag/presets;
+>   hover tooltip cards on sheet rows (rows expand instead). The ornate parchment/red
+>   skin is **Phase 8** — this shipped the structure + behavior on the existing tokens.
+> - **Files:** new `src/components/sheet/**`, `src/lib/{rollCheck,assetUsage}.ts`,
+>   `src/map/tools/{template,pin}.tsx`, `src/components/HpStepper.tsx`,
+>   `src/pages/AssetsPage.tsx`, `src/styles/sheet7.css`, `functions/api/{list,delete}-asset.ts`,
+>   `tests/{unit-sheets-phase7,unit-rollcheck}.test.ts`, `tests/smoke-phase7.mjs`; edits
+>   across `src/lib/{types,redact,dice3d}.ts`, `src/dice/{geometry,trayScene}.ts`,
+>   `partykit/server.ts`, `src/components/{CharacterSheet,LogPanel,TokenEditor,
+>   InitiativeTracker,ItemSheetPanel,MapCanvas,MapToolbar,SettingsPanel,DiceTray}.tsx`,
+>   `src/pages/{SheetCards,PlayersPage,NpcsPage,ScenesPage,PageSwitcher}.tsx`,
+>   `src/hooks/useGameRoom.ts`, `src/App.tsx`, `src/panels/registry.tsx`,
+>   `src/map/tools/{types,registry}.ts`.
+> - **Manual checks still owed by the user (two browsers):** tabbed sheet feel (PC + NPC,
+>   reveal eyes per page, death saves, rest log, the new floating rail); ROLL_CHECK color
+>   chips in the log; quick-HP steppers; token facing rotate-drag + `[`/`]`; template
+>   relay across windows; coin flip 3D + secret + text; staged tokens invisible until Set
+>   Live; assets list/delete against real R2; export→import round-trip in the UI.
+**Note:** Phases 6.7–6.8 already shipped much of the items/tokens/directory scope (Item Sheet,
+item tokens, token shapes + sizing, item duplicate/drag, an Items page, independent NPC folder
+trees, directory multi-select, and folder drag-reorder).
+
+> **RESOLVED DESIGN (2026-07-04, user + exploration) — this block is the canonical build
+> spec; the prose below it is the layout/UX reference it was distilled from.** Two new
+> user decisions: (1) implement **all of Phase 7 in one run**, as sequenced
+> independently-verifiable sub-rounds 7a–7k; (2) **one sheet UI everywhere** — the tabbed
+> sheet fully **replaces** the card-style `CharacterSheet.tsx`; the Players/NPCs pages
+> widen their columns (400→520px) and the vitals sidebar auto-collapses in narrow
+> containers (no compact second implementation). Full design lives in the plan file
+> `implement-phase-7-*.md`; the load-bearing decisions:
+>
+> **Data model (`src/lib/types.ts`).** New row types (each with a stable `id`, legacy rows
+> backfilled deterministically `inv-${index}` — never randomUUID): `InventoryEntry` v2
+> (adds category/weight/price/charges/equipped/attuned/toHit/damage/damageType/description
+> — **self-contained display copies** since the item catalog is DM-only redacted),
+> `AttackEntry`, `FeatureEntry`, `SpellEntry`, `EffectEntry`, `ToolEntry`, `ResourceEntry`.
+> `CharacterSheet` grows: `hp.temp`; background/creatureType/cr/source/originalClass;
+> speed/proficiencyBonus/deathSaves/hitDice/senses/resources; skillProfs/saveProfs
+> (0/1/2 dots, display-only — mods stay manual); languages/weaponProfs/armorProfs/
+> resistances/immunities/conditionImmunities/vulnerabilities pills; currency/carryCapacity/
+> carryMultiplier/attunementMax; attacks/features/spells/spellSlots/spellcasting/effects;
+> biography fields (faith/gender/ideals/bonds/flaws/personality/appearance);
+> `traits: Record<string, boolean|number>` (trait *defs* live client-side in
+> `sheet/traitDefs.ts` — only values persist) + `favorites: string[]`. Every field is
+> **required in the type** and defaulted by `normalizeCharacterSheet` + `createDefaultSheet`
+> so the redaction copy-loop stays total. `ItemRecord` += damage/damageType/properties/
+> equippable/toHit. `Token` += `facing?: number` (deg, 0=up; normalize wraps 0..360,
+> drops NaN). `CONDITIONS` += deafened/exhaustion/incapacitated/petrified (additive, ids
+> stable). `DiceRoll` += `parts?: RollPart[]`. Conditions are **never** stored on the sheet
+> — `Token.conditions` stays the single source of truth (kills the 2-way sync loop).
+>
+> **Sections & redaction.** `SheetSectionId` gains features/spells/effects/traits/biography
+> (biography-ish fields **move out of** `identity`); `SHEET_SECTION_FIELDS` maps every new
+> field into exactly one section so `redactSheetRecord` needs **no code change**. A unit
+> test asserting *every `CharacterSheet` key appears in exactly one section* is the phase's
+> most important guard. New sections start unrevealed on existing NPCs (leak-free
+> direction). Reveal-eyes map onto sheet pages (Main eye toggles abilities+saves+skills via
+> 3 `SET_SHEET_REVEAL` sends).
+>
+> **Caps.** Row caps (attacks 50, features 100, spells 200, effects 50, resources/tools 20,
+> favorites 30, pills 40×60); string caps (names 120, descriptions 1000, damage/price 40,
+> bio texts 5000). **`MAX_SHEET_BYTES = 20_000` enforced server-side** in UPDATE_SHEET
+> (reject post-normalize if `JSON.stringify` exceeds it); client soft-warns at 18KB.
+> `characterSheetsEqual` (0 call sites) deleted.
+>
+> **Tabbed sheet components** — new `src/components/sheet/`: `SheetView` (page + collapse
+> state, PC/NPC page lists), `useSheetDraft` (extracted 400ms-debounce draft + size warn),
+> `SheetSidebar`/`SheetHeader`/`SheetRail`/`DeathSaveTracker`, `pages/{Main,Inventory,
+> Features,Spells,Effects,Biography,Traits}Page`, `traitDefs.ts`, and atoms
+> (`RowTable` — the grouped-table workhorse — `PillList`, `AbilityBlock`, `StatBadge`,
+> `ProfDot`, `UsesCell`, `BarMeter`, `SlotPips`). PC vs NPC is data-driven (NPC omits Main,
+> starts on Features with an ability-blocks + saves header). `CharacterSheetPanel` stays a
+> thin wrapper (same props + `onRollCheck`) so `panels/registry.tsx` + `pages/SheetCards.tsx`
+> barely change. Responsive via container queries on the sheet root (rewrite the 620px
+> 2-col rule): <500px sidebar-collapsed + 44px rail; 500–679 sidebar+content+rail;
+> ≥680 full screenshot layout. Attacks list = `sheet.attacks` ∪ equipped-inventory rows
+> with `damage` (computed, never stored). Effects Conditions grid is a **view over linked
+> tokens** → `SET_TOKEN_CONDITIONS` per token.
+>
+> **New/changed messages:** `UPDATE_SHEET` (+size cap), `ROLL_CHECK {sheetId, check, adv?,
+> private?}` (server resolves the roll breakdown from the sheet it owns — chosen over
+> parts-in-request; `ROLL_DICE` stays for freeform), `ADJUST_HP {sheetId, delta}` (temp
+> eaten first, clamp 0..max, combat-logs, dmOnly when NPC combat unrevealed),
+> `SET_TOKEN_CONDITIONS {tokenId, conditions}`, `MOVE_TOKEN` (+`facing?` on **both** server
+> paths; undefined = keep), `REST {sheetId, kind}` (log-only hook), `TEMPLATE` (transient
+> relay via generalized `relayTransient`), `EXPORT_CAMPAIGN`→`CAMPAIGN_EXPORT`,
+> `IMPORT_CAMPAIGN` v2 (full state, keeps v1). New HTTP `functions/api/{list,delete}-asset.ts`
+> (R2 prefix `{kind}/{roomId}--`; delete guarded by roomId key-prefix match).
+>
+> **`DiceRoll.parts`** built server-side in ROLL_CHECK + synthesized in ROLL_DICE/
+> DICE_THROW_REQUEST; `LogPanel` renders color chips (`.roll-chip--die/ability/prof/item/
+> flat`) summing to total. Masked-roll branch already rebuilds the roll explicitly → parts
+> can't leak (pinned by a test).
+>
+> **Board/dice:** facing wedge on the TokenNode rim (rotate-drag commits on pointer-up
+> only — never per-frame; Alt+scroll/`[`/`]` nudge; Shift = 45° snap). Templates =
+> `src/map/tools/template.tsx` mirroring `measure.tsx`; pin = commit as annotation. Coin =
+> `"coin"` DieKind (sides 2) + `buildCoin()` squat cylinder + heads/tails decals + far-left
+> tray slot + `flipInPlace()` launch; inherits secret/text-fallback from Phase 4. Scene
+> pre-staging = **real tokens on the non-active scene** (redaction already hides them from
+> players — nearly free); map pins = annotation kind `"pin"` with a new `dmOnly`-annotation
+> redaction rule. Assets page = DM-only page over the R2 list endpoint with a client-side
+> "in use by…" scan.
+>
+> **Build order (each round green on `npm test` + `npx tsc` + `npm run build`):**
+> 7a data model + migration + caps → 7b sheet shell + Main/Biography/Traits →
+> 7c Inventory/Features/Spells/Effects + item sheets + conditions (delete old card body) →
+> 7d roll depth → 7e quick HP → 7f token facing → 7g templates → 7h coin flip →
+> 7i scenes depth + pins → 7j assets page → 7k export/import v2. Then full unit+smoke
+> suite and an "as built" note here.
 
 ### Tabbed character-sheet redesign (reference layout — user 2026-07-02)
 

@@ -76,7 +76,14 @@ export function redactStateFor(state: GameState, view: StateView): GameState {
   // sections, secret rolls/events, whispers addressed to someone else — and every
   // NON-ACTIVE scene (prep must be invisible until "Set Live", not merely unrendered;
   // Phase 6.5). Hidden tokens are stripped entirely — UI hiding is never enough.
-  const scenes = state.scenes.filter((scene) => scene.id === state.activeSceneId);
+  // Only the active scene, with DM-only annotations (map pins) stripped.
+  const scenes = state.scenes
+    .filter((scene) => scene.id === state.activeSceneId)
+    .map((scene) =>
+      scene.annotations.some((annotation) => annotation.dmOnly)
+        ? { ...scene, annotations: scene.annotations.filter((annotation) => !annotation.dmOnly) }
+        : scene,
+    );
   const tokens = state.tokens.filter(
     (token) => !token.hidden && token.sceneId === state.activeSceneId,
   );

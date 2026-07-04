@@ -12,6 +12,7 @@ import { PlayersPage } from "./pages/PlayersPage";
 import { NpcsPage } from "./pages/NpcsPage";
 import { ItemsPage } from "./pages/ItemsPage";
 import { ScenesPage } from "./pages/ScenesPage";
+import { AssetsPage } from "./pages/AssetsPage";
 import { PageSwitcher, type PageId } from "./pages/PageSwitcher";
 import { useDiceOverlay } from "./dice/useDiceOverlay";
 import { useDmActions, useGameRoom, type JoinParams } from "./hooks/useGameRoom";
@@ -396,6 +397,8 @@ export default function App() {
     // The DM's persistent Secret toggle applies to every roll, sheet-clicks included.
     rollDice: (expression, options) =>
       room.rollDice(expression, { ...options, private: isDm && secretRolls }),
+    rollCheck: (sheetId, check, adv) =>
+      room.send({ type: "ROLL_CHECK", sheetId, check, adv, private: isDm && secretRolls }),
     dropActorAt,
     dropItemAt,
     dice,
@@ -474,14 +477,15 @@ export default function App() {
         yourPlayerId={room.yourPlayerId}
         viewport={viewport}
         onViewportChange={handleViewportChange}
-        onMoveToken={(tokenId, x, y) =>
-          (isDm ? historySend : room.send)({ type: "MOVE_TOKEN", tokenId, x, y })
+        onMoveToken={(tokenId, x, y, facing) =>
+          (isDm ? historySend : room.send)({ type: "MOVE_TOKEN", tokenId, x, y, ...(facing !== undefined ? { facing } : {}) })
         }
         onSelectToken={selectToken}
         onOpenTokenSheet={openTokenSheet}
         selectedTokenId={selectedTokenId}
         send={isDm ? historySend : room.send}
         subscribeMeasure={room.subscribeMeasure}
+        subscribeTemplate={room.subscribeTemplate}
         snap={snap}
         onToggleSnap={toggleSnap}
         hotkeysEnabled={onBoard}
@@ -588,6 +592,14 @@ export default function App() {
               <ScenesPage
                 ctx={panelContext}
                 active={activePage === "scenes"}
+                activePage={activePage}
+                onNavigate={setPage}
+              />
+            </div>
+            <div className={`page${activePage === "assets" ? " page--active" : ""}`}>
+              <AssetsPage
+                ctx={panelContext}
+                active={activePage === "assets"}
                 activePage={activePage}
                 onNavigate={setPage}
               />

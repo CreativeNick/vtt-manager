@@ -1,6 +1,7 @@
 import type { GameRoom, useDmActions } from "../hooks/useGameRoom";
 import type { GameState } from "../lib/types";
 import { NumberInput } from "./NumberInput";
+import { HpStepper } from "./HpStepper";
 
 type InitiativeTrackerProps = {
   state: GameState;
@@ -130,6 +131,14 @@ export function InitiativeTracker({ state, isDm, room, dm, openSheet }: Initiati
                   )}
                 </span>
               )}
+              {sheet && !entry.hidden ? (
+                <HpStepper
+                  hp={sheet.data.hp}
+                  canEdit={isDm || entry.sheetId === room.yourPlayerId}
+                  compact
+                  onAdjust={(delta) => room.send({ type: "ADJUST_HP", sheetId: entry.sheetId!, delta })}
+                />
+              ) : null}
             </div>
           );
         })}

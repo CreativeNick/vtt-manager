@@ -10,7 +10,7 @@
  * "custom" is a blank crystal/gem die for non-standard sizes (e.g. d77); its side count
  * lives on the spec's `sides` field since the shape can't encode it.
  */
-export type DieKind = "d4" | "d6" | "d8" | "d10" | "d12" | "d20" | "custom";
+export type DieKind = "coin" | "d4" | "d6" | "d8" | "d10" | "d12" | "d20" | "custom";
 
 export type StandardDieKind = Exclude<DieKind, "custom">;
 
@@ -85,6 +85,7 @@ export function quantize(value: number): number {
 }
 
 export const DIE_SIDES: Record<StandardDieKind, number> = {
+  coin: 2,
   d4: 4,
   d6: 6,
   d8: 8,
@@ -92,6 +93,11 @@ export const DIE_SIDES: Record<StandardDieKind, number> = {
   d12: 12,
   d20: 20,
 };
+
+/** Coin face-value → result label (1 = Heads, 2 = Tails). */
+export function coinFaceLabel(value: number): string {
+  return value === 1 ? "Heads" : "Tails";
+}
 
 /// <summary>Side count for a die, reading `sides` for custom crystal dice.</summary>
 export function sidesOf(spec: Pick<DieSpec, "kind" | "sides">): number {
@@ -109,6 +115,9 @@ export function decomposeDie(sides: number): Omit<DieSpec, "id">[] {
       { kind: "d10", percentile: true },
       { kind: "d10", percentile: false },
     ];
+  }
+  if (sides === 2) {
+    return [{ kind: "coin", percentile: false }];
   }
   const kind = `d${sides}` as DieKind;
   if (kind !== "custom" && kind in DIE_SIDES) {
@@ -152,7 +161,7 @@ export function parseDiceExpression(
   return { specs, modifier };
 }
 
-const DIE_KINDS = new Set<string>(["d4", "d6", "d8", "d10", "d12", "d20", "custom"]);
+const DIE_KINDS = new Set<string>(["coin", "d4", "d6", "d8", "d10", "d12", "d20", "custom"]);
 
 /// <summary>
 /// Server-side validation of a client-supplied throw: sane specs and a track whose
@@ -258,7 +267,9 @@ export function interpretRoll(specs: DieSpec[], faceValues: number[]): { rolls: 
 /// </summary>
 export function buildExpressionLabel(specs: DieSpec[], modifier: number): string {
   let base: string;
-  if (isPercentileSet(specs)) {
+  if (specs.length > 0 && specs.every((spec) => spec.kind === "coin")) {
+    base = specs.length === 1 ? "Coin flip" : `${specs.length} coins`;
+  } else if (isPercentileSet(specs)) {
     base = "1d100";
   } else {
     const counts = new Map<number, number>();

@@ -1,6 +1,7 @@
 import type * as Party from "partykit/server";
 import {
   abilityModifier,
+  CONDITIONS,
   createInitialState,
   createNpcSheetRecord,
   createPcSheetRecord,
@@ -11,10 +12,18 @@ import {
   MAX_LIGHTS,
   MAX_LOG_ENTRIES,
   MAX_MEASURE_NUMBERS,
+  MAX_CAMPAIGN_BYTES,
   MAX_POINTER_ARROWS_PER_AUTHOR,
+  MAX_ROLL_PARTS,
   MAX_SCENE_ANNOTATIONS,
+  MAX_SHEET_BYTES,
+  MAX_TEMPLATE_EXTENT,
   MAX_WALLS,
+  TEMPLATE_KINDS,
+  type CampaignExport,
+  type TemplateShape,
   normalizeCharacterSheet,
+  normalizeFacing,
   normalizeGameState,
   normalizeItem,
   normalizeScene,
@@ -39,8 +48,10 @@ import {
   type ServerMessage,
 } from "../src/lib/types";
 import { rollDiceExpression, rollWithAdvantage, secureRandInt } from "../src/lib/dice";
+import { partsFromExpression, resolveCheck } from "../src/lib/rollCheck";
 import {
   buildExpressionLabel,
+  coinFaceLabel,
   interpretRoll,
   rollFaceValues,
   sanitizeThrow,
@@ -70,8 +81,8 @@ export default class GameServer implements Party.Server {
   pendingViewport: GameState["viewport"] | null = null;
   viewportTimer: ReturnType<typeof setTimeout> | null = null;
   viewportPersistTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Per-sender ruler coalescing (same pattern as the viewport hot path). */
-  measureRelay = new Map<
+  /** Per-sender+channel transient coalescing (ruler / template; the viewport hot-path pattern). */
+  transientRelay = new Map<
     string,
     { last: number; timer: ReturnType<typeof setTimeout> | null; pending: ServerMessage | null }
   >();
@@ -347,7 +358,13 @@ export default class GameServer implements Party.Server {
   /// at MEASURE_THROTTLE_MS (the viewport hot-path pattern — never rides GameState).
   /// Ruler clears (points = null) flush immediately.
   /// </summary>
-  relayMeasure(senderId: string, frame: Extract<ServerMessage, { type: "MEASURE" }>) {
+  relayTransient(
+    senderId: string,
+    channel: string,
+    frame: ServerMessage,
+    clear: boolean,
+  ) {
+    const key = `${senderId}:${channel}`;
     const send = (message: ServerMessage) => {
       const encoded = JSON.stringify(message);
       for (const connection of this.room.getConnections()) {
@@ -359,12 +376,12 @@ export default class GameServer implements Party.Server {
         }
       }
     };
-    let entry = this.measureRelay.get(senderId);
+    let entry = this.transientRelay.get(key);
     if (!entry) {
       entry = { last: 0, timer: null, pending: null };
-      this.measureRelay.set(senderId, entry);
+      this.transientRelay.set(key, entry);
     }
-    if (frame.points === null) {
+    if (clear) {
       if (entry.timer) {
         clearTimeout(entry.timer);
         entry.timer = null;
@@ -409,11 +426,15 @@ export default class GameServer implements Party.Server {
   onClose(connection: Party.Connection) {
     const meta = this.clients.get(connection.id);
     this.clients.delete(connection.id);
-    const relay = this.measureRelay.get(connection.id);
-    if (relay?.timer) {
-      clearTimeout(relay.timer);
+    // Clear any pending transient-relay timers for this sender (all channels).
+    for (const [key, relay] of this.transientRelay) {
+      if (key.startsWith(`${connection.id}:`)) {
+        if (relay.timer) {
+          clearTimeout(relay.timer);
+        }
+        this.transientRelay.delete(key);
+      }
     }
-    this.measureRelay.delete(connection.id);
 
     if (this.state.dmClientId === connection.id) {
       this.state.dmClientId = null;
@@ -526,7 +547,15 @@ export default class GameServer implements Party.Server {
       const fallbackName =
         this.state.playerSlots.find((slot) => slot.id === record.ownerSlotId)?.name ??
         (record.data.characterName || "Character");
-      record.data = normalizeCharacterSheet({ ...record.data, ...parsed.sheet }, fallbackName);
+      const nextData = normalizeCharacterSheet({ ...record.data, ...parsed.sheet }, fallbackName);
+      if (JSON.stringify(nextData).length > MAX_SHEET_BYTES) {
+        this.sendTo(sender, {
+          type: "ERROR",
+          message: "Sheet is too large — trim long descriptions or remove rows.",
+        });
+        return;
+      }
+      record.data = nextData;
       if (record.ownerSlotId) {
         this.state.tokens = this.state.tokens.map((token) =>
           token.ownerPlayerId === record.ownerSlotId
@@ -547,9 +576,98 @@ export default class GameServer implements Party.Server {
         }
         token.x = parsed.x;
         token.y = parsed.y;
+        if (parsed.facing !== undefined) {
+          token.facing = normalizeFacing(parsed.facing);
+        }
         void this.broadcastState();
         return;
       }
+    }
+
+    // Conditions: DM any token; players only their own. Token.conditions is the single
+    // source of truth (the sheet's Effects grid is a view over it).
+    if (parsed.type === "SET_TOKEN_CONDITIONS") {
+      const token = this.state.tokens.find((item) => item.id === parsed.tokenId);
+      if (!token) {
+        this.sendTo(sender, { type: "ERROR", message: "Token not found." });
+        return;
+      }
+      if (meta.role === "player" && token.ownerPlayerId !== meta.playerId) {
+        this.sendTo(sender, { type: "ERROR", message: "You can only change your own token." });
+        return;
+      }
+      const valid = new Set<string>(CONDITIONS.map((condition) => condition.id));
+      token.conditions = [...new Set(parsed.conditions)].filter((id) => valid.has(id)).slice(0, 16);
+      void this.broadcastState();
+      return;
+    }
+
+    // Rest: log-only hook today (manual-fields-first). DM any sheet; players own only.
+    if (parsed.type === "REST") {
+      const record = this.state.sheets[parsed.sheetId];
+      if (!record) {
+        this.sendTo(sender, { type: "ERROR", message: "Sheet not found." });
+        return;
+      }
+      if (meta.role === "player" && meta.playerId !== parsed.sheetId) {
+        this.sendTo(sender, { type: "ERROR", message: "You can only rest your own character." });
+        return;
+      }
+      const name = record.data.characterName?.trim() || "A character";
+      this.logEvent(`${name} takes a ${parsed.kind === "long" ? "long" : "short"} rest ${parsed.kind === "long" ? "⛰" : "🍴"}`);
+      void this.broadcastState();
+      return;
+    }
+
+    // Quick HP adjust: damage/heal without opening the sheet. DM any sheet; players own.
+    if (parsed.type === "ADJUST_HP") {
+      const record = this.state.sheets[parsed.sheetId];
+      if (!record) {
+        this.sendTo(sender, { type: "ERROR", message: "Sheet not found." });
+        return;
+      }
+      if (meta.role === "player" && meta.playerId !== parsed.sheetId) {
+        this.sendTo(sender, { type: "ERROR", message: "You can only adjust your own HP." });
+        return;
+      }
+      const delta = Math.max(-999, Math.min(999, Math.trunc(parsed.delta || 0)));
+      if (delta === 0) {
+        return;
+      }
+      const hp = record.data.hp;
+      let temp = hp.temp ?? 0;
+      let current = hp.current;
+      if (delta < 0) {
+        // Damage eats temp HP first, then current; never below 0.
+        let dmg = -delta;
+        const fromTemp = Math.min(temp, dmg);
+        temp -= fromTemp;
+        dmg -= fromTemp;
+        current = Math.max(0, current - dmg);
+      } else {
+        // Heal adds to current, capped at max (temp HP is not healed here).
+        current = Math.min(hp.max, current + delta);
+      }
+      record.data.hp = { ...hp, current, ...(temp > 0 ? { temp } : { temp: undefined }) };
+      // Keep player tokens in sync (portrait/label/etc. unaffected, but future-proof).
+      if (record.ownerSlotId) {
+        this.state.tokens = this.state.tokens.map((token) =>
+          token.ownerPlayerId === record.ownerSlotId ? syncPlayerTokenFromState(token, this.state) : token,
+        );
+      }
+      // Log during combat. Hide the numbers for players when the NPC's HP is secret
+      // (combat section unrevealed AND no linked token shows HP).
+      if (this.state.combat) {
+        const name = record.data.characterName?.trim() || "A character";
+        const hpVisible =
+          record.kind !== "npc" ||
+          record.revealed.combat ||
+          this.state.tokens.some((token) => token.sheetId === record.id && token.showHp !== "none");
+        const text = delta < 0 ? `${name} takes ${-delta} damage` : `${name} heals ${delta}`;
+        this.logEvent(text, !hpVisible);
+      }
+      void this.broadcastState();
+      return;
     }
 
     if (parsed.type === "ROLL_DICE") {
@@ -592,6 +710,7 @@ export default class GameServer implements Party.Server {
           modifier: result.modifier,
           total: result.total,
           timestamp: Date.now(),
+          parts: partsFromExpression(result.rolls, result.modifier, result.expression),
           ...(parsed.adv && advResult
             ? { adv: parsed.adv, otherTotal: advResult.otherTotal }
             : {}),
@@ -613,6 +732,47 @@ export default class GameServer implements Party.Server {
         const message = error instanceof Error ? error.message : "Invalid dice expression.";
         this.sendTo(sender, { type: "ERROR", message });
       }
+      return;
+    }
+
+    // Structured sheet roll: the server resolves modifiers FROM the sheet and builds the
+    // color-coded parts. Same attribution/authz as ROLL_DICE (DM any sheet, player own).
+    if (parsed.type === "ROLL_CHECK") {
+      if (parsed.private && !this.isDm(sender.id)) {
+        this.sendTo(sender, { type: "ERROR", message: "Only the DM can make secret rolls." });
+        return;
+      }
+      const canRollAs =
+        this.isDm(sender.id) || (meta.role === "player" && meta.playerId === parsed.sheetId);
+      const record = this.state.sheets[parsed.sheetId];
+      if (!canRollAs || !record) {
+        this.sendTo(sender, { type: "ERROR", message: "You can only roll from your own sheet." });
+        return;
+      }
+      const resolved = resolveCheck(record.data, parsed.check, parsed.adv, secureRandInt);
+      const roll: DiceRoll = {
+        id: `roll-${crypto.randomUUID().slice(0, 8)}`,
+        rollerName: meta.displayName?.trim() || "Unknown",
+        rollerId: meta.playerId ?? "unknown",
+        expression: resolved.expression,
+        rolls: resolved.rolls,
+        modifier: resolved.modifier,
+        total: resolved.total,
+        timestamp: Date.now(),
+        parts: resolved.parts.slice(0, MAX_ROLL_PARTS),
+        ...(resolved.adv ? { adv: resolved.adv } : {}),
+        ...(resolved.otherTotal !== undefined ? { otherTotal: resolved.otherTotal } : {}),
+      };
+      this.appendLog({
+        id: `log-${crypto.randomUUID().slice(0, 8)}`,
+        t: roll.timestamp,
+        kind: "roll",
+        roll,
+        actor: { name: record.data.characterName?.trim() || meta.displayName?.trim() || "Unknown", sheetId: parsed.sheetId },
+        label: resolved.label,
+        ...(parsed.private ? { dmOnly: true } : {}),
+      });
+      void this.broadcastState();
       return;
     }
 
@@ -710,15 +870,21 @@ export default class GameServer implements Party.Server {
           ? Math.max(-1000, Math.min(1000, Math.trunc(parsed.modifier)))
           : 0;
       const { rolls, total } = interpretRoll(specs, faceValues);
+      const throwExpression = buildExpressionLabel(specs, modifier);
+      const isCoin = specs.length > 0 && specs.every((spec) => spec.kind === "coin");
       const roll: DiceRoll = {
         id: `roll-${crypto.randomUUID().slice(0, 8)}`,
         rollerName: meta.displayName?.trim() || "Unknown",
         rollerId: meta.playerId ?? "unknown",
-        expression: buildExpressionLabel(specs, modifier),
+        expression: throwExpression,
         rolls,
         modifier,
         total: total + modifier,
         timestamp: Date.now(),
+        // Coins read Heads/Tails; other throws get a die/flat breakdown.
+        parts: isCoin
+          ? rolls.map((value) => ({ kind: "flat" as const, value, label: coinFaceLabel(value) }))
+          : partsFromExpression(rolls, modifier, throwExpression),
       };
       const secret = Boolean(parsed.private);
       const trayCenter: [number, number] = [
@@ -753,7 +919,7 @@ export default class GameServer implements Party.Server {
       // Defer the log entry until the dice would have settled, so the log never
       // spoils the result mid-tumble. (v1 behavior; capped for safety.)
       const settleMs = Math.min((track.frames / track.fps) * 1000 + 400, 8000);
-      const label = parsed.context?.label;
+      const label = parsed.context?.label ?? (isCoin ? "🪙 Coin flip" : undefined);
       setTimeout(() => {
         this.appendLog({
           id: `log-${crypto.randomUUID().slice(0, 8)}`,
@@ -820,14 +986,56 @@ export default class GameServer implements Party.Server {
         meta.role === "dm"
           ? DM_MEASURE_COLOR
           : playerTokenColorForSlot(meta.playerId ?? "", this.state.playerSlots);
-      this.relayMeasure(sender.id, {
-        type: "MEASURE",
-        clientId: sender.id,
-        name: meta.displayName?.trim() || "?",
-        color,
-        sceneId: parsed.sceneId,
-        points,
-      });
+      this.relayTransient(
+        sender.id,
+        "measure",
+        {
+          type: "MEASURE",
+          clientId: sender.id,
+          name: meta.displayName?.trim() || "?",
+          color,
+          sceneId: parsed.sceneId,
+          points,
+        },
+        points === null,
+      );
+      return;
+    }
+
+    if (parsed.type === "TEMPLATE") {
+      if (!this.state.scenes.some((scene) => scene.id === parsed.sceneId)) {
+        return;
+      }
+      let shape: TemplateShape | null = null;
+      if (parsed.shape) {
+        const s = parsed.shape;
+        const validKind = TEMPLATE_KINDS.includes(s.kind);
+        const validPts =
+          Array.isArray(s.points) &&
+          s.points.length === 4 &&
+          s.points.every((v) => Number.isFinite(v) && Math.abs(v) <= MAX_TEMPLATE_EXTENT);
+        if (!validKind || !validPts) {
+          return;
+        }
+        shape = { kind: s.kind, points: s.points };
+      }
+      const color =
+        meta.role === "dm"
+          ? DM_MEASURE_COLOR
+          : playerTokenColorForSlot(meta.playerId ?? "", this.state.playerSlots);
+      this.relayTransient(
+        sender.id,
+        "template",
+        {
+          type: "TEMPLATE",
+          clientId: sender.id,
+          name: meta.displayName?.trim() || "?",
+          color,
+          sceneId: parsed.sceneId,
+          shape,
+        },
+        shape === null,
+      );
       return;
     }
 
@@ -973,6 +1181,9 @@ export default class GameServer implements Party.Server {
         if (token) {
           token.x = parsed.x;
           token.y = parsed.y;
+          if (parsed.facing !== undefined) {
+            token.facing = normalizeFacing(parsed.facing);
+          }
           void this.broadcastState();
         }
         break;
@@ -992,8 +1203,54 @@ export default class GameServer implements Party.Server {
         void this.broadcastState();
         break;
       }
+      case "EXPORT_CAMPAIGN": {
+        const manifest: CampaignExport = {
+          version: 2,
+          exportedAt: Date.now(),
+          state: {
+            ...this.state,
+            dmClientId: null,
+            connectedPlayers: [],
+            log: (this.state.log ?? []).slice(-MAX_LOG_ENTRIES),
+          },
+        };
+        this.sendTo(sender, { type: "CAMPAIGN_EXPORT", manifest });
+        break;
+      }
       case "IMPORT_CAMPAIGN": {
         const manifest = parsed.manifest;
+        // v2: a full-campaign restore (replaces the entire durable state).
+        if (manifest.version === 2 && manifest.state) {
+          if (JSON.stringify(manifest).length > MAX_CAMPAIGN_BYTES) {
+            this.sendTo(sender, { type: "ERROR", message: "Campaign file is too large to import." });
+            return;
+          }
+          const incoming = normalizeGameState({
+            ...manifest.state,
+            roomId: this.state.roomId,
+            dmClientId: null,
+            connectedPlayers: [],
+          });
+          // Kick any connected player whose slot no longer exists after the import.
+          const validSlots = new Set(incoming.playerSlots.map((slot) => slot.id));
+          for (const [connId, meta] of this.clients) {
+            if (meta.role === "player" && meta.playerId && !validSlots.has(meta.playerId)) {
+              const conn = this.room.getConnection(connId);
+              if (conn) {
+                this.sendTo(conn, { type: "KICKED", message: "The campaign was replaced by an import." });
+              }
+              meta.joined = false;
+              meta.playerId = null;
+            }
+          }
+          this.state = { ...incoming, dmClientId: this.state.dmClientId };
+          this.syncConnectedPlayers();
+          this.logEvent("Campaign imported from a backup file");
+          void this.persistState();
+          void this.broadcastState();
+          break;
+        }
+        // v1: scenes-only manifest (back-compat).
         if (manifest.version !== 1 || !Array.isArray(manifest.scenes)) {
           this.sendTo(sender, { type: "ERROR", message: "Invalid campaign manifest." });
           return;

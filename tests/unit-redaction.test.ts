@@ -114,8 +114,14 @@ const withInv = normalizeGameState({
 } as unknown as GameState);
 const inv = withInv.sheets["sheet-b"]!.data.inventory;
 check(
-  "inventory sanitized (bad rows dropped, qty floored, defaults filled)",
-  inv.length === 2 && inv[0]!.qty === 2 && inv[1]!.name === "Bare minimum" && inv[1]!.qty === 1,
+  "inventory sanitized (non-objects dropped, qty floored, name/category defaulted, ids backfilled)",
+  inv.length === 3 &&
+    inv[0]!.qty === 2 &&
+    inv[0]!.id === "inv-0" &&
+    inv[1]!.name === "Bare minimum" &&
+    inv[1]!.qty === 1 &&
+    inv[1]!.category === "equipment" &&
+    inv[2]!.name === "Item", // nameless row kept with a default name (not dropped mid-edit)
   JSON.stringify(inv),
 );
 

@@ -7,11 +7,14 @@ import { applySceneMessage, sceneMessageSceneId } from "../lib/sceneMessages";
 import { createEmptyScene, fitViewportToScene } from "../lib/sceneUtils";
 import {
   DEFAULT_VIEWPORT,
+  TOKEN_ENEMY_COLOR,
   type Annotation,
   type ClientMessage,
+  type GameState,
   type Scene,
   type Viewport,
 } from "../lib/types";
+import type { GameRoom } from "../hooks/useGameRoom";
 import type { PanelContext } from "../panels/registry";
 
 const LIVE_KEY = "cm-scene-editor-live";
@@ -258,9 +261,10 @@ export function ScenesPage({
               yourPlayerId={room.yourPlayerId}
               viewport={viewport}
               onViewportChange={setViewport}
-              onMoveToken={(tokenId, x, y) => room.send({ type: "MOVE_TOKEN", tokenId, x, y })}
+              onMoveToken={(tokenId, x, y, facing) => room.send({ type: "MOVE_TOKEN", tokenId, x, y, ...(facing !== undefined ? { facing } : {}) })}
               send={editorSend}
               subscribeMeasure={room.subscribeMeasure}
+              subscribeTemplate={room.subscribeTemplate}
               snap={ctx.snap}
               onToggleSnap={ctx.toggleSnap}
               embedded
@@ -287,6 +291,7 @@ export function ScenesPage({
                 }
                 onResetFog={() => editorSend({ type: "FOG_RESET", sceneId: shownScene.id })}
               />
+              <StageActors state={state} scene={shownScene} room={room} />
               <button
                 className="btn-danger"
                 disabled={state.scenes.length <= 1}
@@ -298,6 +303,67 @@ export function ScenesPage({
             </div>
           ) : null}
         </aside>
+      </div>
+    </div>
+  );
+}
+
+/// <summary>
+/// Pre-staging (Phase 7): drop actors onto the SELECTED scene ahead of time. Because
+/// players only ever receive the ACTIVE scene's tokens (redactStateFor), tokens staged on
+/// a non-active scene stay invisible until the DM sets it live — so an encounter can be
+/// laid out in advance. Tokens land near the scene center; nudge them on the editor canvas.
+/// </summary>
+function StageActors({ state, scene, room }: { state: GameState; scene: Scene; room: GameRoom }) {
+  const actors = Object.values(state.sheets);
+  const stagedCount = state.tokens.filter((token) => token.sceneId === scene.id).length;
+  const stage = (sheetId: string) => {
+    const record = state.sheets[sheetId];
+    if (!record) return;
+    const isPc = record.kind === "pc";
+    const jitter = () => (Math.random() - 0.5) * scene.gridSize * 3;
+    room.send({
+      type: "ADD_TOKEN",
+      token: {
+        id: `token-${crypto.randomUUID().slice(0, 8)}`,
+        sceneId: scene.id,
+        x: scene.width / 2 + jitter(),
+        y: scene.height / 2 + jitter(),
+        label: record.data.characterName || "Token",
+        color: TOKEN_ENEMY_COLOR,
+        kind: isPc ? "player" : "enemy",
+        imageUrl: record.data.iconUrl ?? null,
+        ownerPlayerId: isPc ? record.id : null,
+        sheetId: isPc ? null : record.id,
+        conditions: [],
+        showHp: "none",
+      },
+    });
+  };
+
+  return (
+    <div className="stage-actors">
+      <div className="sheet-section-head">
+        <span className="sheet-section-title">Stage actors</span>
+        <span className="muted" style={{ fontSize: "0.7rem" }}>{stagedCount} on scene</span>
+      </div>
+      <p className="muted" style={{ fontSize: "0.72rem", margin: "0 0 0.3rem" }}>
+        Staged tokens stay hidden from players until this scene is set live.
+      </p>
+      <div className="stage-actor-list">
+        {actors.length === 0 ? (
+          <span className="muted" style={{ fontSize: "0.78rem" }}>No actors yet — create some in Actors/NPCs.</span>
+        ) : null}
+        {actors.map((record) => (
+          <button
+            key={record.id}
+            className="btn-ghost stage-actor-row"
+            title="Add a token for this actor to the selected scene"
+            onClick={() => stage(record.id)}
+          >
+            ＋ {record.data.characterName || (record.kind === "pc" ? "Player" : "NPC")}
+          </button>
+        ))}
       </div>
     </div>
   );
