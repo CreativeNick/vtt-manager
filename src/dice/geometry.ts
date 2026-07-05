@@ -334,7 +334,7 @@ function buildD10(): { geometry: THREE.BufferGeometry; points: THREE.Vector3[]; 
 /// </summary>
 function buildCoin(): { geometry: THREE.BufferGeometry; points: THREE.Vector3[]; faceData: { normal: THREE.Vector3; centroid: THREE.Vector3 }[] } {
   const R = 1;
-  const halfH = 0.3;
+  const halfH = 0.13; // thin disc (was 0.3) — reads like a coin, not a puck
   const N = 20;
   const points: THREE.Vector3[] = [];
   for (let k = 0; k < N; k += 1) {
@@ -536,6 +536,19 @@ export function createDiceMaterial(options: DiceMaterialOptions = {}): THREE.Mes
     roughness: options.roughness ?? 0.45,
     flatShading: true,
   });
+}
+
+/// <summary>
+/// The per-kind body/label styling passed to buildDieMesh. Single source of truth so the
+/// engine (thrown dice) and the tray (idle dice) render identically. The coin is metallic
+/// gold with a dark engraved H/T; the percentile tens-d10 is blue; everything else is the
+/// default dark red.
+/// </summary>
+export function dieMaterialOptions(kind: DieKind, percentile: boolean): DiceMaterialOptions {
+  if (kind === "coin") {
+    return { color: "#d4af37", metalness: 0.85, roughness: 0.3, numberColor: "#4a3a1a" };
+  }
+  return { color: percentile ? "#2d4a7b" : "#7b2d3a" };
 }
 
 /// <summary>

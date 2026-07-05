@@ -9,7 +9,7 @@ import {
   type TokenHpDisplay,
   type TokenShape,
 } from "../lib/types";
-import { uploadTokenImage } from "../lib/uploadAsset";
+import { uploadPortrait, uploadTokenImage } from "../lib/uploadAsset";
 import type { useDmActions } from "../hooks/useGameRoom";
 import { HpStepper } from "./HpStepper";
 
@@ -42,6 +42,13 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // The token's image is shared with its linked sheet's portrait (mirrors the map's
+  // display logic in MapCanvas). When a sheet is linked, uploads/clears target that
+  // sheet's `iconUrl` so the Token panel and the character sheet stay in sync.
+  const linkedSheetId = token.sheetId ?? token.ownerPlayerId;
+  const linkedSheet = linkedSheetId ? state.sheets[linkedSheetId] : undefined;
+  const effectiveImage = linkedSheet?.data.iconUrl ?? token.imageUrl;
+
   const setOwner = (slotId: string) => {
     if (slotId === "") {
       dm.updateToken({ ...token, kind: "enemy", ownerPlayerId: null });
@@ -67,16 +74,33 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
   const uploadImage = async (file: File) => {
     setUploading(true);
     try {
-      const { url } = await uploadTokenImage(state.roomId, token.id, file);
-      dm.updateToken({ ...token, imageUrl: url });
+      if (linkedSheetId && linkedSheet) {
+        // Linked to a sheet → write the shared portrait, exactly like the sheet does.
+        const { url } = await uploadPortrait(state.roomId, linkedSheetId, file);
+        dm.updateSheet(linkedSheetId, { ...linkedSheet.data, iconUrl: url });
+      } else {
+        const { url } = await uploadTokenImage(state.roomId, token.id, file);
+        dm.updateToken({ ...token, imageUrl: url });
+      }
     } catch {
       // Non-fatal: image stays unchanged.
     } finally {
       setUploading(false);
     }
   };
-  // A token's own uploaded image (not the linked sheet's portrait) is what the fit toggle acts on.
-  const hasOwnImage = Boolean(token.imageUrl);
+
+  const clearImage = () => {
+    if (linkedSheetId && linkedSheet) {
+      // Clear the shared portrait; also drop any legacy token image so it can't reappear.
+      dm.updateSheet(linkedSheetId, { ...linkedSheet.data, iconUrl: null });
+      if (token.imageUrl) dm.updateToken({ ...token, imageUrl: null });
+    } else {
+      dm.updateToken({ ...token, imageUrl: null });
+    }
+  };
+  // The effective image (linked sheet's portrait, else the token's own) drives the
+  // Change/Clear buttons and the fit toggle.
+  const hasImage = Boolean(effectiveImage);
 
   return (
     <div className="panel" style={{ width: "min(280px, 90vw)" }}>
@@ -181,16 +205,15 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
         </div>
 
         <div className="field">
-          <label>Token image</label>
+          <label title={linkedSheet ? "Shared with the linked character sheet" : undefined}>
+            {linkedSheet ? "Portrait" : "Token image"}
+          </label>
           <div className="row">
             <button onClick={() => fileRef.current?.click()} disabled={uploading}>
-              {uploading ? "Uploading…" : hasOwnImage ? "Change" : "Upload"}
+              {uploading ? "Uploading…" : hasImage ? "Change" : "Upload"}
             </button>
-            {hasOwnImage ? (
-              <button
-                className="btn-ghost"
-                onClick={() => dm.updateToken({ ...token, imageUrl: null })}
-              >
+            {hasImage ? (
+              <button className="btn-ghost" onClick={clearImage}>
                 Clear
               </button>
             ) : null}
@@ -207,7 +230,7 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
             />
           </div>
         </div>
-        {hasOwnImage ? (
+        {hasImage ? (
           <div className="row" style={{ justifyContent: "space-between" }}>
             <label style={{ margin: 0 }} title="Show the bare image, or clip it inside the token shape">
               Image style

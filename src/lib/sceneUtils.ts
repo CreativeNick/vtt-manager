@@ -58,6 +58,55 @@ export function loadImageForCanvas(url: string): Promise<HTMLImageElement> {
 }
 
 /// <summary>
+/// Returns a copy of an image downscaled so its longest side is at most `maxSide`,
+/// resampled in halving steps with high-quality smoothing. Browsers downsample a large
+/// image into a tiny canvas region in one low-quality pass, which makes token portraits
+/// look soft/low-res; pre-shrinking with stepped, high-quality smoothing keeps them crisp.
+/// Images already within `maxSide` are returned untouched (no needless re-encode).
+/// </summary>
+export function downscaleImage(
+  source: HTMLImageElement,
+  maxSide: number,
+): HTMLImageElement | HTMLCanvasElement {
+  const longest = Math.max(source.width, source.height);
+  if (!(longest > maxSide) || !Number.isFinite(maxSide) || maxSide <= 0) {
+    return source;
+  }
+  const scale = maxSide / longest;
+  const targetW = Math.max(1, Math.round(source.width * scale));
+  const targetH = Math.max(1, Math.round(source.height * scale));
+
+  let current: HTMLImageElement | HTMLCanvasElement = source;
+  let w = source.width;
+  let h = source.height;
+  // Halve repeatedly until one more halving would undershoot the target, then do the
+  // final exact step. Each pass loses little detail, unlike a single big minification.
+  while (w > targetW * 2 && h > targetH * 2) {
+    w = Math.max(targetW, Math.round(w / 2));
+    h = Math.max(targetH, Math.round(h / 2));
+    current = drawToCanvas(current, w, h);
+  }
+  return drawToCanvas(current, targetW, targetH);
+}
+
+function drawToCanvas(
+  source: HTMLImageElement | HTMLCanvasElement,
+  width: number,
+  height: number,
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(source, 0, 0, width, height);
+  }
+  return canvas;
+}
+
+/// <summary>
 /// Loads an image file and returns its pixel dimensions.
 /// </summary>
 export function loadImageDimensions(url: string): Promise<{ width: number; height: number }> {

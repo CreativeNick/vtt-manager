@@ -335,12 +335,33 @@ export const ITEM_RARITIES = [
 ] as const;
 export type ItemRarity = (typeof ITEM_RARITIES)[number];
 
+/**
+ * How an uploaded image is fitted into a frame: a focal point (`x`,`y` in 0..1) plus a
+ * `zoom` (≥1). The image always covers the frame (no stretch); the focal point pans it and
+ * zoom scales it. Default is centered at 1× (plain cover).
+ */
+export type IconCrop = { x: number; y: number; zoom: number };
+export const DEFAULT_ICON_CROP: IconCrop = { x: 0.5, y: 0.5, zoom: 1 };
+export const MAX_ICON_ZOOM = 4;
+
+export function normalizeIconCrop(crop: unknown): IconCrop {
+  const c = (crop ?? {}) as Partial<IconCrop>;
+  const num = (v: unknown, fallback: number, min: number, max: number) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
+  return {
+    x: num(c.x, 0.5, 0, 1),
+    y: num(c.y, 0.5, 0, 1),
+    zoom: num(c.zoom, 1, 1, MAX_ICON_ZOOM),
+  };
+}
+
 /** A catalog item (DM-side library). Dragging one onto a sheet copies its name. */
 export type ItemRecord = {
   id: string;
   name: string;
   description: string;
   iconUrl: string | null;
+  iconCrop: IconCrop;
   folderId: string | null;
   /** Manual directory ordering (fractional insertion); unset sorts last by name. */
   sortOrder?: number;
@@ -551,6 +572,7 @@ export type CharacterSheet = {
   notes: string;
   inventory: InventoryEntry[];
   iconUrl: string | null;
+  iconCrop: IconCrop;
   /** Combat block (game-loop resources kept outside the sheet template). */
   hp: HitPoints;
   ac: number;
@@ -683,6 +705,7 @@ export const SHEET_SECTION_FIELDS: Record<SheetSectionId, Array<keyof CharacterS
     "source",
     "originalClass",
     "iconUrl",
+    "iconCrop",
   ],
   combat: [
     "hp",
@@ -838,6 +861,7 @@ export function normalizeItem(item: Partial<ItemRecord> & { id: string }): ItemR
     name: typeof item.name === "string" && item.name.trim() ? item.name : "Item",
     description: typeof item.description === "string" ? item.description : "",
     iconUrl: typeof item.iconUrl === "string" ? item.iconUrl : null,
+    iconCrop: normalizeIconCrop(item.iconCrop),
     folderId: typeof item.folderId === "string" ? item.folderId : null,
     ...(typeof item.sortOrder === "number" && Number.isFinite(item.sortOrder)
       ? { sortOrder: item.sortOrder }
@@ -980,9 +1004,13 @@ export type GameState = {
   defaultTokenSize?: number;
   /**
    * Whether players may use the Draw tool (persistent/scribble annotations). Off by
-   * default; the shift-drag pointer arrow is always allowed regardless of this.
+   * default; the shift-drag pointer arrow is gated separately by `playersCanPoint`.
    */
   playersCanDraw: boolean;
+  /** Whether players may move/rotate their own characters' tokens. On by default. */
+  playersCanMove: boolean;
+  /** Whether players may draw shift-drag dotted pointer arrows. On by default. */
+  playersCanPoint: boolean;
 };
 
 export const MAX_LOG_ENTRIES = 100;
@@ -1098,6 +1126,8 @@ export type ClientMessage =
   | { type: "FOG_REVEAL"; sceneId: string; shape: FogReveal }
   | { type: "FOG_RESET"; sceneId: string }
   | { type: "SET_PLAYERS_CAN_DRAW"; enabled: boolean }
+  | { type: "SET_PLAYERS_CAN_MOVE"; enabled: boolean }
+  | { type: "SET_PLAYERS_CAN_POINT"; enabled: boolean }
   /** Replace a scene's wall set (batched on edit-commit — no per-segment spam). */
   | { type: "SET_WALLS"; sceneId: string; walls: Wall[] }
   | { type: "TOGGLE_DOOR"; sceneId: string; wallId: string }
@@ -1339,6 +1369,7 @@ export function createDefaultSheet(name: string): CharacterSheet {
     notes: "",
     inventory: [],
     iconUrl: null,
+    iconCrop: { ...DEFAULT_ICON_CROP },
     hp: { current: 0, max: 0 },
     ac: 0,
     initiative: 0,
@@ -1812,6 +1843,7 @@ export function normalizeCharacterSheet(
     notes: str(sheet.notes ?? defaults.notes, 20_000),
     inventory: sanitizeInventory(sheet.inventory),
     iconUrl: sheet.iconUrl ?? sheet.portraitUrl ?? null,
+    iconCrop: normalizeIconCrop(sheet.iconCrop),
     hp: {
       current: numberOr(sheet.hp?.current, defaults.hp.current),
       max: numberOr(sheet.hp?.max, defaults.hp.max),
@@ -2240,6 +2272,9 @@ export function normalizeGameState(state: GameState & LegacyGameStateFields): Ga
     folders,
     items,
     playersCanDraw: Boolean(state.playersCanDraw),
+    // Default-allowed: only an explicit `false` turns these off (undefined ⇒ on).
+    playersCanMove: state.playersCanMove !== false,
+    playersCanPoint: state.playersCanPoint !== false,
     tokenShapeDefaults: normalizeTokenShapeDefaults(state.tokenShapeDefaults),
     defaultTokenSize:
       typeof state.defaultTokenSize === "number" && Number.isFinite(state.defaultTokenSize)
@@ -2292,6 +2327,8 @@ export function createInitialState(roomId: string): GameState {
     folders: [],
     items: {},
     playersCanDraw: false,
+    playersCanMove: true,
+    playersCanPoint: true,
     tokenShapeDefaults: { ...DEFAULT_TOKEN_SHAPES },
     defaultTokenSize: DEFAULT_TOKEN_SIZE,
   };

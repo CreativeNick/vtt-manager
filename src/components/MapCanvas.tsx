@@ -28,7 +28,9 @@ import {
 } from "../lib/types";
 import {
   clampViewportScale,
+  downscaleImage,
   loadImageForCanvas,
+  MAX_VIEWPORT_SCALE,
   tokenRadius,
 } from "../lib/sceneUtils";
 import type { MeasureEvent, TemplateEvent } from "../hooks/useGameRoom";
@@ -193,6 +195,31 @@ function useImage(url: string | null): HTMLImageElement | null {
 }
 
 /// <summary>
+/// A token portrait pre-shrunk (high-quality, stepped) to roughly its on-screen size so
+/// Konva doesn't downsample a big upload into a tiny token in one soft, low-quality pass.
+/// Sized for the largest it can appear (token diameter × max zoom × device pixels) and
+/// capped, so it stays crisp all the way to max zoom without re-rendering as you zoom.
+/// Returns the original element when it's already small enough.
+/// </summary>
+function useCrispImage(
+  img: HTMLImageElement | null,
+  radius: number,
+): HTMLImageElement | HTMLCanvasElement | null {
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  // Cover-fit crops to the token's SHORTER image side, so scale the target up by the aspect
+  // ratio to keep that side well-resolved. Round UP to a 64px step: `ceil` never undershoots
+  // the max on-screen size (rounding to nearest could land below it and upscale → blur); the
+  // step keeps small radius tweaks from churning the cached copy.
+  const aspect = img ? (img.naturalWidth || img.width) / (img.naturalHeight || img.height) : 1;
+  const longSide = Number.isFinite(aspect) && aspect > 0 ? Math.max(aspect, 1 / aspect) : 1;
+  const maxSide = Math.min(
+    2048,
+    Math.max(128, Math.ceil((radius * 2 * MAX_VIEWPORT_SCALE * dpr * longSide) / 64) * 64),
+  );
+  return useMemo(() => (img ? downscaleImage(img, maxSide) : null), [img, maxSide]);
+}
+
+/// <summary>
 /// Tracks the size of the canvas host element (ResizeObserver) so the Konva stage
 /// fills it. On the board the host is fixed/inset-0 (== window size); embedded in
 /// the scene editor it is the editor box. Guards the initial 0×0 pre-measure.
@@ -231,10 +258,67 @@ const TOKEN_POLY_SIDES: Partial<Record<TokenShape, number>> = {
   octagon: 8,
 };
 
+/** Traces a token shape's outline into a Konva context — used to clip the portrait to it. */
+function clipTokenShape(ctx: Konva.Context, shape: TokenShape, radius: number) {
+  if (shape === "circle") {
+    ctx.arc(0, 0, radius, 0, Math.PI * 2, false);
+    return;
+  }
+  if (shape === "square") {
+    const s = radius;
+    const r = radius * 0.14; // rounded corners, matching the Rect outline
+    ctx.moveTo(-s + r, -s);
+    ctx.arcTo(s, -s, s, s, r);
+    ctx.arcTo(s, s, -s, s, r);
+    ctx.arcTo(-s, s, -s, -s, r);
+    ctx.arcTo(-s, -s, s, -s, r);
+    ctx.closePath();
+    return;
+  }
+  const sides = TOKEN_POLY_SIDES[shape] ?? 6;
+  for (let i = 0; i < sides; i += 1) {
+    const a = (i * 2 * Math.PI) / sides; // Konva RegularPolygon: first vertex at top
+    const x = radius * Math.sin(a);
+    const y = -radius * Math.cos(a);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
+/** The token silhouette as a Konva primitive: solid `fill` when given, else stroke-only. */
+function TokenShapePrimitive({
+  shape,
+  radius,
+  fill,
+  stroke,
+  strokeWidth,
+  glow,
+}: {
+  shape: TokenShape;
+  radius: number;
+  fill?: string;
+  stroke: string;
+  strokeWidth: number;
+  glow?: Record<string, unknown>;
+}) {
+  const common = { stroke, strokeWidth, ...(fill ? { fill } : {}), ...(glow ?? {}) };
+  if (shape === "square") {
+    return (
+      <Rect x={-radius} y={-radius} width={radius * 2} height={radius * 2} cornerRadius={radius * 0.14} {...common} />
+    );
+  }
+  if (shape === "circle") {
+    return <Circle radius={radius} {...common} />;
+  }
+  return <RegularPolygon sides={TOKEN_POLY_SIDES[shape] ?? 6} radius={radius} {...common} />;
+}
+
 /**
- * Renders a token's silhouette: circle / square / diamond / triangle / hexagon / octagon,
- * filled with a solid color or (for framed image tokens) the portrait clipped to the shape.
- * All primitives are centered on the group origin so the shared portrait pattern math works.
+ * Renders a token's silhouette: a solid-color shape, or — for framed image tokens — the
+ * portrait cover-fitted and clipped to the shape, with the outline drawn on top. Uses a
+ * clipped `KonvaImage` (drawImage: crisp, honors high-quality smoothing, preserves aspect)
+ * rather than a fill pattern, which stretched non-square images and sampled at low quality.
  */
 function TokenShapeNode({
   shape,
@@ -243,54 +327,60 @@ function TokenShapeNode({
   fill,
   stroke,
   strokeWidth,
+  glow,
 }: {
   shape: TokenShape;
   radius: number;
-  img: HTMLImageElement | null | undefined;
+  img: HTMLImageElement | HTMLCanvasElement | null | undefined;
   fill: string;
   stroke: string;
   strokeWidth: number;
+  /** Soft white hover/selection glow (Phase 7f): Konva shadow props, or none. */
+  glow?: Record<string, unknown>;
 }) {
-  const common = { stroke, strokeWidth };
-  if (shape === "square") {
-    // Rect anchors its fill pattern at the top-left corner, so no centered offset here.
-    const imgFill = img
-      ? {
-          fillPatternImage: img,
-          fillPatternScale: { x: (radius * 2) / img.width, y: (radius * 2) / img.height },
-        }
-      : { fill };
+  if (!img) {
     return (
-      <Rect
-        x={-radius}
-        y={-radius}
-        width={radius * 2}
-        height={radius * 2}
-        cornerRadius={radius * 0.14}
-        {...imgFill}
-        {...common}
-      />
+      <TokenShapePrimitive shape={shape} radius={radius} fill={fill} stroke={stroke} strokeWidth={strokeWidth} glow={glow} />
     );
   }
-  // Center-origin shapes share the portrait pattern math (image centered on the origin).
-  const imgFill = img
-    ? {
-        fillPatternImage: img,
-        fillPatternScale: { x: (radius * 2) / img.width, y: (radius * 2) / img.height },
-        fillPatternOffset: { x: img.width / 2, y: img.height / 2 },
-      }
-    : { fill };
-  if (shape === "circle") {
-    return <Circle radius={radius} {...imgFill} {...common} />;
-  }
+  // Cover-fit: scale the image so it fills the shape's bounding square, preserving aspect
+  // (the overflow is cropped by the clip), then center it on the origin.
+  const size = radius * 2;
+  const aspect = img.width / img.height;
+  const coverW = aspect >= 1 ? size * aspect : size;
+  const coverH = aspect >= 1 ? size : size / aspect;
   return (
-    <RegularPolygon
-      sides={TOKEN_POLY_SIDES[shape] ?? 6}
-      radius={radius}
-      {...imgFill}
-      {...common}
-    />
+    <>
+      <Group clipFunc={(ctx) => clipTokenShape(ctx, shape, radius)}>
+        <KonvaImage image={img} width={coverW} height={coverH} x={-coverW / 2} y={-coverH / 2} />
+      </Group>
+      {/* Outline + glow on top; no fill so the clipped portrait shows through. */}
+      <TokenShapePrimitive shape={shape} radius={radius} stroke={stroke} strokeWidth={strokeWidth} glow={glow} />
+    </>
   );
+}
+
+/** Eases a 0..1 value toward `target` over a few frames — drives the token hover/select
+ *  glow so it fades in/out instead of snapping. */
+function useGlowFade(target: number): number {
+  const [value, setValue] = useState(target);
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  useEffect(() => {
+    let raf = 0;
+    const step = () => {
+      const next = valueRef.current + (target - valueRef.current) * 0.25;
+      if (Math.abs(target - next) < 0.01) {
+        setValue(target);
+        return;
+      }
+      setValue(next);
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target]);
+  return value;
 }
 
 function TokenNode({
@@ -328,10 +418,118 @@ function TokenNode({
   onRotate?: (facing: number) => void;
 }) {
   const img = useImage(imageUrl);
+  // Render a crisp, size-appropriate copy so large uploads don't look soft in a small token.
+  const crispImg = useCrispImage(img, radius);
+  const groupRef = useRef<Konva.Group>(null);
+  const rotatingRef = useRef(false);
   const [dragFacing, setDragFacing] = useState<number | null>(null);
-  const facing = dragFacing ?? token.facing;
-  const rad = (deg: number) => (deg * Math.PI) / 180;
-  const handleR = radius + 14;
+  const [hovered, setHovered] = useState(false);
+  const canRotate = Boolean(onRotate);
+  const facingDeg = dragFacing ?? token.facing ?? 0;
+  const shape = token.shape ?? (shapeDefaults ?? DEFAULT_TOKEN_SHAPES)[token.kind];
+  // How far the token's silhouette reaches from center: the square spans the full diameter
+  // (corners at radius·√2, outside the circle); every other shape sits within `radius`. The
+  // facing arrow is offset past this so it never overlaps the token.
+  const reach = shape === "square" ? radius * Math.SQRT2 : radius;
+  // A soft white glow around the token (and its arrow) when hovered or selected — eased
+  // in/out so it fades rather than snapping. Applies to every token kind, items included.
+  const glow = useGlowFade(hovered || selected ? 1 : 0);
+  const glowShadow =
+    glow > 0.01
+      ? {
+          shadowColor: "#ffffff",
+          shadowBlur: 9 * glow,
+          shadowOpacity: 0.5 * glow,
+          shadowForStrokeEnabled: true,
+        }
+      : undefined;
+  // Once a committed rotation is echoed back by the server, drop the local preview so we
+  // follow authoritative state again. We hold it (rather than clearing on pointer-up) so
+  // the arrow never flashes to the pre-rotation facing during the round-trip. The angle
+  // threshold ignores unrelated broadcasts that still carry the old facing (race guard).
+  useEffect(() => {
+    if (dragFacing === null || rotatingRef.current) return;
+    const serverDeg = token.facing ?? 0;
+    const diff = Math.abs(((serverDeg - dragFacing + 540) % 360) - 180);
+    if (diff < 0.5) setDragFacing(null);
+  }, [token, dragFacing]);
+  // Creatures show a facing indicator; it's visible to everyone once a facing is set, and
+  // to controllers (DM / owner) even before — so it can always be grabbed to rotate. Items
+  // never show it. (No selection/double-click needed: the arrow itself is the handle.)
+  const showArrow = token.kind !== "item" && (token.facing !== undefined || canRotate);
+
+  // Facing indicator, drawn pointing UP (the wrapping Group rotates it by `facingDeg`):
+  // a wide arrowhead flowing into two tapering fins that hug the rim on each side, set off
+  // the token by a small gap. Traced as ONE continuous closed outline so it fills + strokes
+  // as a single shape (no internal seams): tip → right base → right fin (out then back) →
+  // inner arc under the head → left fin (in then out) → back to the tip.
+  const arrowPoints = useMemo(() => {
+    const gap = radius * 0.14;
+    const R = reach + gap; // inner radius, offset past the token's silhouette
+    const finW = radius * 0.28; // fin thickness at the mouth
+    const finTipW = radius * 0.09; // fin thickness at the far end (blunt, not tapered to 0)
+    const baseR = R + finW; // arrowhead base / fin outer radius at the mouth
+    const up = -Math.PI / 2;
+    const arrowH = radius * 0.38; // tip length beyond baseR (smaller arrowhead)
+    const arrowAng = 0.26; // half-angle of the arrowhead base
+    const spread = 1.02; // how far each fin sweeps around the rim (shorter = smaller arc)
+    const steps = 14;
+    const P = (a: number, r: number): [number, number] => [Math.cos(a) * r, Math.sin(a) * r];
+    const finAngle = (dir: number, s: number) => up + dir * (arrowAng + (spread - arrowAng) * s);
+    const outerR = (s: number) => baseR + (R + finTipW - baseR) * s; // taper mouth → blunt tip
+    const pts: Array<[number, number]> = [];
+    pts.push([0, -(baseR + arrowH)]); // 1. tip
+    pts.push(P(up + arrowAng, baseR)); // 2. right base corner
+    for (let i = 1; i <= steps; i += 1) pts.push(P(finAngle(1, i / steps), outerR(i / steps))); // 3. right outer → blunt tip
+    for (let i = steps; i >= 0; i -= 1) pts.push(P(finAngle(1, i / steps), R)); // 4. right inner ← back (blunt cap first)
+    for (let i = 1; i < steps; i += 1) pts.push(P(up + arrowAng - 2 * arrowAng * (i / steps), R)); // 5. inner arc under the head
+    for (let i = 0; i <= steps; i += 1) pts.push(P(finAngle(-1, i / steps), R)); // 6. left inner → far tip
+    for (let i = steps; i >= 0; i -= 1) pts.push(P(finAngle(-1, i / steps), outerR(i / steps))); // 7. left outer ← back (blunt cap first)
+    return pts.flat();
+  }, [radius, reach]);
+
+  /** Grab the arrow and drag to rotate: live preview, commit on pointer-up (never per-frame). */
+  const startRotate = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+    if (!onRotate) return;
+    e.cancelBubble = true; // don't select or drag the token underneath
+    rotatingRef.current = true;
+    const grp = groupRef.current;
+    const stage = grp?.getStage();
+    if (!grp || !stage) return;
+    const container = stage.container();
+    const degAt = (clientX: number, clientY: number, shiftKey: boolean) => {
+      const rect = container.getBoundingClientRect();
+      const local = grp
+        .getAbsoluteTransform()
+        .copy()
+        .invert()
+        .point({ x: clientX - rect.left, y: clientY - rect.top });
+      let deg = (Math.atan2(local.x, -local.y) * 180) / Math.PI;
+      deg = ((deg % 360) + 360) % 360;
+      return shiftKey ? (Math.round(deg / 45) * 45) % 360 : deg;
+    };
+    const onMove = (ev: PointerEvent) => setDragFacing(degAt(ev.clientX, ev.clientY, ev.shiftKey));
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setDragFacing((cur) => {
+        if (cur === null) return null;
+        const final = degAt(ev.clientX, ev.clientY, ev.shiftKey);
+        onRotate(final);
+        // Keep showing the committed angle until the server echoes it back (the reconcile
+        // effect clears it). Snapping to null here would flash the OLD token.facing for one
+        // frame during the round-trip, then jump forward — the clunky bounce.
+        return final;
+      });
+      // Clear after the token's click/dragEnd have fired so neither treats this as a move.
+      setTimeout(() => {
+        rotatingRef.current = false;
+      }, 0);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
   const dead = hp !== null && hp.max > 0 && hp.current <= 0;
   const showBar = hp !== null && hp.max > 0;
   const ratio = showBar ? Math.min(Math.max(hp.current / hp.max, 0), 1) : 0;
@@ -344,17 +542,23 @@ function TokenNode({
 
   return (
     <Group
+      ref={groupRef}
       x={token.x}
       y={token.y}
       draggable={draggable}
       opacity={token.hidden ? 0.4 : dead ? 0.55 : 1}
-      onClick={onSelect}
+      onClick={() => {
+        if (rotatingRef.current) return; // a rotate gesture, not a select
+        onSelect?.();
+      }}
       onTap={onSelect}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       onDblClick={onOpenSheet}
       onDblTap={onOpenSheet}
       onDragStart={(e) => {
-        // Shift-drag draws a pointer arrow instead of moving the token.
-        if (e.evt.shiftKey) {
+        // Shift-drag draws a pointer arrow; grabbing the facing arrow rotates instead of moving.
+        if (e.evt.shiftKey || rotatingRef.current) {
           e.target.stopDrag();
         }
       }}
@@ -363,75 +567,55 @@ function TokenNode({
       {isCurrentTurn ? (
         <Circle radius={radius + 4} stroke={CURRENT_TURN_COLOR} strokeWidth={2.5} listening={false} />
       ) : null}
-      {facing !== undefined ? (
-        // Facing arrow: a wide wedge on the token rim, pointing the way it faces
-        // (0 = up/north, clockwise). Shares its heading with Phase 6 directional vision.
-        <RegularPolygon
-          sides={3}
-          radius={Math.max(6, radius * 0.4)}
-          x={(radius + radius * 0.28) * Math.sin(rad(facing))}
-          y={-(radius + radius * 0.28) * Math.cos(rad(facing))}
-          rotation={facing}
-          fill={token.color}
-          stroke="#000000aa"
-          strokeWidth={1}
-          listening={false}
-        />
+      {showArrow ? (
+        // Facing indicator: one continuous shape — an arrowhead flanked by two rim-hugging
+        // fins — drawn pointing up and rotated by facing. It's a single closed outline (no
+        // internal seams). Controllable tokens can grab it directly to rotate (no
+        // selection/double-click needed); others see it read-only.
+        <Group
+          rotation={facingDeg}
+          listening={canRotate}
+          onMouseEnter={(e) => {
+            const c = e.target.getStage()?.container();
+            if (c) c.style.cursor = "grab";
+          }}
+          onMouseLeave={(e) => {
+            const c = e.target.getStage()?.container();
+            if (c) c.style.cursor = "";
+          }}
+          onMouseDown={startRotate}
+          onTouchStart={startRotate}
+        >
+          <Line
+            points={arrowPoints}
+            closed
+            fill={token.color}
+            stroke="#00000088"
+            strokeWidth={Math.max(1, radius * 0.05)}
+            {...(glowShadow ?? {})}
+          />
+        </Group>
       ) : null}
-      {selected && onRotate ? (
-        // Rotate handle: drag around the token to set facing; commit on pointer-up
-        // only (never per-frame — every MOVE_TOKEN is a full-state broadcast).
-        <Circle
-          x={handleR * Math.sin(rad(facing ?? 0))}
-          y={-handleR * Math.cos(rad(facing ?? 0))}
-          radius={6}
-          fill="#4a9eff"
-          stroke="#fff"
-          strokeWidth={1.5}
-          draggable
-          onClick={(e) => {
-            e.cancelBubble = true;
-          }}
-          onDragStart={(e) => {
-            e.cancelBubble = true;
-          }}
-          onDragMove={(e) => {
-            e.cancelBubble = true;
-            let deg = (Math.atan2(e.target.x(), -e.target.y()) * 180) / Math.PI;
-            deg = ((deg % 360) + 360) % 360;
-            if (e.evt.shiftKey) {
-              deg = (Math.round(deg / 45) * 45) % 360;
-            }
-            setDragFacing(deg);
-          }}
-          onDragEnd={(e) => {
-            e.cancelBubble = true;
-            const commit = dragFacing ?? token.facing ?? 0;
-            onRotate(commit);
-            setDragFacing(null);
-            e.target.position({ x: handleR * Math.sin(rad(commit)), y: -handleR * Math.cos(rad(commit)) });
-          }}
-        />
-      ) : null}
-      {img && token.imageFit === "raw" ? (
-        // Raw image token: the bare picture, no shape frame (selection border only).
+      {crispImg && token.imageFit === "raw" ? (
+        // Raw image token: the bare picture, no shape frame — just a soft white glow halo
+        // that fades in on hover/select.
         <KonvaImage
-          image={img}
+          image={crispImg}
           width={radius * 2}
           height={radius * 2}
           offsetX={radius}
           offsetY={radius}
-          stroke={selected ? "#4a9eff" : undefined}
-          strokeWidth={selected ? 3 : 0}
+          {...(glowShadow ?? {})}
         />
       ) : (
         <TokenShapeNode
-          shape={token.shape ?? (shapeDefaults ?? DEFAULT_TOKEN_SHAPES)[token.kind]}
+          shape={shape}
           radius={radius}
-          img={img}
+          img={crispImg}
           fill={token.color}
-          stroke={selected ? "#4a9eff" : img ? token.color : "#00000066"}
-          strokeWidth={selected ? 3 : 2}
+          stroke={img ? token.color : "#00000066"}
+          strokeWidth={2}
+          glow={glowShadow}
         />
       )}
       {dead ? (
@@ -533,6 +717,26 @@ export function MapCanvas({
   const stageRef = useRef<Konva.Stage>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const { width: stageW, height: stageH } = useElementSize(rootRef);
+  // Konva canvases default to imageSmoothingQuality "low", which visibly softens downscaled
+  // images (token portraits, the map) even at normal zoom. Bump them all to "high". Crucially
+  // this must include the STAGE's shared buffer canvas: a token has fill + stroke, so Konva
+  // draws it through the buffer (then composites) — that's where its portrait is downsampled.
+  // A canvas resize resets context state, so re-apply whenever the stage size changes.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const bump = (canvas: { getContext?: () => unknown } | null | undefined) => {
+      const ctx = (canvas?.getContext?.() as { _context?: CanvasRenderingContext2D } | undefined)
+        ?._context;
+      if (ctx) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+      }
+    };
+    for (const layer of stage.getLayers()) bump(layer.getCanvas());
+    bump((stage as unknown as { bufferCanvas?: { getContext?: () => unknown } }).bufferCanvas);
+    stage.batchDraw();
+  }, [stageW, stageH]);
   const scene = state.scenes.find((item) => item.id === sceneId) ?? state.scenes[0];
   const mapImg = useImage(scene?.mapUrl ?? null);
   const sceneWalls = scene?.walls;
@@ -1038,8 +1242,10 @@ export function MapCanvas({
   };
 
   /** True when a shift-drag pointer arrow should start (select mode, left button). */
+  // The shift-drag pointer arrow: DM always; players only when the DM allows it.
+  const canPoint = isDm || state.playersCanPoint !== false;
   const arrowGestureArmed = (e: Konva.KonvaEventObject<PointerEvent>) =>
-    !toolActive && !placing && e.evt.button === 0 && e.evt.shiftKey;
+    canPoint && !toolActive && !placing && e.evt.button === 0 && e.evt.shiftKey;
 
   const sceneTokens = state.tokens.filter((token) => token.sceneId === scene.id);
   const currentTurnTokenId =
@@ -1234,7 +1440,8 @@ export function MapCanvas({
 
         <Layer listening={activeTool.id === "select"}>
           {sceneTokens.map((token) => {
-            const draggable = isDm || token.ownerPlayerId === yourPlayerId;
+            const draggable =
+              isDm || (token.ownerPlayerId === yourPlayerId && state.playersCanMove !== false);
             // Prefer the linked sheet's portrait so uploads/changes reflect live;
             // fall back to the token's own snapshot, then its color.
             const linkedSheetId = token.sheetId ?? token.ownerPlayerId;

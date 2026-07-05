@@ -4,6 +4,7 @@ import {
   addRevealDecal,
   buildDieGeometry,
   buildDieMesh,
+  dieMaterialOptions,
   hideDieNumbers,
   relabelD4Vertex,
   relabelDieFace,
@@ -50,6 +51,14 @@ const GATHER_KEEP_DIST = 3.2;
 const GATHER_RING_R = 2.4;
 const CAMERA_HEIGHT = 2000;
 const CAMERA_FAR = 4000;
+// The dice camera is orthographic top-down, so a coin rising in world-Y is invisible. To
+// sell the flip we fake depth during playback with a smooth 0→1→0 arc over the airborne
+// time: grow the coin toward the camera and lift it up-screen, both peaking at the apex.
+const COIN_ARC_MAX_BOOST = 0.8; // peak growth (apex ≈ 1.8×)
+const COIN_ARC_LIFT = 1.5; // peak up-screen shift at the apex (physics units)
+// Easing exponent for the grow/shrink arc. 2 = the physical parabola; higher exaggerates
+// it (rise faster→slower, fall slower→faster) for a more dramatic, satisfying flip.
+const COIN_ARC_EASE = 3;
 const WALL_HEIGHT = 8;
 const GRAVITY = -34;
 const FIXED_DT = 1 / 60;
@@ -80,6 +89,9 @@ interface DieInstance {
   samples?: number[];
   /** Number a blank custom die reveals once it lands (faded onto the up face). */
   revealLabel?: string;
+  /** Coin only: peak-height frame (arc apex) and first floor-contact frame (arc end). */
+  coinApexFrame?: number;
+  coinLandFrame?: number;
 }
 
 type RollMode = "armed" | "thrown" | "track";
@@ -334,7 +346,7 @@ export class DiceEngine {
 
   private createDie(spec: DieSpec): DieInstance {
     const geom = buildDieGeometry(spec.kind, spec.percentile);
-    const mesh = buildDieMesh(geom, { color: spec.percentile ? "#2d4a7b" : "#7b2d3a" });
+    const mesh = buildDieMesh(geom, dieMaterialOptions(spec.kind, spec.percentile));
     mesh.scale.setScalar(DIE_SCALE);
     return { spec, geom, mesh };
   }
@@ -588,6 +600,11 @@ export class DiceEngine {
   }
 
   private buildReleaseStates(roll: RollInstance, vx: number, vz: number): DieThrowState[] {
+    // A coin isn't thrown across the table — it's flicked up in place. Reinterpret the
+    // flick entirely (see buildCoinFlipStates) when the whole roll is coins.
+    if (roll.dice.every((d) => d.spec.kind === "coin")) {
+      return this.buildCoinFlipStates(roll, vx, vz);
+    }
     const cap = 16;
     const cvx = clamp(vx, -cap, cap);
     const cvz = clamp(vz, -cap, cap);
@@ -610,6 +627,35 @@ export class DiceEngine {
         q: [q.x, q.y, q.z, q.w] as Quat,
         lin,
         ang: [axisX * tumble + jitter(), jitter(), axisZ * tumble + jitter()] as Vec3,
+      };
+    });
+  }
+
+  /// <summary>
+  /// Coin flip launch. The flick's speed — measured by the same release-velocity sampling
+  /// as a die throw — is reinterpreted: its MAGNITUDE drives the vertical pop and the
+  /// end-over-end spin (harder flick → higher, spinnier), while horizontal travel is
+  /// clamped near zero with a hair of forward bias, so the coin lands flat just ahead of
+  /// the flick instead of sailing across the board. Spin is about the world X axis
+  /// (toward/away from the viewer) so the H/T caps alternate up and the flip reads clearly.
+  /// The coin's floaty hang time comes from a reduced gravity scale in presimulate().
+  /// </summary>
+  private buildCoinFlipStates(roll: RollInstance, vx: number, vz: number): DieThrowState[] {
+    const flick = Math.hypot(clamp(vx, -16, 16), clamp(vz, -16, 16));
+    const pop = clamp(5 + flick * 0.45, 6, 9); // vertical launch — drives the grow/lift arc
+    const spin = clamp(16 + flick * 1.4, 18, 40); // end-over-end rate scales with the flick
+    const driftX = clamp(vx * 0.08, -0.8, 0.8); // barely any sideways travel
+    const driftZ = clamp(vz * 0.1, -1.2, 0); // small forward-only nudge (up-screen is −z)
+    const jitter = () => (Math.random() - 0.5) * 1.4; // a flip is clean — far less chaos than a die
+    return roll.dice.map((d) => {
+      const p = d.mesh.position;
+      const q = d.mesh.quaternion;
+      return {
+        id: d.spec.id,
+        p: [p.x, p.y, p.z] as Vec3,
+        q: [q.x, q.y, q.z, q.w] as Quat,
+        lin: [driftX, pop, driftZ] as Vec3,
+        ang: [spin + jitter(), jitter(), jitter()] as Vec3,
       };
     });
   }
@@ -683,6 +729,9 @@ export class DiceEngine {
           // table like they're on ice; angular barely rises so they still tumble.
           .setLinearDamping(0.45)
           .setAngularDamping(0.28)
+          // A coin floats (weaker gravity) so a modest pop buys enough hang time for a
+          // few visible end-over-end rotations and a gentle, flat landing.
+          .setGravityScale(spec.kind === "coin" ? 0.5 : 1)
           .setTranslation(s.p[0], s.p[1], s.p[2])
           .setRotation({ x: s.q[0], y: s.q[1], z: s.q[2], w: s.q[3] }),
       );
@@ -696,7 +745,8 @@ export class DiceEngine {
         scaled[i * 3 + 2] = p.z * DIE_SCALE;
       });
       const colliderDesc = (RAPIER.ColliderDesc.convexHull(scaled) ?? RAPIER.ColliderDesc.ball(DIE_SCALE))
-        .setRestitution(0.3)
+        // A coin should land with a dead thud (no bounce) so the flip is one clean arc.
+        .setRestitution(spec.kind === "coin" ? 0.02 : 0.3)
         .setFriction(0.9)
         .setDensity(1.2)
         .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
@@ -775,6 +825,24 @@ export class DiceEngine {
     const dice = specs.map((spec, i) => {
       const die = this.createDie(spec);
       die.samples = byId.get(spec.id) ?? [];
+      if (spec.kind === "coin") {
+        // The arc peaks at the coin's real peak-height frame and ends at its FIRST floor
+        // contact (the frame it visibly hits the board). Center-Y is unreliable for the END
+        // (a spinning coin lands edge-on, center still high, then flops flat), so the end
+        // uses the first recorded impact (one coin ⇒ impacts[0] is its landing).
+        let apex = 0;
+        let maxY = -Infinity;
+        for (let fr = 0; fr * 7 + 1 < die.samples.length; fr += 1) {
+          const y = die.samples[fr * 7 + 1];
+          if (y > maxY) {
+            maxY = y;
+            apex = fr;
+          }
+        }
+        const landFrame = track.impacts.length > 0 ? track.impacts[0].frame : track.frames - 1;
+        die.coinApexFrame = Math.max(1, apex);
+        die.coinLandFrame = Math.max(die.coinApexFrame + 1, landFrame);
+      }
       if (blank) {
         // Secret roll on a non-DM client: render the die blank, no relabel/reveal ever.
         hideDieNumbers(die.mesh);
@@ -859,6 +927,27 @@ export class DiceEngine {
       qa.set(s[o0 + 3], s[o0 + 4], s[o0 + 5], s[o0 + 6]);
       qb.set(s[o1 + 3], s[o1 + 4], s[o1 + 5], s[o1 + 6]);
       die.mesh.quaternion.slerpQuaternions(qa, qb, a);
+      if (die.coinApexFrame !== undefined && die.coinLandFrame !== undefined) {
+        // Fake the flip's depth (0→1→0 over the airborne time), keyed to playback TIME not
+        // center height, so the coin is back to normal the instant it hits the board. The
+        // rise eases OUT (fast then slow — shooting up, then hanging at the apex) and the
+        // fall eases IN (slow then fast — accelerating down), exaggerating a real coin's
+        // parabola. Grow toward the camera + lift up-screen (camera up is world −Z).
+        let arc: number;
+        if (f <= 0) {
+          arc = 0;
+        } else if (f < die.coinApexFrame) {
+          const u = f / die.coinApexFrame; // rising 0→1
+          arc = 1 - Math.pow(1 - u, COIN_ARC_EASE);
+        } else if (f < die.coinLandFrame) {
+          const w = (f - die.coinApexFrame) / (die.coinLandFrame - die.coinApexFrame); // falling 0→1
+          arc = 1 - Math.pow(w, COIN_ARC_EASE);
+        } else {
+          arc = 0;
+        }
+        die.mesh.scale.setScalar(DIE_SCALE * (this.worldK() / roll.k0) * (1 + arc * COIN_ARC_MAX_BOOST));
+        die.mesh.position.z -= arc * COIN_ARC_LIFT;
+      }
     });
   }
 

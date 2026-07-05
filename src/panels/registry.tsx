@@ -57,6 +57,12 @@ export type PanelContext = {
   /** Per-client log-toast notifications. */
   toastsEnabled: boolean;
   setToastsEnabled: (on: boolean) => void;
+  /** Per-client: hold SpaceBar as the left mouse button (touchpad aid). */
+  spaceClick: boolean;
+  setSpaceClick: (on: boolean) => void;
+  /** DM per-client: single-clicking a token opens its Token editor panel. */
+  tokenPanelOnClick: boolean;
+  setTokenPanelOnClick: (on: boolean) => void;
   /** Clears saved window/tray positions and returns floating UI to defaults. */
   resetUiLayout: () => void;
   /** Leaves the campaign (back to the lobby). */
@@ -76,6 +82,8 @@ export type PanelDef = {
   title: (ctx: PanelContext) => string;
   defaultPos: (viewportWidth: number, viewportHeight: number) => WindowPos;
   width: number;
+  /** Initial window height. Omit for auto (content-sized) height. */
+  height?: number;
   /** Content-driven minimum window size (resizing floor). */
   minWidth?: number;
   minHeight?: number;
@@ -110,6 +118,7 @@ export const PANELS: PanelDef[] = [
     },
     defaultPos: (vw) => ({ x: Math.max(16, vw - 760), y: 60 }),
     width: 560,
+    height: 620,
     minWidth: 420,
     minHeight: 480,
     render: (ctx) => {

@@ -224,6 +224,46 @@ label {
   height: 100%;
   object-fit: cover;
 }
+/* The item icon's croppable frame fills the 56px thumbnail. */
+.item-sheet-icon > .croppable {
+  width: 100%;
+  height: 100%;
+}
+
+/* --- Croppable image (character portrait + item icon): cover fit, drag to pan, zoom --- */
+.sheet-portrait-wrap {
+  position: relative;
+}
+.sheet-portrait-change {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  font-size: 0.62rem;
+  border-radius: 6px;
+  color: var(--text);
+  background: rgba(10, 12, 16, 0.72);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.sheet-portrait-change:hover {
+  background: rgba(10, 12, 16, 0.92);
+}
+.croppable-zoom {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 6px;
+  width: auto;
+  margin: 0;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.croppable:hover .croppable-zoom {
+  opacity: 0.92;
+}
 
 /* --- Floating overlay + clusters ----------------------------------------- */
 .overlay {
@@ -1976,14 +2016,24 @@ body.pointer-dragging * {
 .chip-tab-name-input {
   width: auto;
   min-width: 2.5rem;
-  padding: 0.05rem 0.25rem;
+  /* No vertical padding/border so the chip is the same height as the plain page-switcher
+     buttons on the other prep pages (all four top rows then match). */
+  padding: 0 0.25rem;
+  border: none;
+  background: transparent;
+  line-height: 1.4;
   font-weight: 600;
 }
 .chip-tab-name-input[readonly] {
   cursor: pointer;
-  background: transparent;
-  border-color: transparent;
   color: inherit;
+}
+.chip-tab-name-input:not([readonly]) {
+  background: var(--input-bg);
+  border-radius: var(--radius);
+}
+.chip-tab-name-input:focus {
+  outline: 1px solid var(--accent);
 }
 .chip-tab-close {
   width: 1.15rem;

@@ -5,6 +5,7 @@ import {
   createInitialState,
   createNpcSheetRecord,
   createPcSheetRecord,
+  DEFAULT_ICON_CROP,
   createPlayerSlot,
   DEFAULT_ABILITY_SCORE,
   EPHEMERAL_ANNOTATION_TTL_MS,
@@ -569,6 +570,10 @@ export default class GameServer implements Party.Server {
 
     if (parsed.type === "MOVE_TOKEN") {
       if (meta.role === "player" && meta.playerId) {
+        if (!this.state.playersCanMove) {
+          this.sendTo(sender, { type: "ERROR", message: "The DM has disabled moving characters." });
+          return;
+        }
         const token = this.state.tokens.find((item) => item.id === parsed.tokenId);
         if (!token || token.ownerPlayerId !== meta.playerId) {
           this.sendTo(sender, { type: "ERROR", message: "You can only move your own token." });
@@ -1050,8 +1055,15 @@ export default class GameServer implements Party.Server {
         return;
       }
       const isArrow = sanitized.kind === "arrow";
-      // The shift-drag pointer arrow is always allowed; the Draw tool (strokes etc.) is
-      // gated for players behind the DM's playersCanDraw switch.
+      // Two independent player gates: the shift-drag pointer arrow behind playersCanPoint,
+      // and the Draw tool (strokes etc.) behind playersCanDraw.
+      if (isArrow && !this.isDm(sender.id) && !this.state.playersCanPoint) {
+        this.sendTo(sender, {
+          type: "ERROR",
+          message: "The DM has disabled pointer arrows for players.",
+        });
+        return;
+      }
       if (!isArrow && !this.isDm(sender.id) && !this.state.playersCanDraw) {
         this.sendTo(sender, {
           type: "ERROR",
@@ -1484,6 +1496,24 @@ export default class GameServer implements Party.Server {
         }
         break;
       }
+      case "SET_PLAYERS_CAN_MOVE": {
+        const enabled = Boolean(parsed.enabled);
+        if (this.state.playersCanMove !== enabled) {
+          this.state.playersCanMove = enabled;
+          this.logEvent(`Player character movement ${enabled ? "enabled" : "disabled"} by the DM.`);
+          void this.broadcastState();
+        }
+        break;
+      }
+      case "SET_PLAYERS_CAN_POINT": {
+        const enabled = Boolean(parsed.enabled);
+        if (this.state.playersCanPoint !== enabled) {
+          this.state.playersCanPoint = enabled;
+          this.logEvent(`Player pointer arrows ${enabled ? "enabled" : "disabled"} by the DM.`);
+          void this.broadcastState();
+        }
+        break;
+      }
       case "SET_WALLS": {
         const scene = this.state.scenes.find((item) => item.id === parsed.sceneId);
         if (!scene) {
@@ -1638,6 +1668,7 @@ export default class GameServer implements Party.Server {
           name,
           description: "",
           iconUrl: null,
+          iconCrop: { ...DEFAULT_ICON_CROP },
           folderId: null,
         };
         void this.broadcastState();

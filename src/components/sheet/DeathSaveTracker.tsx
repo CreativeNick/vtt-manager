@@ -1,9 +1,8 @@
-import { useState } from "react";
 import type { DeathSaves } from "../../lib/types";
 
 /**
- * A skull button that toggles a slide-down death-save tracker (PC only): 3 success
- * slots on the left, 3 failure slots on the right, click to fill. Collapsed by default.
+ * Death-save tracker (PC only): 3 success slots on the left, 3 failure slots on the right,
+ * always visible (a skull sits between them). Click a slot to fill or unfill it.
  */
 export function DeathSaveTracker({
   value,
@@ -14,48 +13,36 @@ export function DeathSaveTracker({
   canEdit: boolean;
   onChange: (next: DeathSaves) => void;
 }) {
-  const [open, setOpen] = useState(false);
-
   const setSuccesses = (n: number) => onChange({ ...value, successes: value.successes === n ? n - 1 : n });
   const setFailures = (n: number) => onChange({ ...value, failures: value.failures === n ? n - 1 : n });
 
   return (
     <div className="death-saves">
-      <button
-        type="button"
-        className={`death-skull ${open ? "death-skull--open" : ""} ${value.successes || value.failures ? "death-skull--active" : ""}`}
-        title="Death saves"
-        onClick={() => setOpen((v) => !v)}
-      >
-        💀
-      </button>
-      {open ? (
-        <div className="death-tracker">
-          <div className="death-col" title="Successes">
-            {[1, 2, 3].map((n) => (
-              <button
-                type="button"
-                key={n}
-                className={`death-pip death-pip--success ${value.successes >= n ? "death-pip--full" : ""}`}
-                disabled={!canEdit}
-                onClick={() => setSuccesses(n)}
-              />
-            ))}
-          </div>
-          <span className="death-skull-mid">💀</span>
-          <div className="death-col" title="Failures">
-            {[1, 2, 3].map((n) => (
-              <button
-                type="button"
-                key={n}
-                className={`death-pip death-pip--fail ${value.failures >= n ? "death-pip--full" : ""}`}
-                disabled={!canEdit}
-                onClick={() => setFailures(n)}
-              />
-            ))}
-          </div>
+      <div className="death-tracker">
+        <div className="death-col" title="Successes">
+          {[1, 2, 3].map((n) => (
+            <button
+              type="button"
+              key={n}
+              className={`death-pip death-pip--success ${value.successes >= n ? "death-pip--full" : ""}`}
+              disabled={!canEdit}
+              onClick={() => setSuccesses(n)}
+            />
+          ))}
         </div>
-      ) : null}
+        <span className="death-skull-mid" title="Death saves">💀</span>
+        <div className="death-col" title="Failures">
+          {[1, 2, 3].map((n) => (
+            <button
+              type="button"
+              key={n}
+              className={`death-pip death-pip--fail ${value.failures >= n ? "death-pip--full" : ""}`}
+              disabled={!canEdit}
+              onClick={() => setFailures(n)}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

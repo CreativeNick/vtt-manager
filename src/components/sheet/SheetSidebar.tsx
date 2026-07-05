@@ -1,4 +1,5 @@
 import { DEFAULT_SHEET_TEMPLATE, derivedStatTotal, formatModifier } from "../../lib/types";
+import { CroppableImage } from "../CroppableImage";
 import { NumberInput } from "../NumberInput";
 import { BarMeter, StatBadge } from "./atoms";
 import { DeathSaveTracker } from "./DeathSaveTracker";
@@ -44,16 +45,39 @@ export function SheetSidebar({
           {reveal.revealed ? "👁 Vitals" : "✕ Vitals"}
         </button>
       ) : null}
-      {canEdit ? (
+      {value.iconUrl ? (
+        // Existing portrait: drag to reposition + zoom (when editable); a separate
+        // "Change" button uploads a new one so dragging never triggers a file picker.
+        <div className="sheet-portrait-wrap">
+          <CroppableImage
+            className="sheet-portrait sheet-portrait--lg"
+            src={value.iconUrl}
+            crop={value.iconCrop}
+            editable={canEdit}
+            onChange={(iconCrop) => update({ iconCrop })}
+            alt="portrait"
+          />
+          {canEdit ? (
+            <label className="sheet-portrait-change" title="Upload a different portrait">
+              {uploading ? "…" : "Change"}
+              <input
+                type="file"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handlePortrait(file);
+                }}
+              />
+            </label>
+          ) : null}
+        </div>
+      ) : canEdit ? (
         <label className="sheet-portrait-btn sheet-portrait-btn--lg" title="Click to upload a portrait">
-          {value.iconUrl ? (
-            <img className="sheet-portrait sheet-portrait--lg" src={value.iconUrl} alt="portrait" />
-          ) : (
-            <div className="sheet-portrait sheet-portrait--lg sheet-portrait--empty">
-              <span>{uploading ? "…" : "＋"}</span>
-            </div>
-          )}
-          <span className="sheet-portrait-hint">{uploading ? "Uploading…" : value.iconUrl ? "Change" : "Add photo"}</span>
+          <div className="sheet-portrait sheet-portrait--lg sheet-portrait--empty">
+            <span>{uploading ? "…" : "＋"}</span>
+          </div>
+          <span className="sheet-portrait-hint">{uploading ? "Uploading…" : "Add photo"}</span>
           <input
             type="file"
             accept="image/*"
@@ -64,8 +88,6 @@ export function SheetSidebar({
             }}
           />
         </label>
-      ) : value.iconUrl ? (
-        <img className="sheet-portrait sheet-portrait--lg" src={value.iconUrl} alt="portrait" />
       ) : (
         <div className="sheet-portrait sheet-portrait--lg" />
       )}

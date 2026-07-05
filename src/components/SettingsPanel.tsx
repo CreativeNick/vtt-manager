@@ -100,6 +100,12 @@ export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
         on={ctx.toastsEnabled}
         onToggle={ctx.setToastsEnabled}
       />
+      <ToggleRow
+        label="SpaceBar = left click"
+        hint="Hold SpaceBar to act as the left mouse button at the cursor — click, and press-move-release to drag. Handy on a touchpad. (Space still types in text fields.)"
+        on={ctx.spaceClick}
+        onToggle={ctx.setSpaceClick}
+      />
       <div className="row" style={{ justifyContent: "space-between" }}>
         <label style={{ margin: 0 }} title="Windows and the dice tray return to their default spots">
           UI layout
@@ -119,10 +125,28 @@ export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
         <>
           <div className="section-title">Room (DM)</div>
           <ToggleRow
+            label="Players can move characters"
+            hint="Allow players to move and rotate their own characters' tokens on the map."
+            on={state.playersCanMove !== false}
+            onToggle={(on) => room.send({ type: "SET_PLAYERS_CAN_MOVE", enabled: on })}
+          />
+          <ToggleRow
+            label="Players can point"
+            hint="Allow players to Shift-drag on the map to draw a temporary dotted pointer arrow."
+            on={state.playersCanPoint !== false}
+            onToggle={(on) => room.send({ type: "SET_PLAYERS_CAN_POINT", enabled: on })}
+          />
+          <ToggleRow
             label="Players can draw"
             hint="Allow players to use the Draw tool (their strokes fade after ~10s). Also in the draw tool options."
             on={state.playersCanDraw}
             onToggle={(on) => room.send({ type: "SET_PLAYERS_CAN_DRAW", enabled: on })}
+          />
+          <ToggleRow
+            label="Open Token panel on click"
+            hint="When on, single-clicking a token opens its Token editor panel. Off = clicking only selects the token; double-click still opens its sheet. (This device only.)"
+            on={ctx.tokenPanelOnClick}
+            onToggle={ctx.setTokenPanelOnClick}
           />
 
           <div className="section-title">Default token shapes</div>

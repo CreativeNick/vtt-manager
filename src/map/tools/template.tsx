@@ -13,6 +13,8 @@ export type TemplateDraft = { shape: TemplateShape; done: boolean };
 
 const RELAY_MS = 40;
 const LINGER_MS = 2000;
+/** Dotted outline for template shapes (matches the measure ruler's dash). */
+const TEMPLATE_DASH = [8, 6];
 
 let lastRelay = 0;
 let lingerTimer: ReturnType<typeof setTimeout> | null = null;
@@ -45,8 +47,12 @@ function templateLabel(scene: Scene, shape: TemplateShape): string {
   }
 }
 
-/** The world-space outline points of a template (flat x,y) — used when pinning as a stroke. */
-export function templateOutline(shape: TemplateShape): number[] {
+/**
+ * The world-space outline points of a template (flat x,y) — a closed loop used both to draw
+ * the dotted outline and to pin the shape as a stroke annotation. `bandWidth` is the line
+ * template's width (one grid square); it's ignored by the other kinds.
+ */
+export function templateOutline(shape: TemplateShape, bandWidth = 0): number[] {
   const [x0, y0, x1, y1] = shape.points;
   if (shape.kind === "circle") {
     const r = dist(x0, y0, x1, y1);
@@ -60,7 +66,7 @@ export function templateOutline(shape: TemplateShape): number[] {
   if (shape.kind === "rect") {
     return [x0, y0, x1, y0, x1, y1, x0, y1, x0, y0];
   }
-  // cone: a triangle from the origin to a far edge whose width equals the length (5e).
+  // Unit vector perpendicular to the drag direction, for the cone's far edge / line's sides.
   const len = dist(x0, y0, x1, y1) || 1;
   const px = -(y1 - y0) / len;
   const py = (x1 - x0) / len;
@@ -68,8 +74,15 @@ export function templateOutline(shape: TemplateShape): number[] {
     const hw = len / 2;
     return [x0, y0, x1 + px * hw, y1 + py * hw, x1 - px * hw, y1 - py * hw, x0, y0];
   }
-  // line: just the segment (rendered as a wide band).
-  return [x0, y0, x1, y1];
+  // line: a band `bandWidth` wide, as a closed rectangle down the drag axis.
+  const hw = bandWidth / 2;
+  return [
+    x0 + px * hw, y0 + py * hw,
+    x1 + px * hw, y1 + py * hw,
+    x1 - px * hw, y1 - py * hw,
+    x0 - px * hw, y0 - py * hw,
+    x0 + px * hw, y0 + py * hw,
+  ];
 }
 
 /// <summary>Shared template visual (draft + remote): the shape outline + a size tag.</summary>
@@ -91,7 +104,7 @@ export function TemplateShapeView({
   let body: React.ReactNode = null;
 
   if (shape.kind === "circle") {
-    body = <Circle x={x0} y={y0} radius={dist(x0, y0, x1, y1)} fill={fill} stroke={color} strokeWidth={2} />;
+    body = <Circle x={x0} y={y0} radius={dist(x0, y0, x1, y1)} fill={fill} stroke={color} strokeWidth={2} dash={TEMPLATE_DASH} />;
   } else if (shape.kind === "rect") {
     body = (
       <Rect
@@ -102,13 +115,17 @@ export function TemplateShapeView({
         fill={fill}
         stroke={color}
         strokeWidth={2}
+        dash={TEMPLATE_DASH}
       />
     );
   } else if (shape.kind === "cone") {
-    body = <Line points={templateOutline(shape)} closed fill={fill} stroke={color} strokeWidth={2} />;
+    body = <Line points={templateOutline(shape)} closed fill={fill} stroke={color} strokeWidth={2} dash={TEMPLATE_DASH} />;
   } else {
-    // line: a band one square wide.
-    body = <Line points={[x0, y0, x1, y1]} stroke={fill} strokeWidth={scene.gridSize} lineCap="round" />;
+    // line: a one-square-wide band drawn as a closed rectangle, so it has a dotted outline
+    // and translucent fill just like the other shapes.
+    body = (
+      <Line points={templateOutline(shape, scene.gridSize)} closed fill={fill} stroke={color} strokeWidth={2} dash={TEMPLATE_DASH} />
+    );
   }
 
   return (
@@ -162,7 +179,7 @@ export const templateTool: MapTool = {
           id: `ann-${crypto.randomUUID().slice(0, 8)}`,
           authorId: rt.yourPlayerId ?? "dm",
           kind: "stroke",
-          points: templateOutline(draft.shape),
+          points: templateOutline(draft.shape, rt.scene.gridSize),
           color: TEMPLATE_COLOR,
           width: 2,
           createdAt: Date.now(),

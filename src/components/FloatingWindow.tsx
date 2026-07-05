@@ -84,6 +84,8 @@ type FloatingWindowProps = {
   /** Initial position when no stored geometry exists. */
   defaultPos: (viewportWidth: number, viewportHeight: number) => WindowPos;
   width?: number;
+  /** Initial height when no stored geometry exists. Omit for auto (content-sized) height. */
+  height?: number;
   /** Content-driven minimum size for resizing. */
   minWidth?: number;
   minHeight?: number;
@@ -105,6 +107,7 @@ export function FloatingWindow({
   children,
   defaultPos,
   width = 340,
+  height,
   minWidth = 240,
   minHeight = 140,
   onDock,
@@ -118,7 +121,9 @@ export function FloatingWindow({
       // Height isn't known until first paint; the mount effect re-clamps with it.
       { w, h: minHeight },
     );
-    return { x: pos.x, y: pos.y, w, h: stored?.h ?? null };
+    // A concrete initial height keeps the window a fixed size (content scrolls inside)
+    // instead of auto-fitting each child's content height; `null` = legacy auto height.
+    return { x: pos.x, y: pos.y, w, h: stored?.h ?? height ?? null };
   });
   const [maximized, setMaximized] = useState(false);
   const [z, setZ] = useState(() => bringToFront(id));

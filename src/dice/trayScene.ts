@@ -1,5 +1,11 @@
 import * as THREE from "three";
-import { buildDieGeometry, buildDieMesh, type DieGeometry, type DieKind } from "./geometry";
+import {
+  buildDieGeometry,
+  buildDieMesh,
+  dieMaterialOptions,
+  type DieGeometry,
+  type DieKind,
+} from "./geometry";
 import type { Quat } from "../lib/dice3d";
 
 /// <summary>
@@ -128,7 +134,7 @@ export class DiceTrayScene {
     seed: number,
   ): TrayDiePart {
     const geom = buildDieGeometry(kind, percentile);
-    const group = buildDieMesh(geom, { color: percentile ? "#2d4a7b" : "#7b2d3a" });
+    const group = buildDieMesh(geom, dieMaterialOptions(kind, percentile));
     group.scale.setScalar((TRAY_DIE_PX / 2) * scale);
     group.quaternion.copy(restQuaternion(geom, seed));
 

@@ -334,24 +334,59 @@ export function useDiceOverlay(room: GameRoom): DiceOverlayController {
   /// the readied dice return to the tray (rather than being flung).
   /// </summary>
   const rideDrag = useCallback(
-    (engine: DiceEngine, rollId: string, onUpExtra?: () => void) => {
+    (
+      engine: DiceEngine,
+      rollId: string,
+      picks: Array<[number, number]>,
+      specs: DieSpec[],
+      onUpExtra?: () => void,
+    ) => {
       // Only allow drop-to-cancel once the die has actually left the tray, so a plain
       // click-in-place still lobs the dice gently instead of instantly cancelling.
       let leftTray = false;
+      // While dragging BACK over the tray, the dice pop back onto it (a live preview of
+      // the cancel) instead of hiding under the tray UI; drag out again and they re-grab.
+      let inTray = false;
+
+      const returnToTray = () => {
+        engine.cancelActiveDrag();
+        trayRef.current?.restoreLifted();
+        setSelection(grabbedSelectionRef.current); // show them readied again
+        inTray = true;
+      };
+      const regrab = (x: number, y: number) => {
+        const tray = trayRef.current;
+        if (!tray) return;
+        const poses = tray.liftForGrab(picks);
+        setSelection({});
+        engine.beginTrayGrab(rollId, specs, poses, x, y);
+        inTray = false;
+      };
+
       const onMove = (e: PointerEvent) => {
-        if (!isOverTray(e.clientX, e.clientY)) {
+        const over = isOverTray(e.clientX, e.clientY);
+        if (!over) {
           leftTray = true;
         }
-        engine.moveDrag(e.clientX, e.clientY);
+        if (over && leftTray && !inTray) {
+          returnToTray();
+        } else if (!over && inTray) {
+          regrab(e.clientX, e.clientY);
+          engine.moveDrag(e.clientX, e.clientY);
+        } else if (!inTray) {
+          engine.moveDrag(e.clientX, e.clientY);
+        }
         e.preventDefault();
       };
       const onUp = (e: PointerEvent) => {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
-        if (leftTray && isOverTray(e.clientX, e.clientY)) {
-          // Dropped back into the tray: discard the throw, un-arm it, and put the
-          // readied dice back so nothing is left in hand.
-          engine.cancelActiveDrag();
+        if (inTray || (leftTray && isOverTray(e.clientX, e.clientY))) {
+          // Released back over the tray: discard the throw, un-arm it, and leave the
+          // readied dice resting in the tray so nothing is left in hand.
+          if (!inTray) {
+            engine.cancelActiveDrag();
+          }
           armedRef.current.delete(rollId);
           ourRollIdsRef.current.delete(rollId);
           setSelection(grabbedSelectionRef.current);
@@ -411,7 +446,7 @@ export function useDiceOverlay(room: GameRoom): DiceOverlayController {
       setSelection({});
       audioRef.current?.resume();
       engine.beginTrayGrab(rollId, specs, poses, event.clientX, event.clientY);
-      rideDrag(engine, rollId, () => trayRef.current?.restoreLifted());
+      rideDrag(engine, rollId, picks, specs, () => trayRef.current?.restoreLifted());
       return true;
     },
     [ensureEngine, rideDrag],

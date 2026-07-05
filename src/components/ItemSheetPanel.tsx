@@ -7,6 +7,7 @@ import {
   type ItemType,
 } from "../lib/types";
 import { uploadTokenImage } from "../lib/uploadAsset";
+import { CroppableImage } from "./CroppableImage";
 
 /// <summary>
 /// Item Sheet: a compact editor for a catalog `ItemRecord` — icon, name, type, rarity,
@@ -47,7 +48,12 @@ export function ItemSheetPanel({
       <div className="row" style={{ gap: "0.6rem", alignItems: "flex-start" }}>
         <div className="item-sheet-icon">
           {item.iconUrl ? (
-            <img src={item.iconUrl} alt="" />
+            <CroppableImage
+              src={item.iconUrl}
+              crop={item.iconCrop}
+              editable
+              onChange={(iconCrop) => patch({ iconCrop })}
+            />
           ) : (
             <span aria-hidden>🎒</span>
           )}

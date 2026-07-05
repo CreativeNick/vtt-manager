@@ -1,5 +1,5 @@
 import { Directory, type DirectoryRowData } from "./Directory";
-import { inventoryRowFromItem, type GameState } from "../lib/types";
+import { DEFAULT_ICON_CROP, inventoryRowFromItem, type GameState } from "../lib/types";
 import type { useDmActions } from "../hooks/useGameRoom";
 
 type ItemsPanelProps = {
@@ -71,7 +71,7 @@ export function ItemsPanel({ state, dm, openItemSheet, dropItemAt }: ItemsPanelP
         dm.createItem(itemId, finalName);
         // Folder ＋ button: move the just-created item in (messages stay ordered).
         if (folderId) {
-          dm.updateItem({ id: itemId, name: finalName, description: "", iconUrl: null, folderId });
+          dm.updateItem({ id: itemId, name: finalName, description: "", iconUrl: null, iconCrop: { ...DEFAULT_ICON_CROP }, folderId });
         }
         openItemSheet(itemId);
       }}

@@ -18,6 +18,7 @@ import { useDiceOverlay } from "./dice/useDiceOverlay";
 import { useDmActions, useGameRoom, type JoinParams } from "./hooks/useGameRoom";
 import { buildInverse, useHistory } from "./lib/history";
 import { readLocalFlag, writeLocalFlag } from "./lib/localFlags";
+import { useSpaceClick } from "./lib/useSpaceClick";
 import { fitViewportToScene } from "./lib/sceneUtils";
 import {
   DEFAULT_VIEWPORT,
@@ -31,6 +32,8 @@ type SessionParams = JoinParams & { roomId: string };
 
 const SNAP_KEY = "cm-map-snap";
 const TOASTS_KEY = "cm-log-toasts";
+const SPACE_CLICK_KEY = "cm-space-click";
+const TOKEN_PANEL_KEY = "cm-token-panel-on-click";
 
 /** True when a keyboard event targets an editable field (so shortcuts stand down). */
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -65,6 +68,8 @@ export default function App() {
   const [page, setPage] = useState<PageId>("board");
   const [snap, setSnap] = useState(() => readLocalFlag(SNAP_KEY, false));
   const [toastsEnabled, setToastsEnabledState] = useState(() => readLocalFlag(TOASTS_KEY, true));
+  const [spaceClick, setSpaceClickState] = useState(() => readLocalFlag(SPACE_CLICK_KEY, false));
+  const [tokenPanelOnClick, setTokenPanelOnClickState] = useState(() => readLocalFlag(TOKEN_PANEL_KEY, true));
   /** Bumped by "Reset UI layout" — remounts windows / repositions the tray. */
   const [layoutEpoch, setLayoutEpoch] = useState(0);
   const lastSceneRef = useRef<string | null>(null);
@@ -254,6 +259,18 @@ export default function App() {
     setToastsEnabledState(on);
   }, []);
 
+  const setSpaceClick = useCallback((on: boolean) => {
+    writeLocalFlag(SPACE_CLICK_KEY, on);
+    setSpaceClickState(on);
+  }, []);
+
+  const setTokenPanelOnClick = useCallback((on: boolean) => {
+    writeLocalFlag(TOKEN_PANEL_KEY, on);
+    setTokenPanelOnClickState(on);
+  }, []);
+  // Holding SpaceBar acts as the left mouse button when this device opts in.
+  useSpaceClick(spaceClick);
+
   /// <summary>Clears every saved floating-UI position/size and re-lays-out live elements.</summary>
   const resetUiLayout = useCallback(() => {
     try {
@@ -406,6 +423,10 @@ export default function App() {
     toggleSnap,
     toastsEnabled,
     setToastsEnabled,
+    spaceClick,
+    setSpaceClick,
+    tokenPanelOnClick,
+    setTokenPanelOnClick,
     resetUiLayout,
     leave,
   };
@@ -638,6 +659,7 @@ export default function App() {
             id="sheet"
             title={sheetPanel.title(panelContext)}
             width={sheetPanel.width}
+            height={sheetPanel.height}
             minWidth={sheetPanel.minWidth}
             minHeight={sheetPanel.minHeight}
             defaultPos={sheetPanel.defaultPos}
@@ -677,7 +699,7 @@ export default function App() {
           </FloatingWindow>
         ) : null}
 
-        {isDm && selectedToken ? (
+        {isDm && selectedToken && tokenPanelOnClick ? (
           <FloatingCluster anchor="bottom-left">
             <TokenEditor
               token={selectedToken}

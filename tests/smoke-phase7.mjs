@@ -184,6 +184,32 @@ try {
   const moveErr = await player.next((m) => m.type === "ERROR" && /your own token/i.test(m.message));
   check("player cannot rotate a foreign token", !!moveErr);
 
+  // --- DM player-permission toggles: players-can-move / players-can-point -----
+  // Players can't flip these room switches themselves (map control is DM-only).
+  player.send({ type: "SET_PLAYERS_CAN_MOVE", enabled: false });
+  const moveToggleErr = await player.next((m) => m.type === "ERROR" && /only the dm/i.test(m.message));
+  check("player cannot toggle players-can-move", !!moveToggleErr);
+
+  // DM disables movement → the player's own MOVE_TOKEN is now rejected.
+  dm.send({ type: "SET_PLAYERS_CAN_MOVE", enabled: false });
+  await player.next((m) => m.type === "STATE" && m.state.playersCanMove === false);
+  player.send({ type: "MOVE_TOKEN", tokenId: "tok-vex", x: 4, y: 4, facing: 45 });
+  const moveDisabledErr = await player.next((m) => m.type === "ERROR" && /disabled moving/i.test(m.message));
+  check("player move rejected when movement disabled by DM", !!moveDisabledErr);
+  dm.send({ type: "SET_PLAYERS_CAN_MOVE", enabled: true }); // restore
+
+  // DM disables pointing → the player's shift-drag arrow annotation is rejected.
+  dm.send({ type: "SET_PLAYERS_CAN_POINT", enabled: false });
+  await player.next((m) => m.type === "STATE" && m.state.playersCanPoint === false);
+  player.send({
+    type: "ADD_ANNOTATION",
+    sceneId: activeSceneId,
+    annotation: { id: "arrow-vex", authorId: "vex", kind: "arrow", points: [0, 0, 100, 100], color: "#e9c176", width: 3, createdAt: Date.now(), ephemeral: true },
+  });
+  const pointDisabledErr = await player.next((m) => m.type === "ERROR" && /pointer arrows/i.test(m.message));
+  check("player arrow rejected when pointing disabled by DM", !!pointDisabledErr);
+  dm.send({ type: "SET_PLAYERS_CAN_POINT", enabled: true }); // restore
+
   // --- 7g: TEMPLATE transient relay (to OTHER clients; null clears) ---------
   const activeScene = moveErr ? activeSceneId : activeSceneId;
   dm.send({ type: "TEMPLATE", sceneId: activeScene, shape: { kind: "circle", points: [0, 0, 100, 0] } });
