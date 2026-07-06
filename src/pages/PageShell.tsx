@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { campaignKey } from "../lib/campaignStore";
 
-const WIDTH_KEY = "cm-page-roster-w";
+const LEGACY_WIDTH_KEY = "cm-page-roster-w";
+const widthKey = (roomId: string) => campaignKey(roomId, "roster-w");
 const MIN_W = 220;
 const MAX_W = 640;
 const DEFAULT_W = 340;
 
-function loadWidth(): number {
+function loadWidth(roomId: string): number {
   try {
-    const raw = localStorage.getItem(WIDTH_KEY);
+    const raw = localStorage.getItem(widthKey(roomId)) ?? localStorage.getItem(LEGACY_WIDTH_KEY);
     const n = raw ? Number(raw) : NaN;
     if (Number.isFinite(n)) {
       return Math.min(Math.max(n, MIN_W), MAX_W);
@@ -24,8 +26,16 @@ function loadWidth(): number {
 /// The roster width persists per-device; the main area is a CSS size container,
 /// so a full-size CharacterSheet inside goes multi-column like a wide window.
 /// </summary>
-export function PageShell({ roster, children }: { roster: ReactNode; children: ReactNode }) {
-  const [width, setWidth] = useState(loadWidth);
+export function PageShell({
+  roomId,
+  roster,
+  children,
+}: {
+  roomId: string;
+  roster: ReactNode;
+  children: ReactNode;
+}) {
+  const [width, setWidth] = useState(() => loadWidth(roomId));
   const draggingRef = useRef(false);
 
   const onHandleDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -50,13 +60,13 @@ export function PageShell({ roster, children }: { roster: ReactNode; children: R
     event.currentTarget.releasePointerCapture(event.pointerId);
     setWidth((current) => {
       try {
-        localStorage.setItem(WIDTH_KEY, String(Math.round(current)));
+        localStorage.setItem(widthKey(roomId), String(Math.round(current)));
       } catch {
         // width just won't persist
       }
       return current;
     });
-  }, []);
+  }, [roomId]);
 
   // Clamp down if the window shrinks below the saved roster width.
   useEffect(() => {

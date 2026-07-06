@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MapCanvas } from "../components/MapCanvas";
 import { SceneSettings } from "../components/SceneSettings";
 import { PageSwitcher, type PageId } from "./PageSwitcher";
-import { readLocalFlag, writeLocalFlag } from "../lib/localFlags";
+import { readCampaignFlag, writeCampaignFlag } from "../lib/campaignStore";
 import { applySceneMessage, sceneMessageSceneId } from "../lib/sceneMessages";
 import { createEmptyScene, fitViewportToScene } from "../lib/sceneUtils";
 import {
@@ -49,7 +49,9 @@ export function ScenesPage({
 }) {
   const { state, dm, room } = ctx;
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [liveUpdates, setLiveUpdatesState] = useState(() => readLocalFlag(LIVE_KEY, true));
+  const [liveUpdates, setLiveUpdatesState] = useState(() =>
+    readCampaignFlag(state.roomId, "scene-live", true, LIVE_KEY),
+  );
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [viewport, setViewport] = useState<Viewport>(DEFAULT_VIEWPORT);
   const canvasBoxRef = useRef<HTMLDivElement>(null);
@@ -165,7 +167,7 @@ export function ScenesPage({
       }
       setDrafts({});
     }
-    writeLocalFlag(LIVE_KEY, on);
+    writeCampaignFlag(state.roomId, "scene-live", on);
     setLiveUpdatesState(on);
   };
 

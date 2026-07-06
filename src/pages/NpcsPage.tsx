@@ -38,6 +38,7 @@ export function NpcsPage({
       </div>
       <div className="npcs-page-body">
         <PageShell
+          roomId={state.roomId}
           roster={
             <ActorsPanel
               state={state}

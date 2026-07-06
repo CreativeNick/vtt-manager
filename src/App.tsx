@@ -7,6 +7,7 @@ import { Dock, type DockAction } from "./components/Dock";
 import { DiceTray } from "./components/DiceTray";
 import { LogToasts } from "./components/LogToasts";
 import { TokenEditor } from "./components/TokenEditor";
+import { CroppableImage } from "./components/CroppableImage";
 import { dockPanelsForRole, PANELS, type PanelContext, type PanelId } from "./panels/registry";
 import { PlayersPage } from "./pages/PlayersPage";
 import { NpcsPage } from "./pages/NpcsPage";
@@ -17,14 +18,23 @@ import { PageSwitcher, type PageId } from "./pages/PageSwitcher";
 import { useDiceOverlay } from "./dice/useDiceOverlay";
 import { useDmActions, useGameRoom, type JoinParams } from "./hooks/useGameRoom";
 import { buildInverse, useHistory } from "./lib/history";
-import { readLocalFlag, writeLocalFlag } from "./lib/localFlags";
+import { readLocalFlag } from "./lib/localFlags";
+import {
+  clearCampaignLayout,
+  readCampaignFlag,
+  readCampaignJson,
+  writeCampaignFlag,
+  writeCampaignJson,
+} from "./lib/campaignStore";
 import { useSpaceClick } from "./lib/useSpaceClick";
 import { fitViewportToScene } from "./lib/sceneUtils";
 import {
+  DEFAULT_ICON_CROP,
   DEFAULT_VIEWPORT,
   TOKEN_ENEMY_COLOR,
   TOKEN_ITEM_COLOR,
   type GameState,
+  type IconCrop,
   type Viewport,
 } from "./lib/types";
 
@@ -35,6 +45,25 @@ const TOASTS_KEY = "cm-log-toasts";
 const SPACE_CLICK_KEY = "cm-space-click";
 const TOKEN_PANEL_KEY = "cm-token-panel-on-click";
 
+/** The per-campaign UI layout blob (localStorage `cm:{roomId}:layout`). Entity-bound windows
+ *  (open sheet/item) and transient state (selection, viewport) are deliberately excluded. */
+type StoredLayout = {
+  dockOpen: boolean;
+  dockTab: PanelId;
+  popped: PanelId[];
+  trayOpen: boolean;
+  page: PageId;
+  settingsOpen: boolean;
+};
+const DEFAULT_LAYOUT: StoredLayout = {
+  dockOpen: true,
+  dockTab: "log",
+  popped: [],
+  trayOpen: true,
+  page: "board",
+  settingsOpen: false,
+};
+
 /** True when a keyboard event targets an editable field (so shortcuts stand down). */
 function isTypingTarget(target: EventTarget | null): boolean {
   return (
@@ -42,6 +71,26 @@ function isTypingTarget(target: EventTarget | null): boolean {
     target instanceof HTMLTextAreaElement ||
     target instanceof HTMLSelectElement ||
     (target instanceof HTMLElement && target.isContentEditable)
+  );
+}
+
+/** A player/NPC chip avatar: the portrait — cropped to the same focal point/zoom the user set
+ *  on the sheet — falling back to the name's capitalized initial when it's missing or fails to
+ *  load (e.g. the image was deleted). */
+function ChipAvatar({
+  src,
+  crop,
+  name,
+}: {
+  src: string | null | undefined;
+  crop?: IconCrop;
+  name: string;
+}) {
+  const initial = <span className="player-initial">{name.slice(0, 1).toUpperCase() || "?"}</span>;
+  return src ? (
+    <CroppableImage className="chip-avatar" src={src} crop={crop ?? DEFAULT_ICON_CROP} alt={name} fallback={initial} />
+  ) : (
+    initial
   );
 }
 
@@ -73,9 +122,12 @@ export default function App() {
   /** Bumped by "Reset UI layout" — remounts windows / repositions the tray. */
   const [layoutEpoch, setLayoutEpoch] = useState(0);
   const lastSceneRef = useRef<string | null>(null);
+  /** roomId whose saved layout has been restored (once per join) — nulled on leave. */
+  const restoredRoomRef = useRef<string | null>(null);
 
-  const room = useGameRoom(session?.roomId ?? null);
-  const dice = useDiceOverlay(room);
+  const roomId = session?.roomId ?? null;
+  const room = useGameRoom(roomId);
+  const dice = useDiceOverlay(room, roomId);
   const { state, yourRole, status, error } = room;
   const isDm = yourRole === "dm";
 
@@ -245,52 +297,89 @@ export default function App() {
     setPage("board");
     history.reset();
     lastSceneRef.current = null;
+    // Re-arm restore so re-joining any campaign reloads its saved layout.
+    restoredRoomRef.current = null;
   };
 
   const toggleSnap = useCallback(() => {
     setSnap((current) => {
-      writeLocalFlag(SNAP_KEY, !current);
+      if (roomId) writeCampaignFlag(roomId, "snap", !current);
       return !current;
     });
-  }, []);
+  }, [roomId]);
 
-  const setToastsEnabled = useCallback((on: boolean) => {
-    writeLocalFlag(TOASTS_KEY, on);
-    setToastsEnabledState(on);
-  }, []);
+  const setToastsEnabled = useCallback(
+    (on: boolean) => {
+      if (roomId) writeCampaignFlag(roomId, "toasts", on);
+      setToastsEnabledState(on);
+    },
+    [roomId],
+  );
 
-  const setSpaceClick = useCallback((on: boolean) => {
-    writeLocalFlag(SPACE_CLICK_KEY, on);
-    setSpaceClickState(on);
-  }, []);
+  const setSpaceClick = useCallback(
+    (on: boolean) => {
+      if (roomId) writeCampaignFlag(roomId, "space-click", on);
+      setSpaceClickState(on);
+    },
+    [roomId],
+  );
 
-  const setTokenPanelOnClick = useCallback((on: boolean) => {
-    writeLocalFlag(TOKEN_PANEL_KEY, on);
-    setTokenPanelOnClickState(on);
-  }, []);
+  const setTokenPanelOnClick = useCallback(
+    (on: boolean) => {
+      if (roomId) writeCampaignFlag(roomId, "token-panel", on);
+      setTokenPanelOnClickState(on);
+    },
+    [roomId],
+  );
   // Holding SpaceBar acts as the left mouse button when this device opts in.
   useSpaceClick(spaceClick);
 
-  /// <summary>Clears every saved floating-UI position/size and re-lays-out live elements.</summary>
+  /// <summary>Resets this campaign's UI layout: returns popped panels to the dock, clears saved
+  /// window/tray positions, and re-centers the tray. Device toggles are left intact.</summary>
   const resetUiLayout = useCallback(() => {
-    try {
-      const doomed: string[] = [];
-      for (let i = 0; i < localStorage.length; i += 1) {
-        const key = localStorage.key(i);
-        if (key && (key.startsWith("cm-window-pos:") || key === "cm-dice-tray-pos")) {
-          doomed.push(key);
-        }
-      }
-      for (const key of doomed) {
-        localStorage.removeItem(key);
-      }
-    } catch {
-      // storage unavailable — live elements still reset below
-    }
+    if (roomId) clearCampaignLayout(roomId);
+    setPopped([]);
     // Open windows remount (key includes the epoch) → default geometry; the
     // tray watches the same signal and re-centers without remounting.
     setLayoutEpoch((current) => current + 1);
-  }, []);
+  }, [roomId]);
+
+  // Restore this campaign's saved layout + device toggles once, when it's joined. Runs before
+  // the combat effect (which keys on status === "joined"), so an active encounter still forces
+  // the Board/Initiative view over a restored page/tab.
+  useEffect(() => {
+    if (!roomId || restoredRoomRef.current === roomId) {
+      return;
+    }
+    restoredRoomRef.current = roomId;
+    const layout = readCampaignJson<StoredLayout>(roomId, "layout", DEFAULT_LAYOUT);
+    setDockOpen(layout.dockOpen);
+    setDockTab(layout.dockTab);
+    setPopped(Array.isArray(layout.popped) ? layout.popped : []);
+    setTrayOpen(layout.trayOpen);
+    setPage(layout.page);
+    setSettingsOpen(layout.settingsOpen);
+    setSnap(readCampaignFlag(roomId, "snap", false, SNAP_KEY));
+    setToastsEnabledState(readCampaignFlag(roomId, "toasts", true, TOASTS_KEY));
+    setSpaceClickState(readCampaignFlag(roomId, "space-click", false, SPACE_CLICK_KEY));
+    setTokenPanelOnClickState(readCampaignFlag(roomId, "token-panel", true, TOKEN_PANEL_KEY));
+  }, [roomId]);
+
+  // Persist the layout blob whenever it changes (only after this campaign has been restored, so
+  // the initial defaults never clobber saved values before the restore effect runs).
+  useEffect(() => {
+    if (!roomId || restoredRoomRef.current !== roomId) {
+      return;
+    }
+    writeCampaignJson<StoredLayout>(roomId, "layout", {
+      dockOpen,
+      dockTab,
+      popped,
+      trayOpen,
+      page,
+      settingsOpen,
+    });
+  }, [roomId, dockOpen, dockTab, popped, trayOpen, page, settingsOpen]);
 
   if (!session) {
     return <JoinScreen onJoin={setSession} />;
@@ -523,7 +612,7 @@ export default function App() {
           className={`avatar-strip${dockOpen ? " avatar-strip--dock-open" : ""}`}
         >
           {state.connectedPlayers.map((player) => {
-            const icon = state.sheets[player.playerId]?.data.iconUrl;
+            const sheetData = state.sheets[player.playerId]?.data;
             return (
               <div
                 key={player.playerId}
@@ -531,13 +620,8 @@ export default function App() {
                 title={`${player.displayName} — double-click for sheet`}
                 onDoubleClick={() => openSheet(player.playerId)}
               >
-                {icon ? (
-                  <img src={icon} alt={player.displayName} />
-                ) : (
-                  <span className="player-initial">
-                    {player.displayName.slice(0, 1).toUpperCase()}
-                  </span>
-                )}
+                <ChipAvatar src={sheetData?.iconUrl} crop={sheetData?.iconCrop} name={player.displayName} />
+
                 {isDm ? (
                   <button
                     className="kick"
@@ -560,11 +644,8 @@ export default function App() {
                 title={`${name} — double-click for sheet`}
                 onDoubleClick={() => openSheet(sheetId)}
               >
-                {record.data.iconUrl ? (
-                  <img src={record.data.iconUrl} alt={name} />
-                ) : (
-                  <span className="player-initial">{name.slice(0, 1).toUpperCase()}</span>
-                )}
+                <ChipAvatar src={record.data.iconUrl} crop={record.data.iconCrop} name={name} />
+
               </div>
             );
           })}
@@ -639,6 +720,7 @@ export default function App() {
                 <FloatingWindow
                   key={`${panel.id}:${layoutEpoch}`}
                   id={panel.id}
+                  roomId={session.roomId}
                   title={panel.title(panelContext)}
                   width={panel.width}
                   minWidth={panel.minWidth}
@@ -657,6 +739,7 @@ export default function App() {
           <FloatingWindow
             key={`sheet:${layoutEpoch}`}
             id="sheet"
+            roomId={session.roomId}
             title={sheetPanel.title(panelContext)}
             width={sheetPanel.width}
             height={sheetPanel.height}
@@ -673,6 +756,7 @@ export default function App() {
           <FloatingWindow
             key={`settings:${layoutEpoch}`}
             id="settings"
+            roomId={session.roomId}
             title={settingsPanel.title(panelContext)}
             width={settingsPanel.width}
             minWidth={settingsPanel.minWidth}
@@ -688,6 +772,7 @@ export default function App() {
           <FloatingWindow
             key={`itemSheet:${layoutEpoch}`}
             id="itemSheet"
+            roomId={session.roomId}
             title={itemSheetPanel.title(panelContext)}
             width={itemSheetPanel.width}
             minWidth={itemSheetPanel.minWidth}
@@ -715,6 +800,7 @@ export default function App() {
         {/* Always mounted so the drawer can slide out (and the tray scene persists). */}
         <DiceTray
           open={trayOpen}
+          roomId={session.roomId}
           isDm={isDm}
           secret={secretRolls}
           onToggleSecret={setSecretRolls}

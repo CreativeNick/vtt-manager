@@ -395,6 +395,12 @@ label {
   border-radius: 50%;
   object-fit: cover;
 }
+/* The cropped-portrait frame fills the circular chip; CroppableImage pans/zooms inside it. */
+.player-chip .chip-avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
 .player-initial {
   font-family: var(--font-display);
   color: var(--text);
@@ -557,6 +563,98 @@ label {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
   padding: 0.9rem;
+}
+
+/* --- Image crop modal ----------------------------------------------------- */
+.image-crop-modal {
+  width: min(680px, 96vw);
+}
+.crop-stage {
+  position: relative;
+  margin: 0 auto;
+  overflow: hidden;
+  background: #000;
+  border-radius: var(--radius);
+  touch-action: none;
+  user-select: none;
+  display: grid;
+  place-items: center;
+}
+.crop-stage img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: fill;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+.crop-loading {
+  position: absolute;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.crop-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid var(--accent-bright);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  cursor: move;
+  touch-action: none;
+}
+.crop-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: var(--accent-bright);
+  border: 1px solid var(--on-accent);
+  border-radius: 2px;
+  box-sizing: border-box;
+}
+.crop-handle--nw {
+  left: -6px;
+  top: -6px;
+  cursor: nwse-resize;
+}
+.crop-handle--ne {
+  right: -6px;
+  top: -6px;
+  cursor: nesw-resize;
+}
+.crop-handle--sw {
+  left: -6px;
+  bottom: -6px;
+  cursor: nesw-resize;
+}
+.crop-handle--se {
+  right: -6px;
+  bottom: -6px;
+  cursor: nwse-resize;
+}
+.crop-hint {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+.crop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.sheet-portrait-crop {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px 8px;
+  font-size: 0.62rem;
+  border-radius: 6px;
+  color: var(--text);
+  background: rgba(10, 12, 16, 0.72);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.sheet-portrait-crop:hover {
+  background: rgba(10, 12, 16, 0.92);
 }
 
 /* --- Character sheet ------------------------------------------------------ */

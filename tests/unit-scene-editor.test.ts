@@ -90,12 +90,13 @@ function check(name: string, ok: boolean, detail = "") {
     sceneMessageSceneId({ type: "UPDATE_SCENE", scene }) === "sc",
   );
 
-  // Walls: set, cap, toggle door (door-only).
+  // Walls: set, cap, toggle door (door-only). Legacy {kind} payloads exercise migration.
   const manyWalls = Array.from({ length: MAX_WALLS + 5 }, (_, i) => ({
     id: `w${i}`, x1: i, y1: 0, x2: i, y2: 10, kind: "wall" as const,
   }));
   const walled = applySceneMessage(scene, { type: "SET_WALLS", sceneId: "sc", walls: manyWalls });
   check(`SET_WALLS caps at ${MAX_WALLS}`, walled.walls.length === MAX_WALLS);
+  check("legacy wall migrates to normal sight channel", walled.walls[0]?.sight === "normal");
   const withDoor = applySceneMessage(scene, {
     type: "SET_WALLS",
     sceneId: "sc",
@@ -104,10 +105,31 @@ function check(name: string, ok: boolean, detail = "") {
       { id: "d1", x1: 10, y1: 0, x2: 10, y2: 10, kind: "door" },
     ],
   });
+  check("legacy door migrates to door:'door'", withDoor.walls.find((w) => w.id === "d1")?.door === "door");
   const doorToggled = applySceneMessage(withDoor, { type: "TOGGLE_DOOR", sceneId: "sc", wallId: "d1" });
-  check("TOGGLE_DOOR opens the door", doorToggled.walls.find((w) => w.id === "d1")?.open === true);
+  check("TOGGLE_DOOR opens the door", doorToggled.walls.find((w) => w.id === "d1")?.state === "open");
   const wallToggled = applySceneMessage(withDoor, { type: "TOGGLE_DOOR", sceneId: "sc", wallId: "w1" });
   check("TOGGLE_DOOR ignores plain walls", wallToggled === withDoor);
+  // SET_DOOR_STATE (DM) can lock a door; a locked door won't toggle.
+  const locked = applySceneMessage(withDoor, { type: "SET_DOOR_STATE", sceneId: "sc", wallId: "d1", state: "locked" });
+  check("SET_DOOR_STATE locks the door", locked.walls.find((w) => w.id === "d1")?.state === "locked");
+  const lockedToggle = applySceneMessage(locked, { type: "TOGGLE_DOOR", sceneId: "sc", wallId: "d1" });
+  check("TOGGLE_DOOR ignores a locked door", lockedToggle === locked);
+  // Granular ADD/UPDATE/REMOVE_WALL round-trip.
+  const addedWall = applySceneMessage(scene, {
+    type: "ADD_WALL",
+    sceneId: "sc",
+    wall: { id: "gw", x1: 0, y1: 0, x2: 20, y2: 0, sight: "limited", light: "normal", move: "none" },
+  });
+  check("ADD_WALL appends a wall", addedWall.walls.some((w) => w.id === "gw" && w.sight === "limited"));
+  const updatedWall = applySceneMessage(addedWall, {
+    type: "UPDATE_WALL",
+    sceneId: "sc",
+    wall: { id: "gw", x1: 0, y1: 0, x2: 20, y2: 0, sight: "normal", light: "normal", move: "normal" },
+  });
+  check("UPDATE_WALL replaces by id", updatedWall.walls.find((w) => w.id === "gw")?.sight === "normal");
+  const removedWall = applySceneMessage(updatedWall, { type: "REMOVE_WALL", sceneId: "sc", wallId: "gw" });
+  check("REMOVE_WALL drops the wall", !removedWall.walls.some((w) => w.id === "gw"));
 
   // Lights: add, cap, update, remove.
   let lit = scene;

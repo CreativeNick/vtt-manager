@@ -1,5 +1,5 @@
 import type { Plugin, ViteDevServer } from "vite";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CampaignManifest } from "./src/lib/campaignManifest";
 import {
@@ -95,6 +95,45 @@ function dataUrlToFile(dataUrl: string): { buffer: Buffer; ext: string } {
 /// </summary>
 function roomFilePrefix(roomId: string | undefined): string {
   return roomId ? `${roomId}--` : "";
+}
+
+/// <summary>
+/// Dev equivalent of the R2 list-assets endpoint: enumerates the on-disk public/{kind}
+/// folders for this room's `{roomId}--` files so the Assets page works on localhost.
+/// </summary>
+async function listDiskAssets(rootDir: string, roomId: string) {
+  const kinds = ["tokens", "portraits", "maps"] as const;
+  const prefix = `${roomId}--`;
+  const assets: Array<{ key: string; url: string; kind: string; size: number; uploaded: string }> = [];
+  for (const kind of kinds) {
+    let names: string[];
+    try {
+      names = await readdir(join(rootDir, "public", kind));
+    } catch {
+      continue; // folder doesn't exist yet (nothing uploaded of this kind)
+    }
+    for (const name of names) {
+      if (!name.startsWith(prefix)) {
+        continue;
+      }
+      try {
+        const info = await stat(join(rootDir, "public", kind, name));
+        if (!info.isFile()) {
+          continue;
+        }
+        assets.push({
+          key: `${kind}/${name}`,
+          url: `/${kind}/${name}`,
+          kind,
+          size: info.size,
+          uploaded: info.mtime.toISOString(),
+        });
+      } catch {
+        // skip unreadable entries
+      }
+    }
+  }
+  return assets;
 }
 
 /// <summary>
@@ -359,6 +398,61 @@ export function devCampaignSavePlugin(): Plugin {
                 error: error instanceof Error ? error.message : "Upload failed.",
               }),
             );
+          }
+        })();
+      });
+
+      server.middlewares.use("/__dev/list-assets", (req, res, next) => {
+        if (req.method !== "POST") {
+          next();
+          return;
+        }
+
+        void (async () => {
+          try {
+            const raw = await readRequestBody(req);
+            const body = JSON.parse(raw) as { roomId?: string };
+            if (!body?.roomId) {
+              res.statusCode = 400;
+              res.end(JSON.stringify({ error: "Missing room id." }));
+              return;
+            }
+            const assets = await listDiskAssets(server.config.root, body.roomId);
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ assets }));
+          } catch (error) {
+            res.statusCode = 500;
+            res.end(JSON.stringify({ error: error instanceof Error ? error.message : "List failed." }));
+          }
+        })();
+      });
+
+      server.middlewares.use("/__dev/delete-asset", (req, res, next) => {
+        if (req.method !== "POST") {
+          next();
+          return;
+        }
+
+        void (async () => {
+          try {
+            const raw = await readRequestBody(req);
+            const body = JSON.parse(raw) as { roomId?: string; key?: string };
+            const key = typeof body?.key === "string" ? body.key : "";
+            // Guard: a room may only delete its own `{kind}/{roomId}--…` files.
+            const validKey =
+              /^(tokens|portraits|maps)\//.test(key) &&
+              (key.split("/")[1] ?? "").startsWith(`${body?.roomId}--`);
+            if (!body?.roomId || !validKey) {
+              res.statusCode = 400;
+              res.end(JSON.stringify({ error: "Invalid or forbidden key." }));
+              return;
+            }
+            await unlink(join(server.config.root, "public", key)).catch(() => {});
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: true }));
+          } catch (error) {
+            res.statusCode = 500;
+            res.end(JSON.stringify({ error: error instanceof Error ? error.message : "Delete failed." }));
           }
         })();
       });

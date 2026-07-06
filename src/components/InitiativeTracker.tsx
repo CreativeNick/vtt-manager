@@ -1,5 +1,6 @@
 import type { GameRoom, useDmActions } from "../hooks/useGameRoom";
-import type { GameState } from "../lib/types";
+import { DEFAULT_ICON_CROP, type GameState } from "../lib/types";
+import { CroppableImage } from "./CroppableImage";
 import { NumberInput } from "./NumberInput";
 import { HpStepper } from "./HpStepper";
 
@@ -91,17 +92,24 @@ export function InitiativeTracker({ state, isDm, room, dm, openSheet }: Initiati
           const token = state.tokens.find((item) => item.id === entry.tokenId);
           const sheet = entry.sheetId ? state.sheets[entry.sheetId] : undefined;
           const portrait = sheet?.data.iconUrl ?? token?.imageUrl ?? null;
+          const portraitCrop = sheet?.data.iconUrl ? sheet.data.iconCrop : DEFAULT_ICON_CROP;
           const current = index === combat.turnIndex;
+          // No portrait (or a broken/deleted one) → the name's initial, not a broken-image icon.
+          const initDot = (
+            <span
+              className="init-portrait init-dot"
+              style={{ background: token?.color ?? "var(--surface-2)", display: "grid", placeItems: "center" }}
+            >
+              {entry.name.trim().charAt(0).toUpperCase() || "?"}
+            </span>
+          );
           return (
             <div className={`init-row${current ? " init-row--current" : ""}`} key={entry.id}>
               <span className="init-marker">{current ? "▶" : ""}</span>
               {portrait ? (
-                <img className="init-portrait" src={portrait} alt="" />
+                <CroppableImage className="init-portrait" src={portrait} crop={portraitCrop} alt="" fallback={initDot} />
               ) : (
-                <span
-                  className="init-portrait init-dot"
-                  style={{ background: token?.color ?? "var(--surface-2)" }}
-                />
+                initDot
               )}
               {entry.sheetId ? (
                 <button

@@ -96,8 +96,9 @@ export type AssetInfo = { key: string; url: string; kind: string; size: number; 
 /// Pages function + R2 aren't served — returns an empty, unconfigured list instead of throwing.
 /// </summary>
 export async function listAssets(roomId: string): Promise<{ assets: AssetInfo[]; unconfigured: boolean }> {
+  const path = import.meta.env.DEV ? "/__dev/list-assets" : "/api/list-assets";
   try {
-    const response = await fetch("/api/list-assets", {
+    const response = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ roomId }),
@@ -114,7 +115,8 @@ export async function listAssets(roomId: string): Promise<{ assets: AssetInfo[];
 
 /// <summary>Deletes one uploaded asset by key (server validates the room prefix).</summary>
 export async function deleteAsset(roomId: string, key: string): Promise<void> {
-  const response = await fetch("/api/delete-asset", {
+  const path = import.meta.env.DEV ? "/__dev/delete-asset" : "/api/delete-asset";
+  const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ roomId, key }),

@@ -1,11 +1,14 @@
 import { useRef, useState, type ReactNode } from "react";
 import { startPointerDrag, wasRecentDrag, type PointerDrop } from "../lib/pointerDrag";
-import type { Folder } from "../lib/types";
+import { DEFAULT_ICON_CROP, type Folder, type IconCrop } from "../lib/types";
+import { CroppableImage } from "./CroppableImage";
 
 export type DirectoryRowData = {
   id: string;
   name: string;
   iconUrl?: string | null;
+  /** Crop (focal point + zoom) applied to the icon; defaults to centered. */
+  iconCrop?: IconCrop;
   /** Fallback avatar color when there is no icon. */
   color?: string;
   /** Small tag rendered after the name (e.g. "PC"). */
@@ -294,6 +297,13 @@ export function Directory({
 
   const renderRow = (row: DirectoryRowData) => {
     const isSelected = selected.has(row.id);
+    // No icon (or a broken/deleted one) → the name's capitalized initial in the row's colour,
+    // rather than a generic glyph or the browser's broken-image icon.
+    const letterDot = (
+      <span className="dir-icon dir-dot" style={{ background: row.color ?? "var(--surface-2)" }}>
+        {row.name.trim().charAt(0).toUpperCase() || glyph}
+      </span>
+    );
     return (
     <div key={row.id}>
       <div
@@ -332,11 +342,15 @@ export function Directory({
         }}
       >
         {row.iconUrl ? (
-          <img className="dir-icon" src={row.iconUrl} alt="" draggable={false} />
+          <CroppableImage
+            className="dir-icon"
+            src={row.iconUrl}
+            crop={row.iconCrop ?? DEFAULT_ICON_CROP}
+            alt=""
+            fallback={letterDot}
+          />
         ) : (
-          <span className="dir-icon dir-dot" style={{ background: row.color ?? "var(--surface-2)" }}>
-            {glyph}
-          </span>
+          letterDot
         )}
         <span className="dir-name">{row.name}</span>
         {row.badge ? <span className="dir-badge">{row.badge}</span> : null}

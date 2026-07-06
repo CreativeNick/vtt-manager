@@ -1,7 +1,9 @@
 import { useRef, useState } from "react";
 import {
   CONDITIONS,
+  DEFAULT_ICON_CROP,
   DEFAULT_TOKEN_SIZE,
+  TOKEN_ENEMY_COLOR,
   TOKEN_SHAPES,
   tokenSizeLabel,
   type GameState,
@@ -36,8 +38,15 @@ const SHAPE_LABEL: Record<TokenShape, string> = {
 /// character tokens) owner, linked sheet, HP display, vision, and conditions.
 /// </summary>
 export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClose }: TokenEditorProps) {
-  const isOwned = Boolean(token.ownerPlayerId);
+  // A "player character" token derives its whole identity (name/colour/portrait) from its
+  // player. A token a player merely *controls* (an NPC handed to them — "mind control") stays
+  // kind "enemy" and keeps its own identity; only its movement follows the player.
+  const isPlayerChar = token.kind === "player";
   const isItem = token.kind === "item";
+  const controllerSlot = token.ownerPlayerId
+    ? state.playerSlots.find((slot) => slot.id === token.ownerPlayerId)
+    : undefined;
+  const controlledNpc = !isPlayerChar && Boolean(controllerSlot);
   const npcSheets = Object.values(state.sheets).filter((record) => record.kind === "npc");
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -47,12 +56,37 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
   // sheet's `iconUrl` so the Token panel and the character sheet stay in sync.
   const linkedSheetId = token.sheetId ?? token.ownerPlayerId;
   const linkedSheet = linkedSheetId ? state.sheets[linkedSheetId] : undefined;
-  const effectiveImage = linkedSheet?.data.iconUrl ?? token.imageUrl;
+  // Item tokens share their catalog item's icon, the same way sheet tokens share the portrait.
+  const linkedItem = token.itemId ? state.items[token.itemId] : undefined;
+  const effectiveImage = linkedSheet?.data.iconUrl ?? linkedItem?.iconUrl ?? token.imageUrl;
 
-  const setOwner = (slotId: string) => {
+  const setControllingPlayer = (slotId: string) => {
+    // A token already linked to an NPC sheet keeps that identity — assigning a player just hands
+    // over control ("mind control"). A token without an NPC sheet becomes that player's PC.
+    const linksNpcSheet = Boolean(token.sheetId && state.sheets[token.sheetId]?.kind === "npc");
     if (slotId === "") {
-      dm.updateToken({ ...token, kind: "enemy", ownerPlayerId: null });
+      if (linksNpcSheet) {
+        // Mind-controlled NPC → control returns to the DM; its sheet/identity stay intact.
+        dm.updateToken({ ...token, kind: "enemy", ownerPlayerId: null });
+      } else {
+        // A player character's identity all comes from its player (written in by
+        // syncTokenFromState), so removing the player resets it to a blank DM enemy token.
+        dm.updateToken({
+          ...token,
+          kind: "enemy",
+          ownerPlayerId: null,
+          sheetId: null,
+          label: "",
+          color: TOKEN_ENEMY_COLOR,
+          imageUrl: null,
+        });
+      }
+    } else if (linksNpcSheet) {
+      // Keep it an NPC (kind "enemy" ⇒ the player sync won't overwrite its identity); just grant
+      // the player control. The board shows a ring in their colour.
+      dm.updateToken({ ...token, kind: "enemy", ownerPlayerId: slotId });
     } else {
+      // A plain token assigned to a player becomes that player's character.
       dm.updateToken({ ...token, kind: "player", ownerPlayerId: slotId });
     }
   };
@@ -76,8 +110,13 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
     try {
       if (linkedSheetId && linkedSheet) {
         // Linked to a sheet → write the shared portrait, exactly like the sheet does.
+        // A new picture resets the crop so the old focal point/zoom doesn't carry over.
         const { url } = await uploadPortrait(state.roomId, linkedSheetId, file);
-        dm.updateSheet(linkedSheetId, { ...linkedSheet.data, iconUrl: url });
+        dm.updateSheet(linkedSheetId, { ...linkedSheet.data, iconUrl: url, iconCrop: { ...DEFAULT_ICON_CROP } });
+      } else if (linkedItem) {
+        // Item token → write the shared catalog item icon; the token mirrors it.
+        const { url } = await uploadTokenImage(state.roomId, linkedItem.id, file);
+        dm.updateItem({ ...linkedItem, iconUrl: url, iconCrop: { ...DEFAULT_ICON_CROP } });
       } else {
         const { url } = await uploadTokenImage(state.roomId, token.id, file);
         dm.updateToken({ ...token, imageUrl: url });
@@ -93,6 +132,9 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
     if (linkedSheetId && linkedSheet) {
       // Clear the shared portrait; also drop any legacy token image so it can't reappear.
       dm.updateSheet(linkedSheetId, { ...linkedSheet.data, iconUrl: null });
+      if (token.imageUrl) dm.updateToken({ ...token, imageUrl: null });
+    } else if (linkedItem) {
+      dm.updateItem({ ...linkedItem, iconUrl: null });
       if (token.imageUrl) dm.updateToken({ ...token, imageUrl: null });
     } else {
       dm.updateToken({ ...token, imageUrl: null });
@@ -116,7 +158,7 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
           <input
             defaultValue={token.label}
             key={token.id + token.label}
-            disabled={isOwned}
+            disabled={isPlayerChar}
             onBlur={(e) => dm.updateToken({ ...token, label: e.target.value })}
           />
         </div>
@@ -126,7 +168,7 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
             <input
               type="color"
               value={token.color}
-              disabled={isOwned}
+              disabled={isPlayerChar}
               onChange={(e) => dm.updateToken({ ...token, color: e.target.value })}
             />
           </div>
@@ -253,9 +295,11 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
         ) : (
           <>
             <div className="field">
-              <label>Owner</label>
-              <select value={token.ownerPlayerId ?? ""} onChange={(e) => setOwner(e.target.value)}>
-                <option value="">None (enemy/NPC)</option>
+              <label title="Which player controls this token. 'None' = DM-controlled. Assigning a player to a token that has an NPC sheet lets them move it while it keeps its own identity (mind control); a plain token becomes that player's character.">
+                Controlled by
+              </label>
+              <select value={token.ownerPlayerId ?? ""} onChange={(e) => setControllingPlayer(e.target.value)}>
+                <option value="">None — DM</option>
                 {state.playerSlots.map((slot) => (
                   <option key={slot.id} value={slot.id}>
                     {slot.name}
@@ -263,11 +307,19 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
                 ))}
               </select>
             </div>
-            {isOwned && token.ownerPlayerId ? (
+            {controlledNpc ? (
+              <div className="muted" style={{ fontSize: "0.78rem", marginTop: "-0.2rem" }}>
+                🖐 {controllerSlot?.name} can move this NPC — it keeps its own name, colour, and
+                portrait (shown ringed in their colour on the map).
+              </div>
+            ) : null}
+            {isPlayerChar && token.ownerPlayerId ? (
               <button onClick={() => openSheet(token.ownerPlayerId!)}>Open sheet</button>
             ) : (
               <div className="field">
-                <label>Sheet</label>
+                <label title="Link an NPC stat block (HP, rolls, portrait) to this token. 'New' creates one; 'None' leaves it a plain token.">
+                  Sheet
+                </label>
                 <div className="row">
                   <select
                     value={token.sheetId ?? ""}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MAX_ICON_ZOOM, type IconCrop } from "../lib/types";
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -17,6 +17,7 @@ export function CroppableImage({
   onChange,
   className,
   alt = "",
+  fallback,
 }: {
   src: string;
   crop: IconCrop;
@@ -24,10 +25,13 @@ export function CroppableImage({
   onChange?: (crop: IconCrop) => void;
   className?: string;
   alt?: string;
+  /** Shown when the image fails to load (e.g. a deleted file) instead of a broken-image icon. */
+  fallback?: ReactNode;
 }) {
   const frameRef = useRef<HTMLDivElement>(null);
   const [frame, setFrame] = useState({ w: 0, h: 0 });
   const [natural, setNatural] = useState({ w: 0, h: 0 });
+  const [errored, setErrored] = useState(false);
   const [dragging, setDragging] = useState(false);
   const dragRef = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
 
@@ -42,8 +46,11 @@ export function CroppableImage({
     return () => ro.disconnect();
   }, []);
 
-  // Reset natural size when the source changes so the new image re-measures on load.
-  useEffect(() => setNatural({ w: 0, h: 0 }), [src]);
+  // Reset natural size + error state when the source changes so the new image re-measures.
+  useEffect(() => {
+    setNatural({ w: 0, h: 0 });
+    setErrored(false);
+  }, [src]);
 
   const ready = natural.w > 0 && natural.h > 0 && frame.w > 0 && frame.h > 0;
   // Cover the frame at zoom 1, then apply zoom; the image box keeps its natural aspect so
@@ -79,6 +86,16 @@ export function CroppableImage({
     frameRef.current?.releasePointerCapture?.(e.pointerId);
   };
 
+  // A missing/deleted image shows the caller's fallback (e.g. a name-initial dot) rather than
+  // the browser's broken-image glyph; with no fallback, an empty frame keeps the layout.
+  if (errored) {
+    return fallback !== undefined ? (
+      <>{fallback}</>
+    ) : (
+      <div className={`croppable ${className ?? ""}`} style={{ position: "relative", overflow: "hidden" }} />
+    );
+  }
+
   return (
     <div
       ref={frameRef}
@@ -93,6 +110,7 @@ export function CroppableImage({
         src={src}
         alt={alt}
         draggable={false}
+        onError={() => setErrored(true)}
         onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
         style={{
           position: "absolute",

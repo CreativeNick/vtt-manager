@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { DICE_QUICK_SIDES } from "../lib/dice";
 import { playRollSound } from "../lib/rollSound";
 import { clampToViewport } from "../lib/clampToViewport";
+import { campaignKey } from "../lib/campaignStore";
 import type { DiceOverlayController } from "../dice/useDiceOverlay";
 
 type DiceTrayProps = {
   /** Slides/fades into view when true, out when false (stays mounted). */
   open: boolean;
+  /** Campaign id — the tray position is remembered per campaign. */
+  roomId: string;
   isDm: boolean;
   secret: boolean;
   onToggleSecret: (on: boolean) => void;
@@ -21,7 +24,10 @@ type DiceTrayProps = {
 type TrayPos = { x: number; y: number };
 type TraySize = { w: number; h: number };
 
-const POS_KEY = "cm-dice-tray-pos";
+// Position is namespaced per campaign (`cm:{roomId}:tray`); falls back to the pre-namespacing
+// global key for a one-time migration.
+const posKey = (roomId: string) => campaignKey(roomId, "tray");
+const LEGACY_POS_KEY = "cm-dice-tray-pos";
 const MARGIN = 8;
 const DRAG_THRESHOLD = 5;
 // Estimates used before the tray is measured (keeps the initial clamp sane).
@@ -39,17 +45,17 @@ function defaultPos(size: TraySize = EST_SIZE): TrayPos {
   };
 }
 
-function savePos(pos: TrayPos) {
+function savePos(roomId: string, pos: TrayPos) {
   try {
-    localStorage.setItem(POS_KEY, JSON.stringify(pos));
+    localStorage.setItem(posKey(roomId), JSON.stringify(pos));
   } catch {
     // position just won't persist
   }
 }
 
-function loadPos(): TrayPos {
+function loadPos(roomId: string): TrayPos {
   try {
-    const raw = localStorage.getItem(POS_KEY);
+    const raw = localStorage.getItem(posKey(roomId)) ?? localStorage.getItem(LEGACY_POS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as TrayPos;
       if (typeof parsed?.x === "number" && typeof parsed?.y === "number") {
@@ -73,6 +79,7 @@ function loadPos(): TrayPos {
 /// </summary>
 export function DiceTray({
   open,
+  roomId,
   isDm,
   secret,
   onToggleSecret,
@@ -82,7 +89,7 @@ export function DiceTray({
   resetSignal,
 }: DiceTrayProps) {
   const [expression, setExpression] = useState("1d20");
-  const [pos, setPos] = useState<TrayPos>(loadPos);
+  const [pos, setPos] = useState<TrayPos>(() => loadPos(roomId));
   const trayRef = useRef<HTMLDivElement>(null);
   const suppressClickRef = useRef(false);
   const lastResetRef = useRef(resetSignal);
@@ -173,7 +180,7 @@ export function DiceTray({
         suppressClickRef.current = true;
         setTimeout(() => (suppressClickRef.current = false), 60);
         setPos((current) => {
-          savePos(current);
+          savePos(roomId, current);
           return current;
         });
       }
@@ -189,7 +196,7 @@ export function DiceTray({
     }
     const next = clampPos(defaultPos(measure()), measure());
     setPos(next);
-    savePos(next);
+    savePos(roomId, next);
   };
 
   return (

@@ -15,16 +15,21 @@ import type Konva from "konva";
 import {
   ANNOTATION_FADE_MS,
   CONDITIONS,
+  DEFAULT_ICON_CROP,
   DEFAULT_TOKEN_SHAPES,
+  playerTokenColorForSlot,
   type Annotation,
   type ClientMessage,
   type GameState,
   type HitPoints,
+  type IconCrop,
   type Light,
   type TemplateKind,
   type TemplateShape,
   type TokenShape,
   type Viewport,
+  type Wall,
+  type WallBrush,
 } from "../lib/types";
 import {
   clampViewportScale,
@@ -35,6 +40,7 @@ import {
 } from "../lib/sceneUtils";
 import type { MeasureEvent, TemplateEvent } from "../hooks/useGameRoom";
 import type { History } from "../lib/history";
+import { clampMove, movementSegments } from "../lib/visibility";
 import { toolsForRole } from "../map/tools/registry";
 import { selectTool } from "../map/tools/select";
 import { LIGHT_PRESETS, type LightPreset } from "../map/tools/lights";
@@ -43,9 +49,10 @@ import { TemplateShapeView } from "../map/tools/template";
 import type { ToolPointerEvent, ToolRuntime } from "../map/tools/types";
 import { MapToolbar } from "./MapToolbar";
 import { FogLayer } from "./MapFog";
-import { DmLightingOverlay, LightTintLayer, VisionMaskLayer, WallsLightsEditor } from "./MapVision";
+import { DmLightingOverlay, DoorLayer, LightTintLayer, VisionMaskLayer, WallsLightsEditor } from "./MapVision";
 import { LightConfigPanel } from "./LightConfigPanel";
-import { readLocalFlag, writeLocalFlag } from "../lib/localFlags";
+import { WallConfigPanel } from "./WallConfigPanel";
+import { readCampaignFlag, writeCampaignFlag } from "../lib/campaignStore";
 import {
   annotationOpacity,
   annotationPathLength,
@@ -327,6 +334,7 @@ function TokenShapeNode({
   shape,
   radius,
   img,
+  crop,
   fill,
   stroke,
   strokeWidth,
@@ -335,6 +343,9 @@ function TokenShapeNode({
   shape: TokenShape;
   radius: number;
   img: HTMLImageElement | HTMLCanvasElement | null | undefined;
+  /** Focal point + zoom shared with the linked portrait/item icon, so the token follows the
+   *  same crop the user set on the sheet. Undefined ⇒ centered cover-fit. */
+  crop?: IconCrop;
   fill: string;
   stroke: string;
   strokeWidth: number;
@@ -346,16 +357,22 @@ function TokenShapeNode({
       <TokenShapePrimitive shape={shape} radius={radius} fill={fill} stroke={stroke} strokeWidth={strokeWidth} glow={glow} />
     );
   }
-  // Cover-fit: scale the image so it fills the shape's bounding square, preserving aspect
-  // (the overflow is cropped by the clip), then center it on the origin.
+  // Cover-fit the shape's bounding square preserving aspect (overflow clipped), then apply the
+  // portrait's zoom and focal point exactly like CroppableImage: the focal (fx,fy) picks which
+  // part of the overflow shows — fx=fy=0.5 centers, matching the sheet portrait.
   const size = radius * 2;
   const aspect = img.width / img.height;
-  const coverW = aspect >= 1 ? size * aspect : size;
-  const coverH = aspect >= 1 ? size : size / aspect;
+  const zoom = crop?.zoom ?? 1;
+  const fx = crop?.x ?? 0.5;
+  const fy = crop?.y ?? 0.5;
+  const coverW = (aspect >= 1 ? size * aspect : size) * zoom;
+  const coverH = (aspect >= 1 ? size : size / aspect) * zoom;
+  const x = -size / 2 - (coverW - size) * fx;
+  const y = -size / 2 - (coverH - size) * fy;
   return (
     <>
       <Group clipFunc={(ctx) => clipTokenShape(ctx, shape, radius)}>
-        <KonvaImage image={img} width={coverW} height={coverH} x={-coverW / 2} y={-coverH / 2} />
+        <KonvaImage image={img} width={coverW} height={coverH} x={x} y={y} />
       </Group>
       {/* Outline + glow on top; no fill so the clipped portrait shows through. */}
       <TokenShapePrimitive shape={shape} radius={radius} stroke={stroke} strokeWidth={strokeWidth} glow={glow} />
@@ -389,6 +406,8 @@ function useGlowFade(target: number): number {
 function TokenNode({
   token,
   imageUrl,
+  imageCrop,
+  controllerColor,
   shapeDefaults,
   radius,
   draggable,
@@ -404,6 +423,11 @@ function TokenNode({
   token: GameState["tokens"][number];
   /** Portrait to render on the token (resolved live from the linked sheet). */
   imageUrl: string | null;
+  /** Crop of that portrait/item icon, so the token follows the same framing as the sheet. */
+  imageCrop?: IconCrop;
+  /** When an NPC/enemy is controlled by a player ("mind control"), the controller's colour —
+   *  drawn as a dashed ring so it's clear the token isn't DM-only. Null when not applicable. */
+  controllerColor?: string | null;
   /** Per-group default shapes; used when the token has no explicit `shape`. */
   shapeDefaults: GameState["tokenShapeDefaults"];
   radius: number;
@@ -570,6 +594,18 @@ function TokenNode({
       {isCurrentTurn ? (
         <Circle radius={radius + 4} stroke={CURRENT_TURN_COLOR} strokeWidth={2.5} listening={false} />
       ) : null}
+      {controllerColor ? (
+        // A player controls this NPC ("mind control"): a dashed ring in their colour so it
+        // reads as player-controlled rather than a DM-only token.
+        <Circle
+          radius={reach + 6}
+          stroke={controllerColor}
+          strokeWidth={2}
+          dash={[5, 4]}
+          opacity={0.9}
+          listening={false}
+        />
+      ) : null}
       {showArrow ? (
         // Facing indicator: one continuous shape — an arrowhead flanked by two rim-hugging
         // fins — drawn pointing up and rotated by facing. It's a single closed outline (no
@@ -615,6 +651,7 @@ function TokenNode({
           shape={shape}
           radius={radius}
           img={crispImg}
+          crop={imageCrop}
           fill={token.color}
           stroke={img ? token.color : "#00000066"}
           strokeWidth={2}
@@ -747,9 +784,16 @@ export function MapCanvas({
   // Stable wall/light editor callbacks so the memoized WallsLightsEditor layer bails
   // during (heavy) fog-brush strokes when a scene has many walls/lights.
   const onDeleteWall = useCallback(
-    (id: string) =>
-      send({ type: "SET_WALLS", sceneId: sceneId, walls: (sceneWalls ?? []).filter((w) => w.id !== id) }),
-    [send, sceneId, sceneWalls],
+    (id: string) => send({ type: "REMOVE_WALL", sceneId, wallId: id }),
+    [send, sceneId],
+  );
+  const onUpdateWall = useCallback(
+    (wall: Wall) => send({ type: "UPDATE_WALL", sceneId, wall }),
+    [send, sceneId],
+  );
+  const onUpdateWalls = useCallback(
+    (walls: Wall[]) => send({ type: "UPDATE_WALLS", sceneId, walls }),
+    [send, sceneId],
   );
   const onToggleDoor = useCallback(
     (id: string) => send({ type: "TOGGLE_DOOR", sceneId, wallId: id }),
@@ -776,8 +820,109 @@ export function MapCanvas({
   /** Fog brush: paint direction + size (radius = gridSize × scale). */
   const [fogMode, setFogMode] = useState<"reveal" | "cover">("reveal");
   const [fogBrushScale, setFogBrushScale] = useState(0.75);
-  /** Walls tool: default kind a plain drag draws. */
-  const [wallKind, setWallKind] = useState<"wall" | "door">("wall");
+  /** Walls tool: draw vs select/edit; and what a fresh segment is drawn as. */
+  const [wallMode, setWallMode] = useState<"draw" | "select">("draw");
+  const [wallBrush, setWallBrush] = useState<WallBrush>("normal");
+  /** Selected wall ids (select mode) + which wall's config panel is open. */
+  const [selectedWallIds, setSelectedWallIds] = useState<string[]>([]);
+  const [editingWallId, setEditingWallId] = useState<string | null>(null);
+
+  /** Snap a world point to a nearby wall endpoint (so chains connect), else the grid corner. */
+  const snapWallPoint = useCallback(
+    (x: number, y: number, excludeId?: string): { x: number; y: number } => {
+      const walls = sceneWalls ?? [];
+      const g = scene?.gridSize ?? 0;
+      const thr = Math.max(g * 0.35, 8);
+      let best: { x: number; y: number } | null = null;
+      let bestD = thr;
+      for (const w of walls) {
+        if (w.id === excludeId) continue;
+        for (const p of [
+          { x: w.x1, y: w.y1 },
+          { x: w.x2, y: w.y2 },
+        ]) {
+          const d = Math.hypot(p.x - x, p.y - y);
+          if (d < bestD) {
+            bestD = d;
+            best = p;
+          }
+        }
+      }
+      if (best) return best;
+      if (snap && scene && g > 0) {
+        return {
+          x: Math.round((x - scene.gridOffsetX) / g) * g + scene.gridOffsetX,
+          y: Math.round((y - scene.gridOffsetY) / g) * g + scene.gridOffsetY,
+        };
+      }
+      return { x, y };
+    },
+    [sceneWalls, scene, snap],
+  );
+  /** Single-wall click select (Shift toggles it in/out of the selection). */
+  const onSelectWall = useCallback((id: string, additive: boolean) => {
+    setSelectedWallIds((cur) =>
+      additive ? (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]) : [id],
+    );
+  }, []);
+  /** Marquee / empty-click select (replace, or add with Shift). */
+  const onWallSelect = useCallback((ids: string[], additive: boolean) => {
+    setSelectedWallIds((cur) => (additive ? Array.from(new Set([...cur, ...ids])) : ids));
+  }, []);
+  const onConfigureWall = useCallback((id: string) => setEditingWallId(id), []);
+  /** Apply a config-panel field patch to the edited wall (or the whole multi-selection). */
+  const applyWallPatch = useCallback(
+    (patch: Partial<Wall>) => {
+      const walls = sceneWalls ?? [];
+      const primary = editingWallId ? walls.find((w) => w.id === editingWallId) : null;
+      if (!primary) return;
+      const ids =
+        selectedWallIds.length > 1 && selectedWallIds.includes(primary.id)
+          ? selectedWallIds
+          : [primary.id];
+      const targets = walls.filter((w) => ids.includes(w.id));
+      if (targets.length <= 1) {
+        onUpdateWall({ ...primary, ...patch });
+      } else {
+        onUpdateWalls(targets.map((w) => ({ ...w, ...patch })));
+      }
+    },
+    [sceneWalls, editingWallId, selectedWallIds, onUpdateWall, onUpdateWalls],
+  );
+  /** Delete the edited wall (or the whole multi-selection) from the config panel. */
+  const deleteEditingWalls = useCallback(() => {
+    if (!editingWallId) return;
+    const ids =
+      selectedWallIds.length > 1 && selectedWallIds.includes(editingWallId)
+        ? selectedWallIds
+        : [editingWallId];
+    for (const id of ids) send({ type: "REMOVE_WALL", sceneId, wallId: id });
+    setSelectedWallIds([]);
+    setEditingWallId(null);
+  }, [editingWallId, selectedWallIds, send, sceneId]);
+  /** Clone the selected walls half a cell down-right and select the clones. */
+  const onCloneWalls = useCallback(() => {
+    const sel = (sceneWalls ?? []).filter((w) => selectedWallIds.includes(w.id));
+    if (sel.length === 0) return;
+    const off = (scene?.gridSize ?? 50) / 2;
+    const clones: Wall[] = sel.map((w) => ({
+      ...w,
+      id: `wall-${crypto.randomUUID().slice(0, 8)}`,
+      x1: w.x1 + off,
+      y1: w.y1 + off,
+      x2: w.x2 + off,
+      y2: w.y2 + off,
+    }));
+    onUpdateWalls(clones);
+    setSelectedWallIds(clones.map((w) => w.id));
+  }, [sceneWalls, selectedWallIds, scene, onUpdateWalls]);
+  // Clear wall selection / config when leaving the walls tool or changing scene.
+  useEffect(() => {
+    setSelectedWallIds([]);
+    setEditingWallId(null);
+  }, [activeToolId, sceneId]);
+  /** Movement-blocking wall segments for the token-drag collision test. */
+  const movementSegs = useMemo(() => movementSegments(sceneWalls ?? []), [sceneWalls]);
   /** Lights tool: which preset a freshly placed light uses. */
   const [lightPreset, setLightPreset] = useState<LightPreset>("torch");
   /** Which light's config panel is open (double-click a light marker). */
@@ -786,7 +931,7 @@ export function MapCanvas({
   const [darknessDraft, setDarknessDraft] = useState<number | null>(null);
   /** Client toggle: run per-frame light animations (off = low-end escape hatch). */
   const [lightAnimations, setLightAnimations] = useState(() =>
-    readLocalFlag("lightAnimations", true),
+    readCampaignFlag(state.roomId, "light-anim", true, "lightAnimations"),
   );
   /** DM-only: preview dynamic vision as a player would see it. */
   const [visionPreview, setVisionPreview] = useState(false);
@@ -822,10 +967,10 @@ export function MapCanvas({
   );
   const toggleLightAnimations = useCallback(() => {
     setLightAnimations((on) => {
-      writeLocalFlag("lightAnimations", !on);
+      writeCampaignFlag(state.roomId, "light-anim", !on);
       return !on;
     });
-  }, []);
+  }, [state.roomId]);
 
   // ---- Shift-drag pointer arrow (always available; fades ~10s, like v1) ----
   const [shiftHeld, setShiftHeld] = useState(false);
@@ -1010,14 +1155,25 @@ export function MapCanvas({
       return;
     }
     const onKey = (event: KeyboardEvent) => {
-      if (event.ctrlKey || event.metaKey || event.altKey) {
-        return;
-      }
       const target = event.target as HTMLElement | null;
       if (
         target &&
         (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
       ) {
+        return;
+      }
+      // Ctrl/Cmd+D clones the selected walls (walls tool, select mode).
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.key.toLowerCase() === "d" &&
+        activeToolId === "walls" &&
+        selectedWallIds.length > 0
+      ) {
+        event.preventDefault();
+        onCloneWalls();
+        return;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) {
         return;
       }
       if (event.key === "Escape") {
@@ -1048,7 +1204,18 @@ export function MapCanvas({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [availableTools, hotkeysEnabled, selectedTokenId, state.tokens, isDm, yourPlayerId, onMoveToken]);
+  }, [
+    availableTools,
+    hotkeysEnabled,
+    selectedTokenId,
+    state.tokens,
+    isDm,
+    yourPlayerId,
+    onMoveToken,
+    activeToolId,
+    selectedWallIds,
+    onCloneWalls,
+  ]);
 
   const gridLines = useMemo(() => {
     const lines: number[][] = [];
@@ -1092,7 +1259,11 @@ export function MapCanvas({
     snap,
     fogMode,
     fogBrushR,
-    wallKind,
+    wallMode,
+    wallBrush,
+    selectedWallIds,
+    onWallSelect,
+    snapWallPoint,
     lightRadii: LIGHT_PRESETS[lightPreset],
     templateKind,
     templatePin,
@@ -1276,6 +1447,12 @@ export function MapCanvas({
   const editingLight = editingLightId
     ? scene.lights.find((l) => l.id === editingLightId) ?? null
     : null;
+  const editingWall = editingWallId ? scene.walls.find((w) => w.id === editingWallId) ?? null : null;
+  // The config-panel edit applies to the whole selection when the edited wall is part of it.
+  const wallConfigCount =
+    editingWall && selectedWallIds.length > 1 && selectedWallIds.includes(editingWall.id)
+      ? selectedWallIds.length
+      : 1;
 
   const emitViewportFromStage = () => {
     const stage = stageRef.current;
@@ -1449,16 +1626,32 @@ export function MapCanvas({
             // fall back to the token's own snapshot, then its color.
             const linkedSheetId = token.sheetId ?? token.ownerPlayerId;
             const sheet = linkedSheetId ? state.sheets[linkedSheetId] : undefined;
+            const linkedItem = token.itemId ? state.items[token.itemId] : undefined;
+            // The crop belongs to whichever source supplies the image: the sheet portrait, else
+            // the item icon it mirrors. A standalone token image has no crop → centered.
+            const imageCrop = sheet?.data.iconUrl
+              ? sheet.data.iconCrop
+              : linkedItem?.iconUrl && linkedItem.iconUrl === token.imageUrl
+                ? linkedItem.iconCrop
+                : DEFAULT_ICON_CROP;
             const sheetHp = sheet?.data.hp;
             // DM always sees bars; players only when the DM turned the display on.
             // (Redaction keeps hp available for showHp tokens even on hidden sheets.)
             const hp = sheetHp && (isDm || token.showHp !== "none") ? sheetHp : null;
             const radius = tokenRadius(scene.gridSize, token.size ?? state.defaultTokenSize ?? 1);
+            // A player controlling an NPC/enemy (not their own PC) → show their colour as a
+            // ring so the "mind control" is visible; a real PC already uses the player's colour.
+            const controllerColor =
+              token.kind !== "player" && token.ownerPlayerId
+                ? playerTokenColorForSlot(token.ownerPlayerId, state.playerSlots)
+                : null;
             return (
               <TokenNode
                 key={token.id}
                 token={token}
                 imageUrl={sheet?.data.iconUrl ?? token.imageUrl ?? null}
+                imageCrop={imageCrop}
+                controllerColor={controllerColor}
                 shapeDefaults={state.tokenShapeDefaults}
                 radius={radius}
                 draggable={draggable}
@@ -1470,7 +1663,13 @@ export function MapCanvas({
                 onOpenSheet={() => onOpenTokenSheet?.(token)}
                 onMove={(x, y) => {
                   const snapped = snapPoint(x, y);
-                  onMoveToken(token.id, snapped.x, snapped.y);
+                  // Players can't drag a token through a movement-blocking wall; the DM bypasses.
+                  // A rejected move sends the OLD position so the server echo snaps the node back.
+                  const target =
+                    !isDm && scene.wallsBlockMovement !== false
+                      ? clampMove({ x: token.x, y: token.y }, snapped, movementSegs)
+                      : snapped;
+                  onMoveToken(token.id, target.x, target.y);
                 }}
                 onRotate={draggable ? (facing) => onMoveToken(token.id, token.x, token.y, facing) : undefined}
               />
@@ -1510,13 +1709,24 @@ export function MapCanvas({
             scene={scene}
             ftToPx={ftToPx}
             wallsActive={wallsActive}
+            wallMode={wallMode}
             lightsActive={lightsActive}
+            selectedWallIds={selectedWallIds}
+            onSelectWall={onSelectWall}
             onDeleteWall={onDeleteWall}
-            onToggleDoor={onToggleDoor}
+            onUpdateWall={onUpdateWall}
+            onUpdateWalls={onUpdateWalls}
+            onConfigureWall={onConfigureWall}
+            snapWallPoint={snapWallPoint}
             onMoveLight={onMoveLight}
             onDeleteLight={onDeleteLight}
             onConfigureLight={onConfigureLight}
           />
+        ) : null}
+
+        {/* Door controls (all clients — players open unlocked doors; secret doors DM-only). */}
+        {scene.walls.some((w) => w.door && w.door !== "none") ? (
+          <DoorLayer scene={scene} isDm={isDm} onToggleDoor={onToggleDoor} />
         ) : null}
 
         {/* Topmost overlay: everyone's live rulers + templates + the active tool's draft. */}
@@ -1607,10 +1817,21 @@ export function MapCanvas({
         }
         visionPreview={visionPreview}
         onToggleVisionPreview={() => setVisionPreview((v) => !v)}
-        wallKind={wallKind}
-        onWallKind={setWallKind}
+        wallMode={wallMode}
+        onWallMode={setWallMode}
+        wallBrush={wallBrush}
+        onWallBrush={setWallBrush}
         wallCount={scene.walls.length}
+        wallSelectionCount={selectedWallIds.length}
+        onCloneWalls={onCloneWalls}
         onClearWalls={() => send({ type: "SET_WALLS", sceneId: scene.id, walls: [] })}
+        wallsBlockMovement={scene.wallsBlockMovement !== false}
+        onToggleWallsBlockMovement={() =>
+          send({
+            type: "UPDATE_SCENE",
+            scene: { ...scene, wallsBlockMovement: scene.wallsBlockMovement === false },
+          })
+        }
         lightPreset={lightPreset}
         onLightPreset={setLightPreset}
         lightCount={scene.lights.length}
@@ -1626,6 +1847,18 @@ export function MapCanvas({
             onChange={onMoveLight}
             onDelete={() => onDeleteLight(editingLight.id)}
             onClose={() => setEditingLightId(null)}
+          />
+        </div>
+      ) : null}
+
+      {isDm && editingWall ? (
+        <div className="map-light-config">
+          <WallConfigPanel
+            wall={editingWall}
+            selectionCount={wallConfigCount}
+            onChange={applyWallPatch}
+            onDelete={deleteEditingWalls}
+            onClose={() => setEditingWallId(null)}
           />
         </div>
       ) : null}

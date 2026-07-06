@@ -10,6 +10,13 @@ import { findAssetUsage } from "../lib/assetUsage";
 import type { PanelContext } from "../panels/registry";
 
 const KIND_LABEL: Record<string, string> = { tokens: "Tokens", portraits: "Portraits", maps: "Maps" };
+// How each usage reads in the delete warning (findAssetUsage kinds → a human word).
+const USAGE_LABEL: Record<string, string> = {
+  token: "Token",
+  sheet: "Portrait",
+  scene: "Map",
+  item: "Item",
+};
 
 /// <summary>
 /// DM-only Assets page (Phase 7): a thumbnail grid of the room's uploaded R2 images,
@@ -29,7 +36,7 @@ export function AssetsPage({
   activePage: PageId;
   onNavigate: (id: PageId) => void;
 }) {
-  const { state } = ctx;
+  const { state, dm } = ctx;
   const roomId = state.roomId;
   const [assets, setAssets] = useState<AssetInfo[]>([]);
   const [unconfigured, setUnconfigured] = useState(false);
@@ -72,9 +79,33 @@ export function AssetsPage({
   const handleDelete = async (asset: AssetInfo) => {
     const usage = findAssetUsage(state, asset.url);
     if (usage.length > 0) {
-      const where = usage.map((u) => `${u.kind}: ${u.label}`).join(", ");
-      if (!window.confirm(`This image is in use by ${usage.length} place(s):\n${where}\n\nDelete anyway? Those references will show a broken image.`)) {
+      const where = usage.map((u) => `${USAGE_LABEL[u.kind] ?? u.kind}: ${u.label}`).join(", ");
+      if (!window.confirm(`This image is used in ${usage.length} place(s):\n${where}\n\nDelete it everywhere? It will be removed from those and this can't be undone.`)) {
         return;
+      }
+    }
+    // Cascade: clear every reference to this URL so it disappears everywhere it's shown.
+    // Clear the SOURCE entities (sheets/items) BEFORE tokens — a token linked to a sheet/item
+    // re-derives its image from that entity, so the source must be blank first or the token
+    // sync would just re-fill it. Then clear any token/scene that references the URL directly.
+    for (const record of Object.values(state.sheets)) {
+      if (record.data.iconUrl === asset.url) {
+        dm.updateSheet(record.id, { ...record.data, iconUrl: null });
+      }
+    }
+    for (const item of Object.values(state.items)) {
+      if (item.iconUrl === asset.url) {
+        dm.updateItem({ ...item, iconUrl: null });
+      }
+    }
+    for (const token of state.tokens) {
+      if (token.imageUrl === asset.url) {
+        dm.updateToken({ ...token, imageUrl: null });
+      }
+    }
+    for (const scene of state.scenes) {
+      if (scene.mapUrl === asset.url) {
+        dm.updateScene({ ...scene, mapUrl: null });
       }
     }
     try {

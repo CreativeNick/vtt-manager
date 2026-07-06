@@ -1,13 +1,16 @@
 import { useRef, useState } from "react";
 import {
+  DEFAULT_ICON_CROP,
   ITEM_RARITIES,
   ITEM_TYPES,
+  PORTRAIT_ASPECT,
   type ItemRarity,
   type ItemRecord,
   type ItemType,
 } from "../lib/types";
 import { uploadTokenImage } from "../lib/uploadAsset";
 import { CroppableImage } from "./CroppableImage";
+import { ImageCropModal } from "./ImageCropModal";
 
 /// <summary>
 /// Item Sheet: a compact editor for a catalog `ItemRecord` — icon, name, type, rarity,
@@ -26,6 +29,7 @@ export function ItemSheetPanel({
   onChange: (item: ItemRecord) => void;
 }) {
   const [uploading, setUploading] = useState(false);
+  const [cropOpen, setCropOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const patch = (fields: Partial<ItemRecord>) => onChange({ ...item, ...fields });
 
@@ -33,7 +37,8 @@ export function ItemSheetPanel({
     setUploading(true);
     try {
       const { url } = await uploadTokenImage(roomId, item.id, file);
-      patch({ iconUrl: url });
+      // Fresh image → reset the crop so the old focal point/zoom doesn't carry over.
+      patch({ iconUrl: url, iconCrop: { ...DEFAULT_ICON_CROP } });
     } catch {
       // Non-fatal: icon stays unchanged.
     } finally {
@@ -72,6 +77,11 @@ export function ItemSheetPanel({
               {uploading ? "Uploading…" : item.iconUrl ? "Change icon" : "Upload icon"}
             </button>
             {item.iconUrl ? (
+              <button className="btn-ghost" onClick={() => setCropOpen(true)}>
+                Crop
+              </button>
+            ) : null}
+            {item.iconUrl ? (
               <button className="btn-ghost" onClick={() => patch({ iconUrl: null })}>
                 Clear
               </button>
@@ -88,6 +98,19 @@ export function ItemSheetPanel({
               }}
             />
           </div>
+          {cropOpen && item.iconUrl ? (
+            <ImageCropModal
+              src={item.iconUrl}
+              crop={item.iconCrop}
+              frameAspect={PORTRAIT_ASPECT}
+              title="Crop icon"
+              onApply={(iconCrop) => {
+                patch({ iconCrop });
+                setCropOpen(false);
+              }}
+              onClose={() => setCropOpen(false)}
+            />
+          ) : null}
         </div>
       </div>
 

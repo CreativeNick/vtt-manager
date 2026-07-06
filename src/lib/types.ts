@@ -54,16 +54,101 @@ export type SceneFog = {
   inverted: boolean;
 };
 
-/** A sight-blocking segment. Doors block only while closed (`open` false/absent). */
+/**
+ * Per-channel restriction (Phase 6.9, Foundry-style):
+ * - `none` — passes freely (channel ignores this wall).
+ * - `normal` — fully blocks.
+ * - `limited` — "terrain" semantics: sight/light passes ONE limited wall but is blocked by a
+ *   second limited (or any normal) wall behind it. For movement, `limited` is treated as `normal`.
+ */
+export const WALL_RESTRICTIONS = ["none", "normal", "limited"] as const;
+export type WallRestriction = (typeof WALL_RESTRICTIONS)[number];
+
+/** One-way occlusion: `both` sides, or only when the source is on the wall's `left`/`right`
+ *  (by endpoint winding — see `visibility.ts`). */
+export const WALL_DIRS = ["both", "left", "right"] as const;
+export type WallDir = (typeof WALL_DIRS)[number];
+
+/** Door role. `secret` looks like a plain wall to players (client-side appearance gating). */
+export const WALL_DOORS = ["none", "door", "secret"] as const;
+export type WallDoor = (typeof WALL_DOORS)[number];
+
+/** Door state. `locked` blocks player toggling until a DM unlocks. New doors start `closed`. */
+export const WALL_DOOR_STATES = ["closed", "open", "locked"] as const;
+export type WallDoorState = (typeof WALL_DOOR_STATES)[number];
+
+/** Named presets over the channels; `custom` = manually tuned channels. */
+export const WALL_PRESET_IDS = ["normal", "terrain", "invisible", "ethereal", "window", "custom"] as const;
+export type WallPreset = (typeof WALL_PRESET_IDS)[number];
+
+/**
+ * A wall segment. `sight`/`light`/`move` are INDEPENDENT restriction channels; the named
+ * `preset` is only a UI tag — the channels are authoritative. Doors are walls with a `door`
+ * role + `state`; an open door lets every channel through (see `wallsToSegments`/`movementSegments`).
+ */
 export type Wall = {
   id: string;
   x1: number;
   y1: number;
   x2: number;
   y2: number;
-  kind: "wall" | "door";
-  open?: boolean;
+  /** Occludes token line-of-sight. */
+  sight: WallRestriction;
+  /** Occludes light propagation (independent of sight). */
+  light: WallRestriction;
+  /** Blocks token movement (`limited` treated as `normal` for collision). */
+  move: WallRestriction;
+  /** One-way occlusion; default `both`. */
+  dir?: WallDir;
+  /** Door role; default `none`. */
+  door?: WallDoor;
+  /** Door state; default `closed`. Only meaningful when `door !== "none"`. */
+  state?: WallDoorState;
+  /** UI tag only — channels are authoritative. */
+  preset?: WallPreset;
 };
+
+/** Preset → channel bundle (single source of truth for the config panel + toolbar). */
+export const WALL_PRESETS: Record<
+  Exclude<WallPreset, "custom">,
+  Pick<Wall, "sight" | "light" | "move" | "dir">
+> = {
+  normal: { sight: "normal", light: "normal", move: "normal", dir: "both" }, // solid wall
+  terrain: { sight: "limited", light: "limited", move: "none", dir: "both" }, // foliage/fog: see past one
+  invisible: { sight: "none", light: "none", move: "normal", dir: "both" }, // glass: blocks movement only
+  ethereal: { sight: "normal", light: "normal", move: "none", dir: "both" }, // curtain: blocks senses only
+  window: { sight: "limited", light: "normal", move: "normal", dir: "both" }, // partly see-through barrier
+};
+
+/** What the walls tool draws — a channel preset or a plain door. */
+export const WALL_BRUSHES = ["normal", "terrain", "invisible", "ethereal", "window", "door"] as const;
+export type WallBrush = (typeof WALL_BRUSHES)[number];
+
+/** Channel/door fields for a freshly drawn wall of the given brush (merged onto endpoints). */
+export function wallFromBrush(
+  brush: WallBrush,
+): Pick<Wall, "sight" | "light" | "move" | "dir" | "door" | "state" | "preset"> {
+  if (brush === "door") {
+    return { ...WALL_PRESETS.normal, door: "door", state: "closed" };
+  }
+  return { ...WALL_PRESETS[brush], preset: brush };
+}
+
+/** Which preset a wall's channels match (for the config panel's preset dropdown), or "custom". */
+export function matchWallPreset(wall: Pick<Wall, "sight" | "light" | "move" | "dir">): WallPreset {
+  for (const id of ["normal", "terrain", "invisible", "ethereal", "window"] as const) {
+    const p = WALL_PRESETS[id];
+    if (
+      p.sight === wall.sight &&
+      p.light === wall.light &&
+      p.move === wall.move &&
+      (p.dir ?? "both") === (wall.dir ?? "both")
+    ) {
+      return id;
+    }
+  }
+  return "custom";
+}
 
 /**
  * How the colored-light tint layer composites over the scene (CSS mix-blend-mode values).
@@ -167,6 +252,11 @@ export type Scene = {
   fog: SceneFog;
   /** Phase 6 dynamic vision: sight-blocking walls/doors. */
   walls: Wall[];
+  /**
+   * Phase 6.9: when true, movement-restricting walls block token drags/moves (players only —
+   * the DM always bypasses). Default true. The DM can toggle it per scene from the walls toolbar.
+   */
+  wallsBlockMovement?: boolean;
   /** Phase 6 dynamic vision: light sources. */
   lights: Light[];
   /** When true (default), the scene is lit everywhere — the vision pass is skipped. */
@@ -352,6 +442,91 @@ export function normalizeIconCrop(crop: unknown): IconCrop {
     x: num(c.x, 0.5, 0, 1),
     y: num(c.y, 0.5, 0, 1),
     zoom: num(c.zoom, 1, 1, MAX_ICON_ZOOM),
+  };
+}
+
+/**
+ * Portraits and item icons render into a square frame, so the crop UI locks its
+ * box to a 1:1 aspect. (Kept as a constant so the frame CSS, the modal, and the
+ * conversion helpers below all agree on the same target aspect.)
+ */
+export const PORTRAIT_ASPECT = 1;
+
+/**
+ * A crop selection expressed as a rectangle over the *full* image, in normalized
+ * (0..1) image coordinates. This is the shape the crop modal manipulates; it maps
+ * bijectively to `IconCrop` (focal point + zoom) via the helpers below, so nothing
+ * about how the crop is stored or rendered changes.
+ */
+export type CropRect = { left: number; top: number; width: number; height: number };
+
+const clampRange = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/**
+ * Forward transform: `IconCrop` → the crop rectangle the modal displays over the
+ * full image. Mirrors `CroppableImage`'s cover-fit math: `cover = max(fw/nw, fh/nh)`,
+ * so the frame shows a window whose normalized size is `1/zoom` on the axis that
+ * constrains the cover, and less on the other axis. `imgAspect = naturalW/naturalH`,
+ * `frameAspect = frameW/frameH`.
+ */
+export function iconCropToRect(crop: IconCrop, imgAspect: number, frameAspect: number): CropRect {
+  if (!Number.isFinite(imgAspect) || imgAspect <= 0 || !Number.isFinite(frameAspect) || frameAspect <= 0)
+    return { left: 0, top: 0, width: 1, height: 1 };
+  const c = normalizeIconCrop(crop);
+  const constrainByHeight = imgAspect >= frameAspect;
+  const width = constrainByHeight ? frameAspect / imgAspect / c.zoom : 1 / c.zoom;
+  const height = constrainByHeight ? 1 / c.zoom : imgAspect / frameAspect / c.zoom;
+  return {
+    left: c.x * (1 - width),
+    top: c.y * (1 - height),
+    width,
+    height,
+  };
+}
+
+/**
+ * Inverse transform: a crop rectangle → `IconCrop`. `zoom` comes from the box size on
+ * the cover-constraining axis; the focal point is the box position within the pan range
+ * (`1 - boxSize`), falling back to centered (0.5) when that axis fills the frame.
+ */
+export function rectToIconCrop(rect: CropRect, imgAspect: number, frameAspect: number): IconCrop {
+  if (!Number.isFinite(imgAspect) || imgAspect <= 0 || !Number.isFinite(frameAspect) || frameAspect <= 0)
+    return { ...DEFAULT_ICON_CROP };
+  const constrainByHeight = imgAspect >= frameAspect;
+  const constrainSize = constrainByHeight ? rect.height : rect.width;
+  const zoom = clampRange(constrainSize > 0 ? 1 / constrainSize : 1, 1, MAX_ICON_ZOOM);
+  const eps = 1e-6;
+  const x = rect.width < 1 - eps ? clampRange(rect.left / (1 - rect.width), 0, 1) : 0.5;
+  const y = rect.height < 1 - eps ? clampRange(rect.top / (1 - rect.height), 0, 1) : 0.5;
+  return { x, y, zoom };
+}
+
+/**
+ * Snap an arbitrary (possibly off-aspect or out-of-bounds) rectangle back to a valid crop:
+ * lock it to the frame aspect, keep the cover-constraining axis within `[1/MAX_ICON_ZOOM, 1]`
+ * (so zoom stays in `[1, MAX_ICON_ZOOM]`), and clamp the box inside the image. Used after
+ * every drag/resize/zoom interaction in the modal.
+ */
+export function clampCropRect(rect: CropRect, imgAspect: number, frameAspect: number): CropRect {
+  if (!Number.isFinite(imgAspect) || imgAspect <= 0 || !Number.isFinite(frameAspect) || frameAspect <= 0)
+    return { left: 0, top: 0, width: 1, height: 1 };
+  const constrainByHeight = imgAspect >= frameAspect;
+  const ratio = frameAspect / imgAspect; // width / height for an aspect-locked box
+  const minSize = 1 / MAX_ICON_ZOOM;
+  let width: number;
+  let height: number;
+  if (constrainByHeight) {
+    height = clampRange(rect.height, minSize, 1);
+    width = height * ratio;
+  } else {
+    width = clampRange(rect.width, minSize, 1);
+    height = width / ratio;
+  }
+  return {
+    left: clampRange(rect.left, 0, 1 - width),
+    top: clampRange(rect.top, 0, 1 - height),
+    width,
+    height,
   };
 }
 
@@ -1128,9 +1303,17 @@ export type ClientMessage =
   | { type: "SET_PLAYERS_CAN_DRAW"; enabled: boolean }
   | { type: "SET_PLAYERS_CAN_MOVE"; enabled: boolean }
   | { type: "SET_PLAYERS_CAN_POINT"; enabled: boolean }
-  /** Replace a scene's wall set (batched on edit-commit — no per-segment spam). */
+  /** Replace a scene's whole wall set — bulk ops only (clear all / paste). Granular edits below. */
   | { type: "SET_WALLS"; sceneId: string; walls: Wall[] }
+  | { type: "ADD_WALL"; sceneId: string; wall: Wall }
+  | { type: "UPDATE_WALL"; sceneId: string; wall: Wall }
+  /** Upsert-by-id batch (chained draw, group move, clone, multi-config). */
+  | { type: "UPDATE_WALLS"; sceneId: string; walls: Wall[] }
+  | { type: "REMOVE_WALL"; sceneId: string; wallId: string }
+  /** Player door click — open/close a door (server refuses when the door is locked). */
   | { type: "TOGGLE_DOOR"; sceneId: string; wallId: string }
+  /** DM / config-panel: set a door's exact state (closed / open / locked). */
+  | { type: "SET_DOOR_STATE"; sceneId: string; wallId: string; state: WallDoorState }
   | { type: "ADD_LIGHT"; sceneId: string; light: Light }
   | { type: "UPDATE_LIGHT"; sceneId: string; light: Light }
   | { type: "REMOVE_LIGHT"; sceneId: string; lightId: string };
@@ -1217,24 +1400,44 @@ export function playerTokenColorForSlot(slotId: string, slots: PlayerSlot[]): st
 }
 
 /// <summary>
-/// Syncs a player-owned token label, portrait, color, and sheet link from slot
-/// and sheet data. Player tokens always link to their owner's PC sheet.
+/// Derives a token's image (and, for player tokens, label/color/sheet-link) from the entity
+/// it's linked to, so a linked token never needs its own uploaded copy — no duplication and
+/// the reference is counted. A player token mirrors its owner's PC sheet (full sync); any
+/// other sheet-linked token (NPC/character) takes that sheet's portrait; an item token takes
+/// its catalog item's icon. Unlinked tokens (or ones whose entity has no image) keep their own.
 /// </summary>
-export function syncPlayerTokenFromState(token: Token, state: GameState): Token {
+export function syncTokenFromState(token: Token, state: GameState): Token {
   const normalized = normalizeToken(token);
-  if (normalized.kind !== "player" || !normalized.ownerPlayerId) {
-    return normalized;
+  if (normalized.kind === "player" && normalized.ownerPlayerId) {
+    const slot = state.playerSlots.find((item) => item.id === normalized.ownerPlayerId);
+    const sheet = state.sheets[normalized.ownerPlayerId]?.data;
+    return {
+      ...normalized,
+      sheetId: normalized.ownerPlayerId,
+      color: playerTokenColorForSlot(normalized.ownerPlayerId, state.playerSlots),
+      label: sheet?.characterName?.trim() || slot?.name || normalized.label,
+      // Mirror the sheet's portrait exactly (null included) when a sheet exists, so clearing
+      // the portrait clears the token too. Only a slot with no sheet keeps its own image.
+      imageUrl: sheet ? (sheet.iconUrl ?? null) : normalized.imageUrl,
+    };
   }
-
-  const slot = state.playerSlots.find((item) => item.id === normalized.ownerPlayerId);
-  const sheet = state.sheets[normalized.ownerPlayerId]?.data;
-  return {
-    ...normalized,
-    sheetId: normalized.ownerPlayerId,
-    color: playerTokenColorForSlot(normalized.ownerPlayerId, state.playerSlots),
-    label: sheet?.characterName?.trim() || slot?.name || normalized.label,
-    imageUrl: sheet?.iconUrl ?? normalized.imageUrl,
-  };
+  // NPC / character token linked to a sheet → mirror that sheet's portrait exactly. Uploads
+  // for a linked token always write the sheet's portrait (see TokenEditor), so the token never
+  // owns an independent image — a null portrait must clear the token, not fall back to a stale copy.
+  if (normalized.sheetId) {
+    const sheet = state.sheets[normalized.sheetId]?.data;
+    if (sheet) {
+      return { ...normalized, imageUrl: sheet.iconUrl ?? null };
+    }
+  }
+  // Item token → mirror its catalog item's icon exactly (kept live if the item's icon changes).
+  if (normalized.itemId) {
+    const item = state.items[normalized.itemId];
+    if (item) {
+      return { ...normalized, imageUrl: item.iconUrl ?? null };
+    }
+  }
+  return normalized;
 }
 
 /// <summary>
@@ -2028,9 +2231,19 @@ function sanitizeFog(fog: unknown): SceneFog {
   return { enabled: Boolean(f?.enabled), reveals, inverted: f?.inverted === true };
 }
 
-/// <summary>Validates a wall/door segment (world coords, finite, non-degenerate).</summary>
+/** Coerce an unknown to a member of `allowed`, else `fallback`. */
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === "string" && (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : fallback;
+}
+
+/// <summary>
+/// Validates a wall/door segment (world coords, finite, non-degenerate) and migrates the
+/// legacy Phase-6 shape `{ kind: "wall"|"door", open? }` into the Phase-6.9 channel model.
+/// </summary>
 export function sanitizeWall(wall: unknown): Wall | null {
-  const w = wall as Partial<Wall> | null;
+  const w = wall as (Partial<Wall> & { kind?: unknown; open?: unknown }) | null;
   if (!w || typeof w !== "object" || typeof w.id !== "string") {
     return null;
   }
@@ -2044,16 +2257,43 @@ export function sanitizeWall(wall: unknown): Wall | null {
   if (Math.hypot(x2 - x1, y2 - y1) < 1) {
     return null; // degenerate (zero-length) segment
   }
-  const kind = w.kind === "door" ? "door" : "wall";
-  return {
-    id: w.id.slice(0, 40),
-    x1,
-    y1,
-    x2,
-    y2,
-    kind,
-    ...(kind === "door" && w.open ? { open: true } : {}),
-  };
+
+  const hasChannels = w.sight !== undefined || w.light !== undefined || w.move !== undefined;
+  const legacyDoor = w.kind === "door";
+
+  let sight: WallRestriction;
+  let light: WallRestriction;
+  let move: WallRestriction;
+  let door: WallDoor;
+  let state: WallDoorState;
+
+  if (!hasChannels && (w.kind === "wall" || w.kind === "door")) {
+    // Pure legacy record → all-normal channels; a legacy door becomes a real (openable) door.
+    sight = "normal";
+    light = "normal";
+    move = "normal";
+    door = legacyDoor ? "door" : "none";
+    state = legacyDoor ? (w.open ? "open" : "closed") : "closed";
+  } else {
+    sight = oneOf(w.sight, WALL_RESTRICTIONS, "normal");
+    light = oneOf(w.light, WALL_RESTRICTIONS, "normal");
+    move = oneOf(w.move, WALL_RESTRICTIONS, "normal");
+    door = oneOf(w.door, WALL_DOORS, "none");
+    // Still honor a stray legacy `open` if a mixed record carried it.
+    state = oneOf(w.state, WALL_DOOR_STATES, w.open ? "open" : "closed");
+  }
+
+  const dir = oneOf(w.dir, WALL_DIRS, "both");
+  const preset = oneOf(w.preset, WALL_PRESET_IDS, "custom");
+
+  const result: Wall = { id: w.id.slice(0, 40), x1, y1, x2, y2, sight, light, move };
+  if (dir !== "both") result.dir = dir;
+  if (door !== "none") {
+    result.door = door;
+    result.state = state;
+  }
+  if (preset !== "custom") result.preset = preset;
+  return result;
 }
 
 /// <summary>Validates a light source; radii clamped to sane feet ranges.</summary>
@@ -2169,6 +2409,8 @@ export function normalizeScene(scene: Partial<Scene> & Record<string, unknown>):
     annotations,
     fog: sanitizeFog(scene.fog),
     walls,
+    // Default ON: movement-restricting walls block token drags unless the DM turns it off.
+    wallsBlockMovement: scene.wallsBlockMovement !== false,
     lights,
     // Default ON so existing scenes stay fully lit until the DM opts into dynamic vision.
     globalIllumination: scene.globalIllumination !== false,
@@ -2283,7 +2525,7 @@ export function normalizeGameState(state: GameState & LegacyGameStateFields): Ga
     tokens: [],
   };
   base.tokens = (state.tokens ?? []).map((token) => {
-    const synced = syncPlayerTokenFromState(token, base);
+    const synced = syncTokenFromState(token, base);
     // Drop links to sheets that no longer exist.
     return synced.sheetId && !sheets[synced.sheetId] ? { ...synced, sheetId: null } : synced;
   });

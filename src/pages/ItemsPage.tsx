@@ -35,6 +35,7 @@ export function ItemsPage({
       </div>
       <div className="npcs-page-body">
         <PageShell
+          roomId={state.roomId}
           roster={
             <ItemsPanel
               state={state}

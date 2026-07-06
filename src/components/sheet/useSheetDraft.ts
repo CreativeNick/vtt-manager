@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { createDefaultSheet, SHEET_SOFT_WARN_BYTES, type CharacterSheet, type SheetRecord } from "../../lib/types";
+import { createDefaultSheet, DEFAULT_ICON_CROP, SHEET_SOFT_WARN_BYTES, type CharacterSheet, type SheetRecord } from "../../lib/types";
 import { useDebouncedCallback } from "../../hooks/useDebouncedCallback";
 import { uploadPortrait } from "../../lib/uploadAsset";
 
@@ -38,7 +38,9 @@ export function useSheetDraft(
     setUploading(true);
     try {
       const { url } = await uploadPortrait(roomId, record.id, file);
-      update({ iconUrl: url });
+      // A new picture starts fresh: reset the crop so the previous focal point/zoom doesn't
+      // carry onto a differently-shaped image.
+      update({ iconUrl: url, iconCrop: { ...DEFAULT_ICON_CROP } });
     } catch {
       // Non-fatal: portrait stays unchanged.
     } finally {

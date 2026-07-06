@@ -1,12 +1,25 @@
 /// <summary>
-/// Pure line-of-sight computation (Phase 6). A classic angular sweep: cast rays at
-/// every wall endpoint (± a small epsilon so rays slip past corners), keep the nearest
-/// hit per ray, and sort by angle into a visibility polygon. No dependencies, no DOM —
-/// unit-testable in isolation. O(rays × segments); fine for the ≤600-segment cap.
+/// Pure line-of-sight + collision geometry (Phase 6, revamped Phase 6.9). The visibility pass
+/// is a classic angular sweep — cast rays at every wall endpoint (± a small epsilon so rays slip
+/// past corners) — upgraded to understand per-channel restrictions:
+///   • "normal"  walls block outright (nearest hit wins, as before).
+///   • "limited" walls follow Foundry "terrain" semantics: a ray sees PAST one limited wall but
+///     is stopped by a SECOND limited (or any normal) wall behind it.
+///   • one-way walls ("left"/"right") only occlude when the origin is on their blocking side.
+/// No dependencies, no DOM — unit-testable in isolation, and the collision helpers are imported
+/// server-side too. O(rays × segments); fine for the ≤600-segment cap.
 /// </summary>
 
 export type Point = { x: number; y: number };
 export type Segment = { x1: number; y1: number; x2: number; y2: number };
+
+/** A wall reduced to what the sweep needs on one channel. */
+export type BlockingSegment = Segment & {
+  /** "normal" stops the ray outright; "limited" only stops the 2nd-in-a-row. */
+  restriction: "normal" | "limited";
+  /** One-way occlusion: "both", or blocks only when the origin is on that side. */
+  dir: "both" | "left" | "right";
+};
 
 /** Minimal wall shape (structural) so this module needn't import the full types. */
 type WallLike = {
@@ -14,8 +27,12 @@ type WallLike = {
   y1: number;
   x2: number;
   y2: number;
-  kind: "wall" | "door";
-  open?: boolean;
+  sight: "none" | "normal" | "limited";
+  light: "none" | "normal" | "limited";
+  move: "none" | "normal" | "limited";
+  dir?: "both" | "left" | "right";
+  door?: "none" | "door" | "secret";
+  state?: "closed" | "open" | "locked";
 };
 
 /** Angular nudge (radians) so rays slip just past a corner on either side. */
@@ -23,11 +40,33 @@ const EPS = 1e-4;
 /** Segment-parameter tolerance — must be ≪ the EPS ray displacement (see raySegment). */
 const U_EPS = 1e-9;
 
-/// <summary>Blocking segments = all walls plus closed doors (open doors let sight through).</summary>
-export function wallsToSegments(walls: WallLike[]): Segment[] {
+/** An open door lets every channel through (movement, sight, light). */
+function isOpenDoor(w: WallLike): boolean {
+  return w.door !== undefined && w.door !== "none" && w.state === "open";
+}
+
+/// <summary>
+/// Blocking segments for one occlusion channel ("sight" or "light"). Skips walls that don't
+/// restrict the channel and skips open doors. Each segment carries its restriction + direction
+/// so the sweep can apply "limited" and one-way logic.
+/// </summary>
+export function wallsToSegments(walls: WallLike[], channel: "sight" | "light"): BlockingSegment[] {
+  const out: BlockingSegment[] = [];
+  for (const w of walls) {
+    const r = w[channel];
+    if (r === "none" || isOpenDoor(w)) {
+      continue;
+    }
+    out.push({ x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2, restriction: r, dir: w.dir ?? "both" });
+  }
+  return out;
+}
+
+/// <summary>Blocking segments for token movement. "limited" counts as a full block. </summary>
+export function movementSegments(walls: WallLike[]): Segment[] {
   const out: Segment[] = [];
   for (const w of walls) {
-    if (w.kind === "door" && w.open) {
+    if (w.move === "none" || isOpenDoor(w)) {
       continue;
     }
     out.push({ x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2 });
@@ -62,16 +101,33 @@ function raySegment(
   return null;
 }
 
+/**
+ * Whether a one-way segment blocks a ray/light originating at (ox, oy). The sign of the cross
+ * product of the segment direction with (origin − endpoint) tells which side the origin is on.
+ * Convention (shared with the editor arrow): "left" blocks when cross > 0, "right" when cross < 0.
+ */
+function directionBlocks(seg: BlockingSegment, ox: number, oy: number): boolean {
+  if (seg.dir === "both") {
+    return true;
+  }
+  const cross = (seg.x2 - seg.x1) * (oy - seg.y1) - (seg.y2 - seg.y1) * (ox - seg.x1);
+  return seg.dir === "left" ? cross > 0 : cross < 0;
+}
+
 /// <summary>
 /// The visibility polygon seen from `origin`, occluded by `walls`, bounded by a square
 /// of half-width `halfExtent` centered on the origin (so unobstructed rays terminate at
 /// the box rather than shooting to infinity). Make `halfExtent` ≥ the largest vision/light
 /// radius you intend to reveal inside the polygon. Returns the polygon vertices in
 /// angular order (may be empty only if `halfExtent` ≤ 0).
+///
+/// A ray terminates at whichever comes first: the nearest "normal" wall, or the SECOND-nearest
+/// "limited" wall (it sees past exactly one limited wall). One-way walls only participate when
+/// the origin is on their blocking side.
 /// </summary>
 export function computeVisibility(
   origin: Point,
-  walls: Segment[],
+  walls: BlockingSegment[],
   halfExtent: number,
 ): Point[] {
   const ox = origin.x;
@@ -84,13 +140,22 @@ export function computeVisibility(
   const by0 = oy - halfExtent;
   const bx1 = ox + halfExtent;
   const by1 = oy + halfExtent;
-  const box: Segment[] = [
-    { x1: bx0, y1: by0, x2: bx1, y2: by0 },
-    { x1: bx1, y1: by0, x2: bx1, y2: by1 },
-    { x1: bx1, y1: by1, x2: bx0, y2: by1 },
-    { x1: bx0, y1: by1, x2: bx0, y2: by0 },
+  const box: BlockingSegment[] = [
+    { x1: bx0, y1: by0, x2: bx1, y2: by0, restriction: "normal", dir: "both" },
+    { x1: bx1, y1: by0, x2: bx1, y2: by1, restriction: "normal", dir: "both" },
+    { x1: bx1, y1: by1, x2: bx0, y2: by1, restriction: "normal", dir: "both" },
+    { x1: bx0, y1: by1, x2: bx0, y2: by0, restriction: "normal", dir: "both" },
   ];
-  const segs = walls.length > 0 ? [...walls, ...box] : box;
+
+  // Directional prefilter: a one-way wall the origin can "see through" is dropped entirely
+  // (from both occlusion AND angle seeding) so it leaves no silhouette.
+  const active: BlockingSegment[] = [];
+  for (const s of walls) {
+    if (directionBlocks(s, ox, oy)) {
+      active.push(s);
+    }
+  }
+  const segs = active.length > 0 ? [...active, ...box] : box;
 
   const angles: number[] = [];
   for (const s of segs) {
@@ -103,13 +168,28 @@ export function computeVisibility(
   for (const a of angles) {
     const dx = Math.cos(a);
     const dy = Math.sin(a);
-    let best = Infinity;
+    // Track the nearest "normal" hit and the two nearest "limited" hits: the ray is stopped by
+    // whichever comes first — the nearest normal, or the 2nd limited (having passed the 1st).
+    let tNormal = Infinity;
+    let tLim1 = Infinity;
+    let tLim2 = Infinity;
     for (const s of segs) {
       const t = raySegment(ox, oy, dx, dy, s);
-      if (t !== null && t < best) {
-        best = t;
+      if (t === null) {
+        continue;
+      }
+      if (s.restriction === "limited") {
+        if (t < tLim1) {
+          tLim2 = tLim1;
+          tLim1 = t;
+        } else if (t < tLim2) {
+          tLim2 = t;
+        }
+      } else if (t < tNormal) {
+        tNormal = t;
       }
     }
+    const best = Math.min(tNormal, tLim2);
     if (best < Infinity) {
       hits.push({ angle: a, x: ox + dx * best, y: oy + dy * best });
     }
@@ -135,4 +215,49 @@ export function pointInPolygon(point: Point, polygon: Point[]): boolean {
     }
   }
   return inside;
+}
+
+// ---------------------------------------------------------------------------
+// Movement collision (Phase 6.9) — shared by the client drag path and the server guard.
+// ---------------------------------------------------------------------------
+
+/** Signed area ×2 of triangle (a, b, p): >0 = p left of a→b, <0 = right, 0 = collinear. */
+function orient(ax: number, ay: number, bx: number, by: number, px: number, py: number): number {
+  return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+}
+
+/// <summary>
+/// Do segments A→B and C→D properly cross? (Collinear/endpoint grazes count as non-blocking —
+/// acceptable for movement: a path that merely touches a wall corner slides by.)
+/// </summary>
+export function segmentsIntersect(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number,
+): boolean {
+  const o1 = orient(ax, ay, bx, by, cx, cy);
+  const o2 = orient(ax, ay, bx, by, dx, dy);
+  const o3 = orient(cx, cy, dx, dy, ax, ay);
+  const o4 = orient(cx, cy, dx, dy, bx, by);
+  return o1 > 0 !== o2 > 0 && o3 > 0 !== o4 > 0;
+}
+
+/// <summary>
+/// Clamp a token move against movement-blocking walls. If the straight path from `from` to `to`
+/// crosses any blocking segment, the move is REJECTED (returns `from`) — a simple, predictable v1
+/// that never traps a token (the token's CENTER just can't cross a wall). Radius-aware capsule
+/// collision is a later refinement.
+/// </summary>
+export function clampMove(from: Point, to: Point, segs: Segment[]): Point {
+  for (const s of segs) {
+    if (segmentsIntersect(from.x, from.y, to.x, to.y, s.x1, s.y1, s.x2, s.y2)) {
+      return from;
+    }
+  }
+  return to;
 }

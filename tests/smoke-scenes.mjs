@@ -176,8 +176,8 @@ try {
     scene: {
       ...dmScene,
       walls: [
-        { id: "aw1", x1: 0, y1: 0, x2: 50, y2: 0, kind: "wall" },
-        { id: "ad1", x1: 50, y1: 0, x2: 50, y2: 50, kind: "door", open: true },
+        { id: "aw1", x1: 0, y1: 0, x2: 50, y2: 0, sight: "normal", light: "normal", move: "normal" },
+        { id: "ad1", x1: 50, y1: 0, x2: 50, y2: 50, sight: "normal", light: "normal", move: "normal", door: "door", state: "open" },
       ],
       lights: [{ id: "al1", x: 10, y: 10, brightR: 15, dimR: 30, enabled: true }],
       fog: {
@@ -195,7 +195,7 @@ try {
     check(
       "full-scene UPDATE_SCENE (Apply) carries walls+door-state+lights+fog at once",
       applied.walls.length === 2 &&
-        applied.walls.find((w) => w.id === "ad1")?.open === true &&
+        applied.walls.find((w) => w.id === "ad1")?.state === "open" &&
         applied.lights.length === 1 &&
         applied.fog.inverted === false &&
         applied.fog.reveals.length === 1 &&

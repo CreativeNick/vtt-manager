@@ -70,15 +70,28 @@ try {
   const wallErr = await vex.next((m) => m.type === "ERROR" && /only the dm/i.test(m.message));
   check("player cannot edit walls", true, wallErr.message);
 
-  // Door toggle flips open (and back), DM-only.
+  // Door toggle flips open (new model: state "open"/"closed"). DM opens it.
   dm.send({ type: "TOGGLE_DOOR", sceneId, wallId: "d1" });
   await vex.next(
-    (m) => m.type === "STATE" && sceneOf(m.state, sceneId)?.walls.find((w) => w.id === "d1")?.open === true,
+    (m) => m.type === "STATE" && sceneOf(m.state, sceneId)?.walls.find((w) => w.id === "d1")?.state === "open",
   );
   check("door toggles open for everyone", true);
+
+  // Players MAY toggle an unlocked door (opening doors as they explore) — closes it back.
   vex.send({ type: "TOGGLE_DOOR", sceneId, wallId: "d1" });
-  await vex.next((m) => m.type === "ERROR" && /only the dm/i.test(m.message));
-  check("player cannot toggle doors", true);
+  await vex.next(
+    (m) => m.type === "STATE" && sceneOf(m.state, sceneId)?.walls.find((w) => w.id === "d1")?.state === "closed",
+  );
+  check("player can toggle an unlocked door", true);
+
+  // A locked door (DM sets state) refuses a player toggle.
+  dm.send({ type: "SET_DOOR_STATE", sceneId, wallId: "d1", state: "locked" });
+  await vex.next(
+    (m) => m.type === "STATE" && sceneOf(m.state, sceneId)?.walls.find((w) => w.id === "d1")?.state === "locked",
+  );
+  vex.send({ type: "TOGGLE_DOOR", sceneId, wallId: "d1" });
+  await vex.next((m) => m.type === "ERROR" && /locked/i.test(m.message));
+  check("player cannot open a locked door", true);
 
   // Degenerate (zero-length) walls are dropped server-side.
   dm.send({

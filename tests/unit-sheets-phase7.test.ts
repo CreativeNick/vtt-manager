@@ -195,5 +195,31 @@ const used = findAssetUsage(usageState, "/tokens/room-assets--asset-1.png");
 check("in-use scan finds the token reference", used.length === 1 && used[0].kind === "token");
 check("in-use scan reports unused for an unreferenced URL", findAssetUsage(usageState, "/tokens/room-assets--nope.png").length === 0);
 
+// ---------------------------------------------------------------------------
+// 9. Linked-token image mirroring: an NPC token mirrors its sheet portrait exactly
+//    (clearing the portrait clears the token), and a mirror isn't double-counted.
+// ---------------------------------------------------------------------------
+const PORTRAIT = "/portraits/room-mirror--npc-1.png";
+const mirrorBase = createInitialState("room-mirror");
+mirrorBase.sheets["npc-1"] = createNpcSheetRecord("npc-1", "NPC 1");
+mirrorBase.sheets["npc-1"]!.data.iconUrl = PORTRAIT;
+mirrorBase.tokens = [
+  {
+    id: "tok-a", sceneId: mirrorBase.activeSceneId, x: 0, y: 0, label: "NPC 1", color: "#c45c5c",
+    kind: "enemy", imageUrl: null, ownerPlayerId: null, sheetId: "npc-1", conditions: [], showHp: "none",
+  } as unknown as Token,
+];
+const withPortrait = normalizeGameState(mirrorBase);
+const portraitUsage = findAssetUsage(withPortrait, PORTRAIT);
+check("linked token mirrors the sheet portrait", withPortrait.tokens[0]!.imageUrl === PORTRAIT);
+check("portrait counts once — the mirror token isn't double-counted",
+  portraitUsage.length === 1 && portraitUsage[0].kind === "sheet");
+
+// Clearing the portrait must propagate to the linked token on the next normalize.
+withPortrait.sheets["npc-1"]!.data.iconUrl = null;
+const cleared = normalizeGameState(withPortrait);
+check("clearing the portrait clears the linked token's image", cleared.tokens[0]!.imageUrl === null);
+check("cleared portrait reports no remaining usage", findAssetUsage(cleared, PORTRAIT).length === 0);
+
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

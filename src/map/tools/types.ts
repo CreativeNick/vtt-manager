@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { ClientMessage, Light, Scene, TemplateKind } from "../../lib/types";
+import type { ClientMessage, Light, Scene, TemplateKind, WallBrush } from "../../lib/types";
 
 /// <summary>
 /// The plug-in interface every map tool implements (Phase 5 architecture; Phase 6
@@ -33,8 +33,16 @@ export type ToolRuntime = {
   fogMode: "reveal" | "cover";
   /** Fog brush radius in world px (already grid-scaled by MapCanvas). */
   fogBrushR: number;
-  /** Walls tool: what a plain drag draws (Shift always forces the other kind). */
-  wallKind: "wall" | "door";
+  /** Walls tool: draw new segments vs select/edit existing ones. */
+  wallMode: "draw" | "select";
+  /** Walls tool: what a fresh segment is drawn as (channel preset or a door). */
+  wallBrush: WallBrush;
+  /** Currently selected wall ids (marquee / click multi-select). */
+  selectedWallIds: string[];
+  /** Replace/extend the wall selection (used by the marquee + empty-canvas click). */
+  onWallSelect: (ids: string[], additive: boolean) => void;
+  /** Snap a world point to a nearby wall endpoint, else the grid corner (shared with the editor). */
+  snapWallPoint: (x: number, y: number, excludeId?: string) => ToolPoint;
   /** Lights tool: the preset a freshly placed light gets (radii in feet + Phase 6.6 style). */
   lightRadii: Omit<Light, "id" | "x" | "y" | "enabled">;
   /** Templates tool: which area shape to draw. */

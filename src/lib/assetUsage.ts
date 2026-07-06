@@ -11,9 +11,15 @@ export type AssetUsage = { kind: "token" | "sheet" | "scene" | "item"; id: strin
 export function findAssetUsage(state: GameState, url: string): AssetUsage[] {
   const usage: AssetUsage[] = [];
   for (const token of state.tokens) {
-    if (token.imageUrl === url) {
-      usage.push({ kind: "token", id: token.id, label: token.label || "Token" });
-    }
+    if (token.imageUrl !== url) continue;
+    // A token linked to a sheet/item just mirrors that source's image — the sheet/item is the
+    // real reference, so don't double-count the mirror (otherwise one portrait reads as "used
+    // in N places", once per token). Only a standalone token with its own image counts here.
+    const linkedSheetId = token.sheetId ?? token.ownerPlayerId;
+    const mirrorsSheet = linkedSheetId != null && state.sheets[linkedSheetId]?.data.iconUrl === url;
+    const mirrorsItem = token.itemId != null && state.items[token.itemId]?.iconUrl === url;
+    if (mirrorsSheet || mirrorsItem) continue;
+    usage.push({ kind: "token", id: token.id, label: token.label || "Token" });
   }
   for (const record of Object.values(state.sheets)) {
     if (record.data.iconUrl === url) {

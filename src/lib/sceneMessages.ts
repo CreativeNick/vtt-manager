@@ -28,7 +28,12 @@ export function sceneMessageSceneId(msg: ClientMessage): string | null {
     case "UPDATE_SCENE":
       return msg.scene.id;
     case "SET_WALLS":
+    case "ADD_WALL":
+    case "UPDATE_WALL":
+    case "UPDATE_WALLS":
+    case "REMOVE_WALL":
     case "TOGGLE_DOOR":
+    case "SET_DOOR_STATE":
     case "ADD_LIGHT":
     case "UPDATE_LIGHT":
     case "REMOVE_LIGHT":
@@ -66,16 +71,61 @@ export function applySceneMessage(scene: Scene, msg: ClientMessage): Scene {
         .slice(-MAX_WALLS);
       return { ...scene, walls };
     }
+    case "ADD_WALL": {
+      const wall = sanitizeWall(msg.wall);
+      if (!wall || scene.walls.length >= MAX_WALLS) {
+        return scene;
+      }
+      return { ...scene, walls: [...scene.walls, wall] };
+    }
+    case "UPDATE_WALL": {
+      const wall = sanitizeWall(msg.wall);
+      if (!wall) {
+        return scene;
+      }
+      return {
+        ...scene,
+        walls: scene.walls.map((item) => (item.id === wall.id ? wall : item)),
+      };
+    }
+    case "UPDATE_WALLS": {
+      if (!Array.isArray(msg.walls)) {
+        return scene;
+      }
+      // Upsert each sanitized wall by id; unknown ids append while under the cap.
+      const byId = new Map(scene.walls.map((wall) => [wall.id, wall]));
+      for (const raw of msg.walls) {
+        const wall = sanitizeWall(raw);
+        if (!wall) continue;
+        if (!byId.has(wall.id) && byId.size >= MAX_WALLS) continue;
+        byId.set(wall.id, wall);
+      }
+      return { ...scene, walls: Array.from(byId.values()) };
+    }
+    case "REMOVE_WALL":
+      return { ...scene, walls: scene.walls.filter((wall) => wall.id !== msg.wallId) };
     case "TOGGLE_DOOR": {
       const door = scene.walls.find((wall) => wall.id === msg.wallId);
-      if (!door || door.kind !== "door") {
+      if (!door || !door.door || door.door === "none" || door.state === "locked") {
         return scene;
       }
       return {
         ...scene,
         walls: scene.walls.map((wall) =>
-          wall.id === msg.wallId ? { ...wall, open: !wall.open } : wall,
+          wall.id === msg.wallId
+            ? { ...wall, state: wall.state === "open" ? "closed" : "open" }
+            : wall,
         ),
+      };
+    }
+    case "SET_DOOR_STATE": {
+      const door = scene.walls.find((wall) => wall.id === msg.wallId);
+      if (!door || !door.door || door.door === "none") {
+        return scene;
+      }
+      return {
+        ...scene,
+        walls: scene.walls.map((wall) => (wall.id === msg.wallId ? { ...wall, state: msg.state } : wall)),
       };
     }
     case "ADD_LIGHT": {

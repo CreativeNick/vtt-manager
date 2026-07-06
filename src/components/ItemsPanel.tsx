@@ -34,6 +34,7 @@ export function ItemsPanel({ state, dm, openItemSheet, dropItemAt }: ItemsPanelP
       id: item.id,
       name: item.name,
       iconUrl: item.iconUrl,
+      iconCrop: item.iconCrop,
       color: "var(--surface-2)",
       folderId: item.folderId,
       order: item.sortOrder,

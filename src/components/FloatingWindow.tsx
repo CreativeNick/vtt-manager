@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { clampSizeToViewport, clampToViewport, CLAMP_MARGIN } from "../lib/clampToViewport";
+import { campaignKey } from "../lib/campaignStore";
 
 export type WindowPos = { x: number; y: number };
 
@@ -26,14 +27,17 @@ function isTopmost(id: string): boolean {
   return topId === id;
 }
 
-const positionKey = (id: string) => `cm-window-pos:${id}`;
+// Geometry is namespaced per campaign (`cm:{roomId}:win:{id}`) so each campaign keeps its own
+// window layout; falls back to the pre-namespacing global key for a one-time migration.
+const positionKey = (roomId: string, id: string) => campaignKey(roomId, `win:${id}`);
+const legacyPositionKey = (id: string) => `cm-window-pos:${id}`;
 
 /** Window geometry; h === null means "auto height" (content-sized, CSS-capped). */
 type WindowGeom = { x: number; y: number; w: number; h: number | null };
 
-function loadStoredGeom(id: string): Partial<WindowGeom> | null {
+function loadStoredGeom(roomId: string, id: string): Partial<WindowGeom> | null {
   try {
-    const raw = localStorage.getItem(positionKey(id));
+    const raw = localStorage.getItem(positionKey(roomId, id)) ?? localStorage.getItem(legacyPositionKey(id));
     if (!raw) {
       return null;
     }
@@ -53,9 +57,9 @@ function loadStoredGeom(id: string): Partial<WindowGeom> | null {
   return null;
 }
 
-function storeGeom(id: string, geom: WindowGeom) {
+function storeGeom(roomId: string, id: string, geom: WindowGeom) {
   try {
-    localStorage.setItem(positionKey(id), JSON.stringify(geom));
+    localStorage.setItem(positionKey(roomId, id), JSON.stringify(geom));
   } catch {
     // Storage full/unavailable — geometry simply won't persist.
   }
@@ -78,6 +82,8 @@ const RESIZE_DIRS: ResizeDir[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 type FloatingWindowProps = {
   /** Stable id — used for z-ordering and the persisted geometry. */
   id: string;
+  /** Campaign id — geometry is remembered per campaign. */
+  roomId: string;
   title: string;
   onClose: () => void;
   children: ReactNode;
@@ -102,6 +108,7 @@ type FloatingWindowProps = {
 /// </summary>
 export function FloatingWindow({
   id,
+  roomId,
   title,
   onClose,
   children,
@@ -113,7 +120,7 @@ export function FloatingWindow({
   onDock,
 }: FloatingWindowProps) {
   const [geom, setGeom] = useState<WindowGeom>(() => {
-    const stored = loadStoredGeom(id);
+    const stored = loadStoredGeom(roomId, id);
     const def = defaultPos(window.innerWidth, window.innerHeight);
     const w = clampSizeToViewport({ w: stored?.w ?? width, h: 1 }).w;
     const pos = clampToViewport(
@@ -183,9 +190,9 @@ export function FloatingWindow({
 
   const persist = useCallback(
     (g: WindowGeom) => {
-      storeGeom(id, g);
+      storeGeom(roomId, id, g);
     },
-    [id],
+    [roomId, id],
   );
 
   const startDrag = useCallback(

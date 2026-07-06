@@ -37,7 +37,7 @@ import {
   sanitizeLight,
   sanitizeWall,
   SHEET_SECTIONS,
-  syncPlayerTokenFromState,
+  syncTokenFromState,
   type ClientMessage,
   type CombatEntry,
   type ConnectedPlayer,
@@ -48,6 +48,7 @@ import {
   type Scene,
   type ServerMessage,
 } from "../src/lib/types";
+import { clampMove, movementSegments } from "../src/lib/visibility";
 import { rollDiceExpression, rollWithAdvantage, secureRandInt } from "../src/lib/dice";
 import { partsFromExpression, resolveCheck } from "../src/lib/rollCheck";
 import {
@@ -560,7 +561,7 @@ export default class GameServer implements Party.Server {
       if (record.ownerSlotId) {
         this.state.tokens = this.state.tokens.map((token) =>
           token.ownerPlayerId === record.ownerSlotId
-            ? syncPlayerTokenFromState(token, this.state)
+            ? syncTokenFromState(token, this.state)
             : token,
         );
       }
@@ -578,6 +579,20 @@ export default class GameServer implements Party.Server {
         if (!token || token.ownerPlayerId !== meta.playerId) {
           this.sendTo(sender, { type: "ERROR", message: "You can only move your own token." });
           return;
+        }
+        // Authoritative wall collision: reject a player move whose path crosses a movement wall.
+        // (The DM bypasses — DM moves take the general path below, not this one.)
+        const moveScene = this.state.scenes.find((s) => s.id === token.sceneId);
+        if (moveScene && moveScene.wallsBlockMovement !== false) {
+          const clamped = clampMove(
+            { x: token.x, y: token.y },
+            { x: parsed.x, y: parsed.y },
+            movementSegments(moveScene.walls),
+          );
+          if (clamped.x !== parsed.x || clamped.y !== parsed.y) {
+            this.sendTo(sender, { type: "ERROR", message: "A wall blocks the way." });
+            return;
+          }
         }
         token.x = parsed.x;
         token.y = parsed.y;
@@ -657,7 +672,7 @@ export default class GameServer implements Party.Server {
       // Keep player tokens in sync (portrait/label/etc. unaffected, but future-proof).
       if (record.ownerSlotId) {
         this.state.tokens = this.state.tokens.map((token) =>
-          token.ownerPlayerId === record.ownerSlotId ? syncPlayerTokenFromState(token, this.state) : token,
+          token.ownerPlayerId === record.ownerSlotId ? syncTokenFromState(token, this.state) : token,
         );
       }
       // Log during combat. Hide the numbers for players when the NPC's HP is secret
@@ -1132,6 +1147,29 @@ export default class GameServer implements Party.Server {
       return;
     }
 
+    // Door toggling is allowed for players (opening doors as they explore) — handled BEFORE the
+    // DM-only map gate. Locked doors need a DM; secret doors are DM-only (players don't see them
+    // as doors). Wall editing + SET_DOOR_STATE stay DM-only inside the gated switch below.
+    if (parsed.type === "TOGGLE_DOOR") {
+      const scene = this.state.scenes.find((item) => item.id === parsed.sceneId);
+      const door = scene?.walls.find((wall) => wall.id === parsed.wallId);
+      if (!scene || !door || !door.door || door.door === "none") {
+        return;
+      }
+      if (!this.isDm(sender.id)) {
+        if (door.state === "locked") {
+          this.sendTo(sender, { type: "ERROR", message: "That door is locked." });
+          return;
+        }
+        if (door.door === "secret") {
+          return; // players don't even know it's a door
+        }
+      }
+      door.state = door.state === "open" ? "closed" : "open";
+      void this.broadcastState();
+      return;
+    }
+
     if (!this.isDm(sender.id)) {
       this.sendTo(sender, { type: "ERROR", message: "Only the DM can control the map." });
       return;
@@ -1182,7 +1220,7 @@ export default class GameServer implements Party.Server {
         break;
       }
       case "ADD_TOKEN": {
-        const token = syncPlayerTokenFromState(normalizeToken(parsed.token), this.state);
+        const token = syncTokenFromState(normalizeToken(parsed.token), this.state);
         this.state.tokens.push(token);
         this.logEvent(`Token “${token.label || "Token"}” placed.`);
         void this.broadcastState();
@@ -1514,6 +1552,8 @@ export default class GameServer implements Party.Server {
         }
         break;
       }
+      // NOTE: this whole switch is already DM-gated (see the isDm check above). Wall EDITING is
+      // DM-only; door TOGGLING (players opening doors) is handled before the gate.
       case "SET_WALLS": {
         const scene = this.state.scenes.find((item) => item.id === parsed.sceneId);
         if (!scene) {
@@ -1530,13 +1570,72 @@ export default class GameServer implements Party.Server {
         void this.broadcastState();
         break;
       }
-      case "TOGGLE_DOOR": {
+      case "ADD_WALL": {
         const scene = this.state.scenes.find((item) => item.id === parsed.sceneId);
-        const door = scene?.walls.find((wall) => wall.id === parsed.wallId);
-        if (!scene || !door || door.kind !== "door") {
+        const wall = sanitizeWall(parsed.wall);
+        if (!scene || !wall) {
+          this.sendTo(sender, { type: "ERROR", message: "Invalid wall." });
+          return;
+        }
+        if (scene.walls.length >= MAX_WALLS) {
+          this.sendTo(sender, { type: "ERROR", message: `Wall limit reached (${MAX_WALLS}).` });
+          return;
+        }
+        scene.walls.push(wall);
+        void this.broadcastState();
+        break;
+      }
+      case "UPDATE_WALL": {
+        const scene = this.state.scenes.find((item) => item.id === parsed.sceneId);
+        const wall = sanitizeWall(parsed.wall);
+        if (!scene || !wall) {
+          this.sendTo(sender, { type: "ERROR", message: "Invalid wall." });
+          return;
+        }
+        scene.walls = scene.walls.map((item) => (item.id === wall.id ? wall : item));
+        void this.broadcastState();
+        break;
+      }
+      case "UPDATE_WALLS": {
+        const scene = this.state.scenes.find((item) => item.id === parsed.sceneId);
+        if (!scene) {
           break;
         }
-        door.open = !door.open;
+        if (!Array.isArray(parsed.walls)) {
+          this.sendTo(sender, { type: "ERROR", message: "Invalid walls." });
+          return;
+        }
+        // Upsert each sanitized wall by id; unknown ids append while under the cap.
+        const byId = new Map(scene.walls.map((wall) => [wall.id, wall]));
+        for (const raw of parsed.walls) {
+          const wall = sanitizeWall(raw);
+          if (!wall) continue;
+          if (!byId.has(wall.id) && byId.size >= MAX_WALLS) continue;
+          byId.set(wall.id, wall);
+        }
+        scene.walls = Array.from(byId.values());
+        void this.broadcastState();
+        break;
+      }
+      case "REMOVE_WALL": {
+        const scene = this.state.scenes.find((item) => item.id === parsed.sceneId);
+        if (!scene) {
+          break;
+        }
+        scene.walls = scene.walls.filter((wall) => wall.id !== parsed.wallId);
+        void this.broadcastState();
+        break;
+      }
+      case "SET_DOOR_STATE": {
+        const scene = this.state.scenes.find((item) => item.id === parsed.sceneId);
+        const door = scene?.walls.find((wall) => wall.id === parsed.wallId);
+        if (!scene || !door || !door.door || door.door === "none") {
+          break;
+        }
+        if (!["closed", "open", "locked"].includes(parsed.state)) {
+          break;
+        }
+        door.state = parsed.state;
         void this.broadcastState();
         break;
       }

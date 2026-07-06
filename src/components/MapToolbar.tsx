@@ -1,7 +1,13 @@
 import type { ReactNode } from "react";
 import type { MapTool } from "../map/tools/types";
 import type { LightPreset } from "../map/tools/lights";
-import { TEMPLATE_KINDS, type LightBlendMode, type TemplateKind } from "../lib/types";
+import {
+  TEMPLATE_KINDS,
+  WALL_BRUSHES,
+  type LightBlendMode,
+  type TemplateKind,
+  type WallBrush,
+} from "../lib/types";
 import type { History } from "../lib/history";
 
 const DRAW_COLORS = ["#ffd166", "#ff6b6b", "#7cc4ff", "#8ce99a", "#f3f0ff"];
@@ -26,6 +32,15 @@ const LIGHT_PRESET_LIST: Array<{ id: LightPreset; label: string }> = [
   { id: "torch", label: "Torch" },
   { id: "lantern", label: "Lantern" },
 ];
+/** Labels for the walls tool's draw brushes (channel presets + a plain door). */
+const WALL_BRUSH_LABELS: Record<WallBrush, string> = {
+  normal: "🧱 Wall (blocks all)",
+  terrain: "🌿 Terrain (see past one)",
+  invisible: "🪟 Invisible (blocks movement)",
+  ethereal: "👻 Ethereal (blocks sight)",
+  window: "🔲 Window (partial sight)",
+  door: "🚪 Door",
+};
 
 type MapToolbarProps = {
   isDm: boolean;
@@ -72,10 +87,18 @@ type MapToolbarProps = {
   onLightBlendMode: (mode: LightBlendMode) => void;
   visionPreview: boolean;
   onToggleVisionPreview: () => void;
-  wallKind: "wall" | "door";
-  onWallKind: (kind: "wall" | "door") => void;
+  /** Walls tool (Phase 6.9): draw vs select mode, the draw brush, clone + movement toggle. */
+  wallMode: "draw" | "select";
+  onWallMode: (mode: "draw" | "select") => void;
+  wallBrush: WallBrush;
+  onWallBrush: (brush: WallBrush) => void;
   wallCount: number;
+  wallSelectionCount: number;
+  onCloneWalls: () => void;
   onClearWalls: () => void;
+  /** Per-scene: walls block token movement (players; DM always passes). */
+  wallsBlockMovement: boolean;
+  onToggleWallsBlockMovement: () => void;
   lightPreset: LightPreset;
   onLightPreset: (preset: LightPreset) => void;
   lightCount: number;
@@ -160,10 +183,16 @@ export function MapToolbar({
   onLightBlendMode,
   visionPreview,
   onToggleVisionPreview,
-  wallKind,
-  onWallKind,
+  wallMode,
+  onWallMode,
+  wallBrush,
+  onWallBrush,
   wallCount,
+  wallSelectionCount,
+  onCloneWalls,
   onClearWalls,
+  wallsBlockMovement,
+  onToggleWallsBlockMovement,
   lightPreset,
   onLightPreset,
   lightCount,
@@ -441,21 +470,57 @@ export function MapToolbar({
       {activeToolId === "walls" && isDm ? (
         <div className="map-toolbar-options">
           {lightingRow}
-          <Label>Draw</Label>
+          <Label>Mode</Label>
           <Row>
             <OptBtn
-              active={wallKind === "wall"}
-              title="Draw solid walls (blocks sight)"
-              onClick={() => onWallKind("wall")}
+              active={wallMode === "draw"}
+              title="Draw new walls — click to chain segments, drag for one; Esc ends the chain"
+              onClick={() => onWallMode("draw")}
             >
-              🧱 Wall
+              ✏️ Draw
             </OptBtn>
             <OptBtn
-              active={wallKind === "door"}
-              title="Draw doors (open/close to pass sight)"
-              onClick={() => onWallKind("door")}
+              active={wallMode === "select"}
+              title="Select & edit walls — box-select, drag endpoints/body, double-click to configure"
+              onClick={() => onWallMode("select")}
             >
-              🚪 Door
+              ⟐ Select
+            </OptBtn>
+          </Row>
+          {wallMode === "draw" ? (
+            <Row>
+              <select
+                className="map-blend-select"
+                value={wallBrush}
+                title="What a fresh wall is drawn as"
+                onChange={(e) => onWallBrush(e.target.value as WallBrush)}
+                style={{ flex: 1 }}
+              >
+                {WALL_BRUSHES.map((b) => (
+                  <option key={b} value={b}>
+                    {WALL_BRUSH_LABELS[b]}
+                  </option>
+                ))}
+              </select>
+            </Row>
+          ) : (
+            <Row>
+              <OptBtn
+                title="Duplicate the selected walls (Ctrl+D)"
+                disabled={wallSelectionCount === 0}
+                onClick={onCloneWalls}
+              >
+                ⧉ Clone{wallSelectionCount ? ` (${wallSelectionCount})` : ""}
+              </OptBtn>
+            </Row>
+          )}
+          <Row>
+            <OptBtn
+              active={wallsBlockMovement}
+              title="When on, movement-blocking walls stop players' tokens (the DM always passes through)"
+              onClick={onToggleWallsBlockMovement}
+            >
+              {wallsBlockMovement ? "🚧 Walls block movement" : "🚶 Movement unblocked"}
             </OptBtn>
           </Row>
           <Row>
@@ -468,7 +533,9 @@ export function MapToolbar({
             </OptBtn>
           </Row>
           <span className="map-toolbar-hint">
-            Drag to draw · Shift flips kind · click a door to open/close · right-click to delete
+            {wallMode === "draw"
+              ? "Click to chain segments · drag for a single · endpoints snap · Esc ends the chain"
+              : "Click or box-select · drag endpoints/body to move · dbl-click to configure · right-click deletes · Ctrl+D clones"}
           </span>
         </div>
       ) : null}

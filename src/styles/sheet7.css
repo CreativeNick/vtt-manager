@@ -142,11 +142,13 @@
 }
 .sheet-portrait--lg {
   width: 100%;
-  height: 9rem;
+  aspect-ratio: 1 / 1;
+  height: auto;
 }
 .sheet-portrait-btn--lg {
   width: 100%;
-  height: 9rem;
+  aspect-ratio: 1 / 1;
+  height: auto;
 }
 .ac-shield {
   align-self: center;

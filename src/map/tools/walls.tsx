@@ -1,26 +1,64 @@
-import { Line } from "react-konva";
-import type { Wall } from "../../lib/types";
-import type { MapTool, ToolPoint, ToolRuntime } from "./types";
+import { Line, Rect } from "react-konva";
+import { wallFromBrush, type Wall } from "../../lib/types";
+import { segmentsIntersect } from "../../lib/visibility";
+import type { MapTool, ToolRuntime } from "./types";
 
 /// <summary>
-/// Walls & doors tool (DM, Phase 6): drag to draw a sight-blocking segment.
-/// **Shift-drag draws a door** (openable, blocks only while closed). Endpoints snap to
-/// grid intersections when snap is on. Deleting a wall / toggling a door happens by
-/// clicking the rendered segments (handled in MapCanvas), not through this tool.
+/// Walls & doors tool (DM, Phase 6.9). Two modes (toolbar):
+/// - **draw**: click to chain wall segments (each completed segment commits immediately, so the
+///   chain is individually undoable); a press-drag-release makes a single segment. Endpoints snap
+///   to nearby wall endpoints, then the grid. The current chain vertex + a rubber-band preview
+///   render live. Press Esc / switch tools to end the chain.
+/// - **select**: drag a marquee to select walls (Shift adds); a click on empty space clears the
+///   selection. Selecting, dragging endpoints/segments, config, delete happen on the rendered
+///   handles (see WallsLightsEditor in MapVision).
 /// </summary>
 
-type WallDraft = { x0: number; y0: number; x1: number; y1: number; door: boolean };
+type Pt = { x: number; y: number };
+type WallDraft =
+  | { mode: "draw"; last: Pt | null; down: Pt | null; preview: Pt | null }
+  | { mode: "marquee"; x0: number; y0: number; x1: number; y1: number };
 
-/** Snap a point to the nearest grid intersection (corner), honoring the grid offset. */
-function snapCorner(rt: ToolRuntime, x: number, y: number): ToolPoint {
-  if (!rt.snap || rt.scene.gridSize <= 0) {
-    return { x, y };
+/** px: a down≈up gesture is a click (chain vertex); a larger delta is a drag (single segment). */
+const CLICK_TOL = 6;
+
+/** Build + send one wall segment for the current brush. */
+function commitSegment(rt: ToolRuntime, a: Pt, b: Pt): void {
+  if (Math.hypot(b.x - a.x, b.y - a.y) < 1) {
+    return; // degenerate
   }
-  const g = rt.scene.gridSize;
-  return {
-    x: Math.round((x - rt.scene.gridOffsetX) / g) * g + rt.scene.gridOffsetX,
-    y: Math.round((y - rt.scene.gridOffsetY) / g) * g + rt.scene.gridOffsetY,
+  const wall: Wall = {
+    id: `wall-${crypto.randomUUID().slice(0, 8)}`,
+    x1: a.x,
+    y1: a.y,
+    x2: b.x,
+    y2: b.y,
+    ...wallFromBrush(rt.wallBrush),
   };
+  rt.send({ type: "ADD_WALL", sceneId: rt.scene.id, wall });
+}
+
+/** Ids of walls that intersect (or are contained by) the marquee box. */
+function wallsInBox(walls: Wall[], box: { x0: number; y0: number; x1: number; y1: number }): string[] {
+  const xmin = Math.min(box.x0, box.x1);
+  const xmax = Math.max(box.x0, box.x1);
+  const ymin = Math.min(box.y0, box.y1);
+  const ymax = Math.max(box.y0, box.y1);
+  const inside = (x: number, y: number) => x >= xmin && x <= xmax && y >= ymin && y <= ymax;
+  const edges: Array<[number, number, number, number]> = [
+    [xmin, ymin, xmax, ymin],
+    [xmax, ymin, xmax, ymax],
+    [xmax, ymax, xmin, ymax],
+    [xmin, ymax, xmin, ymin],
+  ];
+  return walls
+    .filter(
+      (w) =>
+        inside(w.x1, w.y1) ||
+        inside(w.x2, w.y2) ||
+        edges.some((e) => segmentsIntersect(w.x1, w.y1, w.x2, w.y2, e[0], e[1], e[2], e[3])),
+    )
+    .map((w) => w.id);
 }
 
 export const wallsTool: MapTool = {
@@ -31,48 +69,92 @@ export const wallsTool: MapTool = {
   dmOnly: true,
   cursor: "crosshair",
   onDown: (event, rt) => {
-    const p = snapCorner(rt, event.world.x, event.world.y);
-    // The toolbar sets the default kind; Shift flips to the other kind for a quick one-off.
-    const door = rt.wallKind === "door" ? !event.shiftKey : event.shiftKey;
-    rt.setDraft({ x0: p.x, y0: p.y, x1: p.x, y1: p.y, door } satisfies WallDraft);
+    if (rt.wallMode === "select") {
+      rt.setDraft({
+        mode: "marquee",
+        x0: event.world.x,
+        y0: event.world.y,
+        x1: event.world.x,
+        y1: event.world.y,
+      } satisfies WallDraft);
+      return;
+    }
+    const p = rt.snapWallPoint(event.world.x, event.world.y);
+    const prev = rt.draft as WallDraft | null;
+    const last = prev && prev.mode === "draw" ? prev.last : null;
+    rt.setDraft({ mode: "draw", last, down: p, preview: p } satisfies WallDraft);
   },
   onMove: (event, rt) => {
     const draft = rt.draft as WallDraft | null;
     if (!draft) {
       return;
     }
-    const p = snapCorner(rt, event.world.x, event.world.y);
-    rt.setDraft({ ...draft, x1: p.x, y1: p.y });
-  },
-  onUp: (_event, rt) => {
-    const draft = rt.draft as WallDraft | null;
-    rt.setDraft(null);
-    if (!draft || Math.hypot(draft.x1 - draft.x0, draft.y1 - draft.y0) < 5) {
-      return; // too short to be a real segment
+    if (draft.mode === "marquee") {
+      rt.setDraft({ ...draft, x1: event.world.x, y1: event.world.y });
+      return;
     }
-    const wall: Wall = {
-      id: `wall-${crypto.randomUUID().slice(0, 8)}`,
-      x1: draft.x0,
-      y1: draft.y0,
-      x2: draft.x1,
-      y2: draft.y1,
-      kind: draft.door ? "door" : "wall",
-    };
-    rt.send({ type: "SET_WALLS", sceneId: rt.scene.id, walls: [...rt.scene.walls, wall] });
+    rt.setDraft({ ...draft, preview: rt.snapWallPoint(event.world.x, event.world.y) });
+  },
+  onUp: (event, rt) => {
+    const draft = rt.draft as WallDraft | null;
+    if (!draft) {
+      return;
+    }
+    if (draft.mode === "marquee") {
+      const dragged = Math.hypot(draft.x1 - draft.x0, draft.y1 - draft.y0) > CLICK_TOL;
+      rt.onWallSelect(dragged ? wallsInBox(rt.scene.walls, draft) : [], event.shiftKey);
+      rt.setDraft(null);
+      return;
+    }
+    const up = rt.snapWallPoint(event.world.x, event.world.y);
+    const down = draft.down ?? up;
+    const dragged = Math.hypot(up.x - down.x, up.y - down.y) > CLICK_TOL;
+    if (draft.last === null) {
+      if (dragged) {
+        // Press-drag-release: commit one segment, then keep chaining from its end.
+        commitSegment(rt, down, up);
+        rt.setDraft({ mode: "draw", last: up, down: null, preview: up } satisfies WallDraft);
+      } else {
+        // First click starts the chain.
+        rt.setDraft({ mode: "draw", last: down, down: null, preview: down } satisfies WallDraft);
+      }
+      return;
+    }
+    // Extend the chain: commit last→up, continue from up.
+    commitSegment(rt, draft.last, up);
+    rt.setDraft({ mode: "draw", last: up, down: null, preview: up } satisfies WallDraft);
   },
   renderDraft: (draft) => {
     const d = draft as WallDraft | null;
     if (!d) {
       return null;
     }
-    return (
-      <Line
-        points={[d.x0, d.y0, d.x1, d.y1]}
-        stroke={d.door ? "#c9a36b" : "#7cc4ff"}
-        strokeWidth={3}
-        dash={d.door ? [10, 7] : undefined}
-        listening={false}
-      />
-    );
+    if (d.mode === "marquee") {
+      return (
+        <Rect
+          x={Math.min(d.x0, d.x1)}
+          y={Math.min(d.y0, d.y1)}
+          width={Math.abs(d.x1 - d.x0)}
+          height={Math.abs(d.y1 - d.y0)}
+          stroke="#ffd166"
+          strokeWidth={1}
+          dash={[6, 4]}
+          fill="rgba(255,209,102,0.08)"
+          listening={false}
+        />
+      );
+    }
+    if (d.last && d.preview) {
+      return (
+        <Line
+          points={[d.last.x, d.last.y, d.preview.x, d.preview.y]}
+          stroke="#7cc4ff"
+          strokeWidth={3}
+          dash={[8, 6]}
+          listening={false}
+        />
+      );
+    }
+    return null;
   },
 };

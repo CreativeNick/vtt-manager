@@ -13,7 +13,9 @@ architecture reference — **historical**, describes the codebase before Phases 
 the fleshed-out sheet data model, item weapon fields, structured `ROLL_CHECK` with
 color-coded log chips, quick-HP steppers, token facing, measurement templates, coin flip,
 map pins + scene pre-staging, a DM Assets page, and full campaign export/import — see its
-"as built" note. **Phase 8 (full aesthetic revamp + sound design) is next.** Phases 6.6–6.8
+"as built" note. **Phase 6.9 (walls revamp — types+channels, movement blocking, full editing) shipped
+and machine-verified (manual two-window UX pass still owed); Phase 8 (full aesthetic
+revamp + sound design) follows.** Phases 6.6–6.8
 had already pulled a lot forward (lighting revamp; token shapes/sizing/image tokens; item
 tokens + Item Sheet + Items page; independent NPC folder trees; directory multi-select +
 folder reorder). The roadmap was restructured
@@ -101,7 +103,7 @@ stripped server-side in `redactStateFor` (Phase 0) and verified at the WebSocket
 | DM grid size change                                                                                                       | 5 ✅ — calibration gesture + numeric inputs                                                                                        |
 | Measure distance                                                                                                          | 5 ✅ — synced ruler, Chebyshev feet                                                                                                |
 | Annotations                                                                                                               | 5 ✅ — freehand draw; DM persists, players fade                                                                                    |
-| Walls, lights, vision (+directional)                                                                                      | 6 ✅ (v1: walls/doors/lights + LOS mask) · 6.6 ✅ (gradual falloff, color, animation, directional wedges, darkness 0–1 + day/night) |
+| Walls, lights, vision (+directional)                                                                                      | 6 ✅ (v1: walls/doors/lights + LOS mask) · 6.6 ✅ (gradual falloff, color, animation, directional wedges, darkness 0–1 + day/night) · 6.9 ✅ (walls revamp: types+channels, movement blocking, full editing) |
 | Soundboard (idea)                                                                                                         | 9                                                                                                                                 |
 | Custom CSS themes (idea)                                                                                                  | 9 (enabled by 0; themed after 8)                                                                                                  |
 | Actors/Items directories, folders, inventory *(added via UX feedback)*                                                    | 1–2 (shipped: `Directory`, folders, `sortOrder`, sheet inventory)                                                                 |
@@ -1291,6 +1293,91 @@ per-light background saturation/contrast/shadow adjustments (needs per-region pi
 
 
 
+## Phase 6.9 — Walls revamp: types + channels, movement blocking, full editing — ✅ SHIPPED (manual UX check owed)
+
+> **As built:** shipped per the spec below; machine-verified (`tsc` + `npm run build` pass;
+> `unit-visibility` 40 checks incl. marching/limited, one-way, `clampMove`, and legacy→channel
+> migration parity; `unit-scene-editor` covers the granular ADD/UPDATE/REMOVE_WALL + SET_DOOR_STATE
+> reducers; smoke `phase6` (DM-only editing, player door toggle, locked-door refusal, caps),
+> `scenes`, `phase7`, and a new `smoke-walls-move` (server movement-collision guard: player blocked,
+> clear path allowed, toggle-off passes, DM bypass) all green). Deltas & notes:
+>
+> - **Door interaction opened to players.** v1 doors were DM-only; now `TOGGLE_DOOR` is handled
+>   *before* the DM-only map gate so players open unlocked, non-secret doors (locked → error; secret →
+>   ignored). A new `DoorLayer` (MapVision) renders clickable door glyphs at door midpoints for ALL
+>   clients (secret doors DM-only); wall EDITING stays DM-only in `WallsLightsEditor`.
+> - **`wallsBlockMovement` defaults ON** (normalizeScene) — existing scenes begin enforcing wall
+>   collision; the DM disables it per scene from the walls toolbar. DM token drags always bypass.
+> - **Chained drawing commits per segment** (ADD_WALL on each completed segment) rather than one
+>   UPDATE_WALLS for the whole chain — simpler and gives per-segment undo. Esc / tool-switch ends the
+>   chain; a press-drag-release still makes a single segment. Endpoints snap to nearby wall endpoints
+>   then the grid (`snapWallPoint`, shared by the tool + the editor's endpoint handles).
+> - **Editing** (select mode): box-select + Shift multi-select, drag endpoints or the whole
+>   segment/selection, `WallConfigPanel` (double-click) with preset + per-channel + direction + door
+>   controls (field-patch edits apply to the whole selection), clone (button + Ctrl/Cmd+D), one-way
+>   arrows. One commit per gesture.
+> - **Movement collision is center-path only** (`clampMove` rejects a move whose center path crosses a
+>   movement wall; never traps a token). Radius-aware capsule collision + clamp-to-just-before-the-wall
+>   are noted future refinements. Directional walls are two-way for movement in v1.
+> - **Files:** `src/lib/{types,visibility,sceneMessages}.ts`, `partykit/server.ts`,
+>   `src/components/{MapVision,MapCanvas,MapToolbar}.tsx`, `src/map/tools/{types,walls}.tsx`, **new**
+>   `src/components/WallConfigPanel.tsx`, tests `unit-visibility` + `smoke-walls-move` (+ updated
+>   `unit-scene-editor`, `smoke-phase6`, `smoke-scenes`).
+> - **Still owed:** the two-window manual UX pass (draw/chain feel, endpoint/body drag, box-select +
+>   clone, per-type vision behavior, locked/secret doors, movement toggle with DM bypass, undo/redo,
+>   live player sync). Follow-ups: per-door player-visibility gating of glyphs (currently always shown
+>   to players), proximity/attenuation walls, and the sound channel.
+
+Phase 6's walls shipped a focused v1: a wall is `{ x1,y1,x2,y2, kind:"wall"|"door", open? }` that
+blocks **sight and light only**, with binary doors, an all-or-nothing vision sweep, and **no
+post-creation editing** (draw one segment per drag; delete or clear-all — that's it). This phase brings
+walls up to a FoundryVTT-like standard. Decided with the user: **types+channels model**, **movement
+blocking with a per-scene DM toggle**, and a **full editing overhaul**.
+
+Foundry's key idea we adopt: named "types" are just **presets over orthogonal restriction channels**,
+and doors are **walls with state**, not a separate object.
+
+- **Data model** (`types.ts`): `Wall` gains independent `sight`/`light`/`move` channels
+  (`none|normal|limited` — "limited" = see past one, not two), one-way `dir` (`both|left|right`), door
+  `door` (`none|door|secret`) + `state` (`closed|open|locked`), and a non-authoritative `preset` tag.
+  `WALL_PRESETS` maps Normal/Terrain/Invisible/Ethereal/Window → channel bundles (single source of truth
+  for the config panel + toolbar). `sanitizeWall` migrates legacy `{kind,open}` walls losslessly
+  (`wall`→all-normal, `door`→`door:"door"` + `state`). New `Scene.wallsBlockMovement?` (default on).
+- **Vision sweep** (`visibility.ts`): `wallsToSegments(walls, channel)` builds per-channel segment sets
+  (`"sight"` vs `"light"`); `computeVisibility` marches all hits per ray (terminate on a `normal` hit or
+  the **2nd** `limited` hit) so terrain/window walls "see past one"; a per-origin `cross`-sign prefilter
+  implements one-way walls. Output stays a single angular polygon the existing clip code consumes.
+- **Movement collision** (`visibility.ts` helpers + `MapCanvas` + `server.ts`): `segmentsIntersect` /
+  `movementSegments` / `clampMove` (DOM-free, shared client+server). Client clamps the token drag
+  (`MapCanvas` token `onMove`); the player `MOVE_TOKEN` handler guards authoritatively. Gated on
+  `scene.wallsBlockMovement`; the DM always bypasses.
+- **Editing overhaul** (`walls.tsx` + `WallsLightsEditor` + `MapCanvas` + `tools/types.ts`): chained
+  multi-segment drawing (snap to existing endpoints → grid), drag endpoints/whole segments, box-select +
+  Shift multi-select, clone (Ctrl+D), and a per-wall config panel (`WallConfigPanel.tsx`, modeled on
+  `LightConfigPanel`). One commit per gesture (never per `onDragMove`).
+- **Sync** (`types.ts` protocol, `server.ts`, `sceneMessages.ts`): granular `ADD_WALL` / `UPDATE_WALL` /
+  `UPDATE_WALLS` / `REMOVE_WALL` / `SET_DOOR_STATE` mirroring the light messages (keep `SET_WALLS` for
+  bulk clear/paste and `TOGGLE_DOOR` for player door clicks, refused when `locked`). Undo/redo comes free
+  via `sceneMessages` → `history` inversion. Secret doors are **client-side appearance gating only**
+  (walls are broadcast for client-side vision, so they can't be redacted without breaking LOS).
+- **Toolbar** (`MapToolbar.tsx`): `Draw | Select` mode, preset picker, Clone, a "Walls block movement"
+  scene toggle, Clear-walls, updated hints.
+
+Out of scope (future): sound channel, proximity/attenuation walls, persistent fog-of-war memory.
+
+**Phasing:** A (model + migration + sweep + collision helpers, behavior-preserving) → B (sync + editing
+overhaul) → C (movement collision integration) → D (config panel + door/secret polish).
+
+**Verify:** unit-test the marching sweep (1 limited passes, 2 stack to block, limited-then-normal
+blocks), directional occlusion, and `clampMove`; confirm all-`normal` walls render identically
+(migration parity); `tsc` + `npm run build`; two-window E2E (chained draw, endpoint/segment drag,
+box-select + clone, per-type behavior, locked/secret doors, movement toggle on/off with DM bypass,
+undo/redo, live player sync).
+
+---
+
+
+
 ## Phase 7 — Game-content depth: sheets, items, rolls, DM tools — ✅ SHIPPED
 
 The "make it playable for a real campaign" phase (user, 2026-07-02). Each item follows
@@ -1532,6 +1619,26 @@ the fixed recipe (GameState field → normalize → message → redaction → ca
 > to the identity section so the "every key in exactly one section" guard stays total; item
 > creators in `server.ts`/`ItemsPanel` seed the default). The on-board map token keeps its own
 > centred fit (not wired to `iconCrop`) — possible follow-up.
+> - **Per-campaign UI settings persistence (**new `src/lib/campaignStore.ts` + `App.tsx` +
+> `FloatingWindow.tsx` + `DiceTray.tsx` + `useDiceOverlay.ts` + `MapCanvas.tsx` + `ScenesPage.tsx`
+> + `PageShell.tsx` + `savedCampaigns.ts`**).** UI settings reset on reload, and what little
+> persisted was shared across all campaigns. Now everything is remembered **per campaign**,
+> keyed by `roomId`, in `localStorage` (never the server/R2 — a few KB read synchronously; not
+> cookies). Decisions (user 2026-07-05): scope **everything** per-campaign (layout *and* device
+> toggles); **don't** persist map pan/zoom (kept as fit-to-scene). `campaignStore` wraps
+> localStorage under `cm:{roomId}:{name}`, with a one-time fallback to the pre-namespacing global
+> key so existing prefs migrate in. **Layout** (`dockOpen, dockTab, popped, trayOpen, page,
+> settingsOpen`) persists as a `…:layout` blob: a **restore-on-join** effect (once per `roomId`,
+> re-armed on `leave()`) applies it *before* the combat auto-switch (so an active encounter still
+> wins), and a persist effect saves changes; entity-bound windows (open sheet/item, selection,
+> `secretRolls`, viewport) are excluded. **Device toggles** (snap/toasts/spacebar-click/token-
+> panel, 3D-dice + mute, light-animations, scene-editor-live, roster width) route through the
+> store by `roomId` (threaded via `state.roomId`/props; the audio singletons still read a global
+> mute as a harmless default that the per-campaign restore overrides). **Window + tray geometry**
+> are namespaced by `roomId`; "Reset UI layout" clears the current campaign's geometry and
+> returns popped panels to the dock; deleting a campaign clears its keys. Key by `roomId` only
+> (synchronous at render; a browser is one role per campaign). Purely client-side — `npx tsc` +
+> `npm run build` clean; manual multi-campaign reload check owed by the user.
 > **Note:** Phases 6.7–6.8 already shipped much of the items/tokens/directory scope (Item Sheet,
 > item tokens, token shapes + sizing, item duplicate/drag, an Items page, independent NPC folder
 > trees, directory multi-select, and folder drag-reorder).

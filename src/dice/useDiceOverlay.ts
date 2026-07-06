@@ -8,10 +8,13 @@ import {
   type DieSpec,
   type WorldPoint,
 } from "../lib/dice3d";
+import { campaignKey, writeCampaignFlag } from "../lib/campaignStore";
 import type { DiceAudio } from "./audio";
 import type { DiceEngine, SafeInsets } from "./engine";
 import type { DiceTrayScene } from "./trayScene";
 
+// Global fallback keys (device-wide default, read pre-join and by the audio singletons); the
+// authoritative per-campaign values live under `cm:{roomId}:dice-3d` / `:dice-muted`.
 const ENABLED_KEY = "dice-3d-enabled";
 /** Shared with dice/audio.ts and lib/rollSound.ts — one mute for all dice sound. */
 const MUTED_KEY = "dice-muted";
@@ -19,9 +22,10 @@ const MUTED_KEY = "dice-muted";
 /** Physical dice cap per throw (bigger pools resolve as text rolls). */
 const MAX_PHYSICAL_DICE = 12;
 
-function readEnabled(): boolean {
+function readEnabled(roomId: string | null): boolean {
   try {
-    const stored = window.localStorage.getItem(ENABLED_KEY);
+    const perCampaign = roomId ? window.localStorage.getItem(campaignKey(roomId, "dice-3d")) : null;
+    const stored = perCampaign ?? window.localStorage.getItem(ENABLED_KEY);
     if (stored !== null) {
       return stored !== "0";
     }
@@ -31,9 +35,10 @@ function readEnabled(): boolean {
   return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-function readMuted(): boolean {
+function readMuted(roomId: string | null): boolean {
   try {
-    return window.localStorage.getItem(MUTED_KEY) === "1";
+    const perCampaign = roomId ? window.localStorage.getItem(campaignKey(roomId, "dice-muted")) : null;
+    return (perCampaign ?? window.localStorage.getItem(MUTED_KEY)) === "1";
   } catch {
     return false;
   }
@@ -91,7 +96,7 @@ interface ArmedRoll {
 /// exposes the tray-selection + grab controls. The arena canvas never takes pointer
 /// events — grabs start from the tray well and ride window listeners.
 /// </summary>
-export function useDiceOverlay(room: GameRoom): DiceOverlayController {
+export function useDiceOverlay(room: GameRoom, roomId: string | null): DiceOverlayController {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const containerRef = useCallback((node: HTMLDivElement | null) => setContainer(node), []);
   const [trayMount, setTrayMount] = useState<HTMLDivElement | null>(null);
@@ -118,10 +123,11 @@ export function useDiceOverlay(room: GameRoom): DiceOverlayController {
   const secretRef = useRef(false);
   const safeAreaRef = useRef<(() => SafeInsets) | null>(null);
 
-  const [enabled, setEnabledState] = useState(readEnabled);
+  const [enabled, setEnabledState] = useState(() => readEnabled(roomId));
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
-  const [muted, setMutedState] = useState(readMuted);
+  const [muted, setMutedState] = useState(() => readMuted(roomId));
+  const restoredDiceRoomRef = useRef<string | null>(null);
   const [selection, setSelection] = useState<Record<number, number>>({});
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
@@ -259,7 +265,9 @@ export function useDiceOverlay(room: GameRoom): DiceOverlayController {
     (on: boolean) => {
       setEnabledState(on);
       try {
+        // Global = device default; per-campaign = authoritative for this campaign.
         window.localStorage.setItem(ENABLED_KEY, on ? "1" : "0");
+        if (roomId) writeCampaignFlag(roomId, "dice-3d", on);
       } catch {
         // preference just won't persist
       }
@@ -269,19 +277,34 @@ export function useDiceOverlay(room: GameRoom): DiceOverlayController {
         setSelection({});
       }
     },
-    [ensureEngine],
+    [ensureEngine, roomId],
   );
 
-  const setMuted = useCallback((next: boolean) => {
-    audioRef.current?.setMuted(next);
-    setMutedState(next);
-    // Persist even before the engine/audio loads (settings can toggle with 3D off).
-    try {
-      window.localStorage.setItem(MUTED_KEY, next ? "1" : "0");
-    } catch {
-      // preference just won't persist
+  const setMuted = useCallback(
+    (next: boolean) => {
+      audioRef.current?.setMuted(next);
+      setMutedState(next);
+      // Persist even before the engine/audio loads (settings can toggle with 3D off).
+      try {
+        window.localStorage.setItem(MUTED_KEY, next ? "1" : "0");
+        if (roomId) writeCampaignFlag(roomId, "dice-muted", next);
+      } catch {
+        // preference just won't persist
+      }
+    },
+    [roomId],
+  );
+
+  // Restore this campaign's dice prefs once when it's joined — applies to the engine/audio and
+  // migrates the pre-join global default into the per-campaign key.
+  useEffect(() => {
+    if (!roomId || restoredDiceRoomRef.current === roomId) {
+      return;
     }
-  }, []);
+    restoredDiceRoomRef.current = roomId;
+    setEnabled(readEnabled(roomId));
+    setMuted(readMuted(roomId));
+  }, [roomId, setEnabled, setMuted]);
 
   const adjustSelection = useCallback((sides: number, delta: number) => {
     setSelection((current) => {

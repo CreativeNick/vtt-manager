@@ -1,5 +1,7 @@
-import { DEFAULT_SHEET_TEMPLATE, derivedStatTotal, formatModifier } from "../../lib/types";
+import { useState } from "react";
+import { DEFAULT_SHEET_TEMPLATE, PORTRAIT_ASPECT, derivedStatTotal, formatModifier } from "../../lib/types";
 import { CroppableImage } from "../CroppableImage";
+import { ImageCropModal } from "../ImageCropModal";
 import { NumberInput } from "../NumberInput";
 import { BarMeter, StatBadge } from "./atoms";
 import { DeathSaveTracker } from "./DeathSaveTracker";
@@ -28,6 +30,7 @@ export function SheetSidebar({
 }) {
   const { value, canEdit, kind, update } = sheet;
   const isNpc = kind === "npc";
+  const [cropOpen, setCropOpen] = useState(false);
 
   const skillsSummary = DEFAULT_SHEET_TEMPLATE.skills.filter(
     (skill) => (value.skillProfs[skill.id] ?? 0) > 0 || (value.skillMods[skill.id] ?? 0) !== 0,
@@ -58,18 +61,41 @@ export function SheetSidebar({
             alt="portrait"
           />
           {canEdit ? (
-            <label className="sheet-portrait-change" title="Upload a different portrait">
-              {uploading ? "…" : "Change"}
-              <input
-                type="file"
-                accept="image/*"
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handlePortrait(file);
-                }}
-              />
-            </label>
+            <>
+              <label className="sheet-portrait-change" title="Upload a different portrait">
+                {uploading ? "…" : "Change"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handlePortrait(file);
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="sheet-portrait-crop"
+                title="Crop portrait"
+                onClick={() => setCropOpen(true)}
+              >
+                ✂ Crop
+              </button>
+            </>
+          ) : null}
+          {cropOpen && value.iconUrl ? (
+            <ImageCropModal
+              src={value.iconUrl}
+              crop={value.iconCrop}
+              frameAspect={PORTRAIT_ASPECT}
+              title="Crop portrait"
+              onApply={(iconCrop) => {
+                update({ iconCrop });
+                setCropOpen(false);
+              }}
+              onClose={() => setCropOpen(false)}
+            />
           ) : null}
         </div>
       ) : canEdit ? (
