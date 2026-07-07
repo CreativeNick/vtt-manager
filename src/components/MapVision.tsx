@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Arrow, Circle, Group, Label, Layer, Line, Rect, Tag, Text, Wedge } from "react-konva";
 import type Konva from "konva";
 import { matchWallPreset, type Light, type Scene, type Token, type Wall } from "../lib/types";
-import { computeVisibility, wallsToSegments, type Point } from "../lib/visibility";
+import { computeVisibility, pointInPolygon, wallsToSegments, type Point } from "../lib/visibility";
 
 /// <summary>
 /// Phase 6 dynamic vision + Phase 6.6 lighting revamp. Two Konva layers:
@@ -72,6 +72,13 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/**
+ * Minimum personal sight radius (feet): even a token with no darkvision and no light nearby
+ * always sees a small pool of its immediate surroundings, so a player is never fully blind on
+ * their own square. Matches Foundry's "minimum vision" affordance.
+ */
+export const MIN_SIGHT_FT = 11.25;
 
 /** Radial-gradient prop bundle shared by the erase and tint passes (Circle & Wedge). */
 function radialFill(radiusPx: number, stops: Array<number | string>) {
@@ -234,6 +241,109 @@ function LightReveal({ light, ftToPx, time }: { light: Light; ftToPx: number; ti
   );
 }
 
+/**
+ * One viewer token's sight reveal, clipped to its own line of sight: a `destination-out`
+ * gradient covering the larger of its darkvision or the always-on MIN_SIGHT_FT pool — so a
+ * token with no darkvision and no light nearby still sees its immediate surroundings, both in
+ * the player mask AND the DM's lighting overview. A pure min-sight pool uses a much softer
+ * falloff (small bright core, long fade) so the light→dark transition reads as a gentle
+ * gradient rather than a hard edge.
+ */
+function TokenSightReveal({ token, poly, ftToPx }: { token: Token; poly: Point[]; ftToPx: number }) {
+  const darkvisionPx = (token.vision?.rangeFt ?? 0) * ftToPx;
+  const minPx = MIN_SIGHT_FT * ftToPx;
+  const revealR = Math.max(darkvisionPx, minPx);
+  if (poly.length < 3 || revealR <= 0) return null;
+  // Darkvision keeps its firmer core; a bare min-sight pool fades almost from the center.
+  const brightFrac = darkvisionPx >= minPx ? 0.75 : 0.2;
+  return (
+    <Group clipFunc={polygonClip(poly)}>
+      <Circle
+        x={token.x}
+        y={token.y}
+        radius={revealR}
+        globalCompositeOperation="destination-out"
+        {...radialFill(revealR, eraseStops(brightFrac, true, 1))}
+      />
+    </Group>
+  );
+}
+
+/**
+ * The set of `points` a viewer actually sees, mirroring the darkness mask's geometry: a point is
+ * revealed when it lies inside some viewer's line of sight AND that spot is lit — by ambient light
+ * (darkness < 1), by the viewer's own sight pool (darkvision / MIN_SIGHT_FT), or by a wall-clipped
+ * light. Generic over anything with an `id`/`x`/`y` — token positions, door midpoints, etc.
+ */
+export function computeVisiblePointIds(
+  scene: Scene,
+  viewers: Token[],
+  points: Array<{ id: string; x: number; y: number }>,
+  ftToPx: number,
+  darkness: number,
+): Set<string> {
+  const visible = new Set<string>();
+  if (viewers.length === 0) return visible;
+  const sightSegs = wallsToSegments(scene.walls, "sight", ftToPx);
+  const lightSegs = wallsToSegments(scene.walls, "light", ftToPx);
+  const halfExtent = Math.hypot(scene.width, scene.height) + 20;
+  const ambientLit = 1 - clamp01(darkness) > 0.12; // faint ambient still reveals what's in LOS
+  const minPx = MIN_SIGHT_FT * ftToPx;
+
+  const viewerPolys = viewers.map((v) => ({
+    v,
+    poly: computeVisibility({ x: v.x, y: v.y }, sightSegs, halfExtent),
+    sightR: Math.max((v.vision?.rangeFt ?? 0) * ftToPx, minPx),
+  }));
+  const lights = scene.lights
+    .filter((l) => l.enabled && l.dimR > 0)
+    .map((l) => ({
+      l,
+      dimPx: l.dimR * ftToPx,
+      poly: computeVisibility({ x: l.x, y: l.y }, lightSegs, l.dimR * ftToPx + scene.gridSize),
+    }));
+
+  for (const pt of points) {
+    for (const { v, poly, sightR } of viewerPolys) {
+      if (poly.length < 3 || !pointInPolygon(pt, poly)) continue;
+      const litHere =
+        ambientLit ||
+        Math.hypot(pt.x - v.x, pt.y - v.y) <= sightR ||
+        lights.some(
+          (L) =>
+            Math.hypot(pt.x - L.l.x, pt.y - L.l.y) <= L.dimPx &&
+            (L.poly.length < 3 || pointInPolygon(pt, L.poly)),
+        );
+      if (litHere) {
+        visible.add(pt.id);
+        break;
+      }
+    }
+  }
+  return visible;
+}
+
+/**
+ * The set of `candidates` a viewer actually sees. Used to decide which token NAME labels to draw
+ * ABOVE the mask so a revealed token's name is always fully legible (and a hidden token's name
+ * never leaks through).
+ */
+export function computeVisibleTokenIds(
+  scene: Scene,
+  viewers: Token[],
+  candidates: Token[],
+  ftToPx: number,
+  darkness: number,
+): Set<string> {
+  return computeVisiblePointIds(
+    scene,
+    viewers,
+    candidates.map((t) => ({ id: t.id, x: t.x, y: t.y })),
+    ftToPx,
+    darkness,
+  );
+}
+
 /** Resolves the scene's effective darkness (0 day … 1 dark), migrating the legacy boolean. */
 function sceneDarkness(scene: Scene, override?: number): number {
   if (override !== undefined) return clamp01(override);
@@ -311,25 +421,14 @@ export const VisionMaskLayer = memo(function VisionMaskLayer({
           )}
         </Group>
       ) : null}
-      {/* Darkvision: per token, clipped to that token's OWN line of sight. */}
-      {tokens.map((token, index) => {
-        const poly = polys[index];
-        const darkvisionR = (token.vision?.rangeFt ?? 0) * ftToPx;
-        if (!poly || poly.length < 3 || darkvisionR <= 0) {
-          return null;
-        }
-        return (
-          <Group key={token.id} clipFunc={polygonClip(poly)}>
-            <Circle
-              x={token.x}
-              y={token.y}
-              radius={darkvisionR}
-              globalCompositeOperation="destination-out"
-              {...radialFill(darkvisionR, eraseStops(0.75, true, 1))}
-            />
-          </Group>
-        );
-      })}
+      {/* Darkvision (or the always-on minimum sight pool): per token, clipped to that token's
+          OWN line of sight. Every viewer sees at least MIN_SIGHT_FT around itself so a player with
+          no darkvision and no light nearby is never fully blind on their own square. */}
+      {tokens.map((token, index) =>
+        polys[index] ? (
+          <TokenSightReveal key={token.id} token={token} poly={polys[index]} ftToPx={ftToPx} />
+        ) : null,
+      )}
     </Layer>
   );
 });
@@ -489,24 +588,11 @@ export const DmLightingOverlay = memo(function DmLightingOverlay({
           </Group>
         ),
       )}
-      {tokens.map((token, index) => {
-        const poly = tokenPolys[index];
-        const darkvisionR = (token.vision?.rangeFt ?? 0) * ftToPx;
-        if (!poly || poly.length < 3 || darkvisionR <= 0) {
-          return null;
-        }
-        return (
-          <Group key={token.id} clipFunc={polygonClip(poly)}>
-            <Circle
-              x={token.x}
-              y={token.y}
-              radius={darkvisionR}
-              globalCompositeOperation="destination-out"
-              {...radialFill(darkvisionR, eraseStops(0.75, true, 1))}
-            />
-          </Group>
-        );
-      })}
+      {tokens.map((token, index) =>
+        tokenPolys[index] ? (
+          <TokenSightReveal key={token.id} token={token} poly={tokenPolys[index]} ftToPx={ftToPx} />
+        ) : null,
+      )}
     </Layer>
   );
 });
@@ -737,22 +823,31 @@ function WallNode({
 
 /// <summary>
 /// Clickable door glyphs at door midpoints, shown to ALL clients (players open doors as they
-/// explore). Secret doors render only for the DM. Left-click toggles open/closed; the DM right-clicks
-/// to lock/unlock. The server enforces locked/secret.
+/// explore). Secret doors render only for the DM. A door only renders for a player/preview viewer
+/// once its icon is at least a little LIT — matching the darkness mask's geometry, it stays hidden
+/// in fog of war (players shouldn't spot a door through unseen darkness). Left-click toggles
+/// open/closed; the DM right-clicks to lock/unlock. The server enforces locked/secret.
 /// </summary>
 export const DoorLayer = memo(function DoorLayer({
   scene,
   isDm,
+  visibleDoorIds,
   onToggleDoor,
   onSetDoorState,
 }: {
   scene: Scene;
   isDm: boolean;
+  /** Door ids lit enough to show, or `null` to show every door (lit scene / DM's own overview). */
+  visibleDoorIds: Set<string> | null;
   onToggleDoor: (id: string) => void;
   onSetDoorState: (id: string, state: "closed" | "open" | "locked") => void;
 }) {
   const doors = scene.walls.filter(
-    (w) => w.door && w.door !== "none" && (isDm || w.door !== "secret"),
+    (w) =>
+      w.door &&
+      w.door !== "none" &&
+      (isDm || w.door !== "secret") &&
+      (visibleDoorIds === null || visibleDoorIds.has(w.id)),
   );
   if (doors.length === 0) return null;
   return (

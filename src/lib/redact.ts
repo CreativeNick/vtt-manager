@@ -4,6 +4,7 @@ import {
   createDefaultSheet,
   type CharacterSheet,
   type GameState,
+  type ItemRecord,
   type LogEntry,
   type SheetRecord,
 } from "./types";
@@ -42,6 +43,11 @@ function redactSheetRecord(record: SheetRecord, keepHp: boolean): SheetRecord {
   if (keepHp && !record.revealed.combat) {
     data.hp = { ...record.data.hp };
   }
+  // The portrait renders on every token linked to this sheet, so it is never a
+  // secret even while identity is hidden — keep it (and its framing) so player
+  // clients resolve token art live.
+  data.iconUrl = record.data.iconUrl;
+  data.iconCrop = record.data.iconCrop;
   return { ...record, data, redacted: true };
 }
 
@@ -135,6 +141,26 @@ export function redactStateFor(state: GameState, view: StateView): GameState {
     }
     // dmOnly events stay fully hidden.
   }
+  // Item tokens resolve their icon live from the catalog, so ship icon-only
+  // stubs for the items visible tokens reference — never the DM's full catalog,
+  // and never the item's real name/stats (the token label is what players see).
+  const items: Record<string, ItemRecord> = {};
+  for (const token of tokens) {
+    if (!token.itemId || items[token.itemId]) {
+      continue;
+    }
+    const item = state.items[token.itemId];
+    if (item) {
+      items[token.itemId] = {
+        id: item.id,
+        name: "",
+        description: "",
+        iconUrl: item.iconUrl,
+        iconCrop: item.iconCrop,
+        folderId: null,
+      };
+    }
+  }
   // Combatants tied to hidden tokens keep their slot in the order but lose the name.
   const combat = state.combat
     ? {
@@ -145,5 +171,5 @@ export function redactStateFor(state: GameState, view: StateView): GameState {
       }
     : null;
   // Directories are DM-side tools; sheets carry item-name copies for players.
-  return { ...state, scenes, tokens, sheets, log, dmNotes: "", combat, folders: [], items: {} };
+  return { ...state, scenes, tokens, sheets, log, dmNotes: "", combat, folders: [], items };
 }

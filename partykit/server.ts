@@ -141,6 +141,31 @@ export default class GameServer implements Party.Server {
   }
 
   /// <summary>
+  /// Drops client metadata whose socket is no longer live — a disconnect whose onClose never
+  /// fired (laptop sleep, network drop, server eviction). Without this a player who vanished
+  /// keeps their character slot "taken" forever (isSlotTaken reads this.clients), and the DM
+  /// can't kick them because there's no live connection to close. Mirrors clearStaleDm across
+  /// every role. Returns whether anything changed so the caller can rebroadcast.
+  /// </summary>
+  pruneStaleClients(): boolean {
+    let changed = false;
+    for (const [clientId] of this.clients) {
+      if (!this.room.getConnection(clientId)) {
+        this.clients.delete(clientId);
+        changed = true;
+      }
+    }
+    if (this.state.dmClientId && !this.room.getConnection(this.state.dmClientId)) {
+      this.state.dmClientId = null;
+      changed = true;
+    }
+    if (changed) {
+      this.syncConnectedPlayers();
+    }
+    return changed;
+  }
+
+  /// <summary>
   /// Persists durable game data without ephemeral connection fields.
   /// </summary>
   async persistState() {
@@ -421,7 +446,11 @@ export default class GameServer implements Party.Server {
       displayName: null,
       joined: false,
     });
-    this.clearStaleDm();
+    // Reap ghosts on every (re)connection so a reopened DM/player tab clears stale slots without
+    // needing an explicit kick; broadcast so already-joined clients see the freed roster.
+    if (this.pruneStaleClients()) {
+      void this.broadcastState();
+    }
     this.sendLobbyState(connection);
   }
 
@@ -474,6 +503,10 @@ export default class GameServer implements Party.Server {
         this.sendTo(sender, { type: "ERROR", message: "Invalid room password." });
         return;
       }
+
+      // Reconcile any ghost connections first so a slot abandoned without a clean disconnect
+      // (and the DM role) can be reclaimed instead of reading as permanently "taken".
+      this.pruneStaleClients();
 
       if (parsed.role === "dm") {
         this.clearStaleDm();
@@ -558,13 +591,14 @@ export default class GameServer implements Party.Server {
         return;
       }
       record.data = nextData;
-      if (record.ownerSlotId) {
-        this.state.tokens = this.state.tokens.map((token) =>
-          token.ownerPlayerId === record.ownerSlotId
-            ? syncTokenFromState(token, this.state)
-            : token,
-        );
-      }
+      // Keep linked tokens mirroring this sheet: player tokens via the owning
+      // slot, NPC/character tokens via their direct sheet link.
+      this.state.tokens = this.state.tokens.map((token) =>
+        (record.ownerSlotId && token.ownerPlayerId === record.ownerSlotId) ||
+        token.sheetId === parsed.sheetId
+          ? syncTokenFromState(token, this.state)
+          : token,
+      );
       void this.broadcastState();
       return;
     }
@@ -1791,6 +1825,10 @@ export default class GameServer implements Party.Server {
           description: next.description.slice(0, 5000),
           folderId: validFolder ? next.folderId : null,
         };
+        // Tokens mirror their catalog item's icon — keep placed copies live.
+        this.state.tokens = this.state.tokens.map((token) =>
+          token.itemId === existing.id ? syncTokenFromState(token, this.state) : token,
+        );
         void this.broadcastState();
         break;
       }
@@ -1858,17 +1896,28 @@ export default class GameServer implements Party.Server {
         const target = this.state.connectedPlayers.find(
           (player) => player.playerId === parsed.playerId,
         );
-        const connection = target ? this.room.getConnection(target.clientId) : null;
+        if (!target) {
+          // Nothing under that slot; the roster may just be stale — reconcile and refresh.
+          if (this.pruneStaleClients()) void this.broadcastState();
+          break;
+        }
+        const connection = this.room.getConnection(target.clientId);
         if (connection) {
           this.sendTo(connection, {
             type: "KICKED",
             message: "You were removed from the room by the DM.",
           });
-          if (target) {
-            this.logEvent(`${target.displayName} was removed by the DM.`);
-          }
           connection.close();
         }
+        // Purge the client meta right away so the slot frees even when the socket was already
+        // dead and onClose never fired — otherwise a ghost is unkickable (no live connection).
+        this.clients.delete(target.clientId);
+        if (this.state.dmClientId === target.clientId) {
+          this.state.dmClientId = null;
+        }
+        this.logEvent(`${target.displayName} was removed by the DM.`);
+        this.syncConnectedPlayers();
+        void this.broadcastState();
         break;
       }
       case "REMOVE_PLAYER_SLOT": {

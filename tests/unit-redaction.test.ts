@@ -140,5 +140,60 @@ check(
 );
 check("DM keeps directories", redactStateFor(withDirs, { role: "dm" }).folders.length === 2);
 
+// ---------------------------------------------------------------------------
+// 5. Token art is never a secret: NPC portraits survive redaction, and items
+//    referenced by visible tokens ship as icon-only stubs.
+// ---------------------------------------------------------------------------
+const artNpc = createNpcSheetRecord("sheet-npc", "Goblin Boss");
+artNpc.data.iconUrl = "/portraits/goblin.png";
+artNpc.data.iconCrop = { x: 0.2, y: 0.8, zoom: 2 };
+const artBase = normalizeGameState({
+  ...createInitialState("room-art"),
+  sheets: { "sheet-npc": artNpc },
+  items: {
+    "item-chest": {
+      id: "item-chest", name: "Bag of Holding", description: "secret loot",
+      iconUrl: "/tokens/chest.png", iconCrop: { x: 0.4, y: 0.6, zoom: 1.5 }, folderId: null,
+    },
+    "item-unplaced": {
+      id: "item-unplaced", name: "Vorpal Sword", description: "",
+      iconUrl: "/tokens/sword.png", iconCrop: { x: 0.5, y: 0.5, zoom: 1 }, folderId: null,
+    },
+  },
+} as unknown as GameState);
+artBase.tokens = [
+  { id: "tok-npc", sceneId: artBase.activeSceneId, x: 0, y: 0, label: "???", color: "#c45c5c", kind: "enemy", sheetId: "sheet-npc" },
+  { id: "tok-item", sceneId: artBase.activeSceneId, x: 1, y: 1, label: "Chest", color: "#8a7a5c", kind: "item", itemId: "item-chest" },
+  { id: "tok-hidden", sceneId: artBase.activeSceneId, x: 2, y: 2, label: "?", color: "#8a7a5c", kind: "item", itemId: "item-unplaced", hidden: true },
+] as unknown as GameState["tokens"];
+const artState = normalizeGameState(artBase);
+const artPlayerView = redactStateFor(artState, { role: "player", playerId: "p1" });
+const redactedNpc = artPlayerView.sheets["sheet-npc"];
+check(
+  "unrevealed NPC sheet keeps portrait + crop but stays redacted",
+  redactedNpc?.redacted === true &&
+    redactedNpc.data.iconUrl === "/portraits/goblin.png" &&
+    redactedNpc.data.iconCrop.x === 0.2 &&
+    redactedNpc.data.characterName === "",
+  JSON.stringify(redactedNpc?.data.iconCrop),
+);
+const itemStub = artPlayerView.items["item-chest"];
+check(
+  "item on a visible token ships as an icon-only stub",
+  itemStub?.iconUrl === "/tokens/chest.png" &&
+    itemStub.iconCrop.x === 0.4 &&
+    itemStub.name === "" &&
+    itemStub.description === "",
+  JSON.stringify(itemStub),
+);
+check(
+  "items only referenced by hidden tokens stay hidden",
+  !("item-unplaced" in artPlayerView.items),
+);
+check(
+  "DM keeps the full item record",
+  redactStateFor(artState, { role: "dm" }).items["item-chest"]!.name === "Bag of Holding",
+);
+
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

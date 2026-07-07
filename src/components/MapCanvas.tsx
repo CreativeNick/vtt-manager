@@ -51,7 +51,7 @@ import { TemplateShapeView } from "../map/tools/template";
 import type { ToolPointerEvent, ToolRuntime } from "../map/tools/types";
 import { MapToolbar } from "./MapToolbar";
 import { FogLayer } from "./MapFog";
-import { DmLightingOverlay, DoorLayer, LightTintLayer, VisionMaskLayer, WallsLightsEditor } from "./MapVision";
+import { computeVisiblePointIds, computeVisibleTokenIds, DmLightingOverlay, DoorLayer, LightTintLayer, VisionMaskLayer, WallsLightsEditor } from "./MapVision";
 import { LightConfigPanel } from "./LightConfigPanel";
 import { WallConfigPanel } from "./WallConfigPanel";
 import { readCampaignFlag, writeCampaignFlag } from "../lib/campaignStore";
@@ -567,7 +567,6 @@ function TokenNode({
     .filter(Boolean) as string[];
   const badgeText =
     badges.length > 4 ? `${badges.slice(0, 4).join("")}+${badges.length - 4}` : badges.join("");
-  const labelY = radius + (showBar ? 9 : 2);
 
   return (
     <Group
@@ -716,17 +715,41 @@ function TokenNode({
           ) : null}
         </>
       ) : null}
-      <Text
-        text={token.label}
-        fontSize={Math.max(10, radius * 0.7)}
-        fill="#e6e6e8"
-        align="center"
-        width={radius * 4}
-        offsetX={radius * 2}
-        y={labelY + (showHpValues && showBar ? Math.max(8, radius * 0.45) + 1 : 0)}
-        listening={false}
-      />
+      <TokenNameLabel token={token} radius={radius} showBar={showBar} showHpValues={showHpValues} />
     </Group>
+  );
+}
+
+/**
+ * A token's name caption, positioned relative to the token's center (0,0). Rendered inside the
+ * token itself AND — for tokens revealed by dynamic lighting — again in a top layer above the
+ * darkness mask (see `tokenLabelIds`), so a lit token's name is always fully legible instead of
+ * being swallowed by the surrounding dark. The two draws sit at identical coords, so the bright
+ * copy simply overlays the masked one.
+ */
+function TokenNameLabel({
+  token,
+  radius,
+  showBar,
+  showHpValues,
+}: {
+  token: GameState["tokens"][number];
+  radius: number;
+  showBar: boolean;
+  showHpValues: boolean;
+}) {
+  const labelY = radius + (showBar ? 9 : 2);
+  return (
+    <Text
+      text={token.label}
+      fontSize={Math.max(10, radius * 0.7)}
+      fill="#e6e6e8"
+      align="center"
+      width={radius * 4}
+      offsetX={radius * 2}
+      y={labelY + (showHpValues && showBar ? Math.max(8, radius * 0.45) + 1 : 0)}
+      listening={false}
+    />
   );
 }
 
@@ -1032,6 +1055,44 @@ export function MapCanvas({
       setDarknessDraft(null);
     }
   }, [committedDarkness, darknessDraft]);
+
+  // Which token NAME labels to draw ABOVE the darkness mask so a revealed token's name stays fully
+  // legible (and a hidden token's never leaks through). Computed up here — BEFORE the `!scene`
+  // guard below — so the hook count stays stable across renders. `null` unless the board is dark:
+  // the player/preview mask exposes a strict LOS-lit subset; the DM's own overview is omniscient
+  // (every name un-dimmed). Bucketed on an ambient-lit boolean so a day↔night tween doesn't rerun
+  // the LOS sweep every frame; `state.tokens`/`state.scenes` deps keep it off the pan/zoom path.
+  const ambientLit = 1 - displayDarkness > 0.12;
+  const tokenLabelIds = useMemo<Set<string> | null>(() => {
+    const sc = state.scenes.find((item) => item.id === sceneId) ?? state.scenes[0];
+    if (!sc || sc.globalIllumination) return null; // lit board: in-token labels already read fine
+    const scTokens = state.tokens.filter((t) => t.sceneId === sc.id);
+    if (isDm && !visionPreview) return new Set(scTokens.map((t) => t.id)); // DM overview: all names
+    const viewers = scTokens.filter(
+      (t) => t.vision?.enabled && (isDm ? visionPreview : t.ownerPlayerId === yourPlayerId),
+    );
+    const ftToPx = sc.gridSize / Math.max(sc.feetPerSquare, 1);
+    return computeVisibleTokenIds(sc, viewers, scTokens, ftToPx, ambientLit ? 0 : 1);
+  }, [state.scenes, state.tokens, sceneId, isDm, yourPlayerId, visionPreview, ambientLit]);
+
+  // Which door icons are visible to the current viewer: same "at least a little lit" rule as
+  // token labels, so a door isn't spottable through fog of war. `null` = show every door (lit
+  // board, or the DM's own omniscient overview — not previewing as a player).
+  const visibleDoorIds = useMemo<Set<string> | null>(() => {
+    const sc = state.scenes.find((item) => item.id === sceneId) ?? state.scenes[0];
+    if (!sc || sc.globalIllumination) return null;
+    if (isDm && !visionPreview) return null; // DM overview: every door visible
+    const doors = sc.walls.filter((w) => w.door && w.door !== "none");
+    if (doors.length === 0) return null;
+    const scTokens = state.tokens.filter((t) => t.sceneId === sc.id);
+    const viewers = scTokens.filter(
+      (t) => t.vision?.enabled && (isDm ? visionPreview : t.ownerPlayerId === yourPlayerId),
+    );
+    const ftToPx = sc.gridSize / Math.max(sc.feetPerSquare, 1);
+    const points = doors.map((d) => ({ id: d.id, x: (d.x1 + d.x2) / 2, y: (d.y1 + d.y2) / 2 }));
+    return computeVisiblePointIds(sc, viewers, points, ftToPx, ambientLit ? 0 : 1);
+  }, [state.scenes, state.tokens, sceneId, isDm, yourPlayerId, visionPreview, ambientLit]);
+
   const commitDarkness = useCallback(
     (value: number) => {
       if (!scene) return;
@@ -1737,9 +1798,10 @@ export function MapCanvas({
             const linkedItem = token.itemId ? state.items[token.itemId] : undefined;
             // The crop belongs to whichever source supplies the image: the sheet portrait, else
             // the item icon it mirrors. A standalone token image has no crop → centered.
+            const imageUrl = sheet?.data.iconUrl ?? linkedItem?.iconUrl ?? token.imageUrl ?? null;
             const imageCrop = sheet?.data.iconUrl
               ? sheet.data.iconCrop
-              : linkedItem?.iconUrl && linkedItem.iconUrl === token.imageUrl
+              : linkedItem?.iconUrl
                 ? linkedItem.iconCrop
                 : DEFAULT_ICON_CROP;
             const sheetHp = sheet?.data.hp;
@@ -1757,7 +1819,7 @@ export function MapCanvas({
               <TokenNode
                 key={token.id}
                 token={token}
-                imageUrl={sheet?.data.iconUrl ?? token.imageUrl ?? null}
+                imageUrl={imageUrl}
                 imageCrop={imageCrop}
                 controllerColor={controllerColor}
                 shapeDefaults={state.tokenShapeDefaults}
@@ -1811,6 +1873,34 @@ export function MapCanvas({
           />
         ) : null}
 
+        {/* Token names for revealed tokens, drawn ABOVE the darkness mask so a lit token's name
+            is always fully legible (the in-token label underneath, if any, is darkened/hidden by
+            the mask). Rendered only while the board is dark; the bright copy overlays the masked
+            one at the same coords. */}
+        {tokenLabelIds ? (
+          <Layer listening={false}>
+            {sceneTokens.map((token) => {
+              if (!tokenLabelIds.has(token.id)) return null;
+              const linkedSheetId = token.sheetId ?? token.ownerPlayerId;
+              const sheet = linkedSheetId ? state.sheets[linkedSheetId] : undefined;
+              const sheetHp = sheet?.data.hp;
+              const hp = sheetHp && (isDm || token.showHp !== "none") ? sheetHp : null;
+              const showBar = hp !== null && hp.max > 0;
+              const radius = tokenRadius(scene.gridSize, token.size ?? state.defaultTokenSize ?? 1);
+              return (
+                <Group key={token.id} x={token.x} y={token.y} opacity={token.hidden ? 0.4 : 1} listening={false}>
+                  <TokenNameLabel
+                    token={token}
+                    radius={radius}
+                    showBar={showBar}
+                    showHpValues={token.showHp === "values"}
+                  />
+                </Group>
+              );
+            })}
+          </Layer>
+        ) : null}
+
         {/* DM wall/door lines + light markers; interactive only with the matching tool. */}
         {isDm && (scene.walls.length > 0 || scene.lights.length > 0 || wallsActive || lightsActive) ? (
           <WallsLightsEditor
@@ -1836,7 +1926,13 @@ export function MapCanvas({
 
         {/* Door controls (all clients — players open unlocked doors; secret doors DM-only). */}
         {scene.walls.some((w) => w.door && w.door !== "none") ? (
-          <DoorLayer scene={scene} isDm={isDm} onToggleDoor={onToggleDoor} onSetDoorState={onSetDoorState} />
+          <DoorLayer
+            scene={scene}
+            isDm={isDm}
+            visibleDoorIds={visibleDoorIds}
+            onToggleDoor={onToggleDoor}
+            onSetDoorState={onSetDoorState}
+          />
         ) : null}
 
         {/* Topmost overlay: everyone's live rulers + templates + the active tool's draft. */}
