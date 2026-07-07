@@ -5,7 +5,13 @@ Roadmap for building out the VTT from the `bare-bones` foundation. Covers everyt
 architecture reference — **historical**, describes the codebase before Phases 0–4 shipped),
 `DICE_PLAN.md` (v1 3D dice concepts — the shipped Phase 4 recovered its core).
 
-## STATUS (2026-07-04) — read this first in a fresh session
+## STATUS (2026-07-07) — read this first in a fresh session
+
+**Latest (2026-07-07): board render-quality round** — fixed pervasive text/image blur on the
+board (zoom-bucketed image caches, device-pixel-snapped text, smoothing-quality coverage for
+late-mounted layers, and a per-client "Hi-res board rendering" setting). Details in the
+**Render-quality round** note under Phase 7's as-built section; superseded sizing prose in the
+older "Crisp token images" note is annotated in place.
 
 **Phases 0–7 are SHIPPED and machine-verified** (plus several UX-feedback rounds and a
 3D-dice feedback round). **Phase 7 (game-content depth) just shipped** as sub-rounds
@@ -34,9 +40,12 @@ panel, and a continuous 0–1 darkness level with day↔night transitions.
 - **Verification:** `tests/` holds the WS smoke suites + unit tests with a README on how
 to run them (partykit dev server + `node tests/smoke-*.mjs`). All pass (phase0–6 + scenes +
 ux2 + the unit suites; `unit-scene-editor.test.ts` grew through 6.6–6.8 to cover lighting,
-token/item fields, token sizing, npc-folder trees, and folder sortOrder — all green as of
-2026-07-04). Re-run the full set after any server/redaction/protocol change.
-- **Shipped file map (orientation):** shared logic `src/lib/{types,redact,dice,dice3d, pointerDrag,sceneUtils,clampToViewport,visibility,sceneMessages,localFlags,history}.ts`;
+token/item fields, token sizing, npc-folder trees, and folder sortOrder; `unit-render-crisp.test.ts`
+added 2026-07-07 for the zoom-bucket/font-snap math — all green as of 2026-07-07). Re-run the
+full set after any server/redaction/protocol change. `.claude/skills/verify/SKILL.md` (added
+2026-07-07) has the recipe for driving the app end-to-end in headless Chrome when a change
+needs runtime (not just tsc/build) confirmation.
+- **Shipped file map (orientation):** shared logic `src/lib/{types,redact,dice,dice3d, pointerDrag,sceneUtils,clampToViewport,visibility,sceneMessages,localFlags,history,renderQuality}.ts`;
 server `partykit/server.ts`; shell `src/App.tsx` + `src/panels/registry.tsx` (dock tabs +
 pop-out windows) + `src/components/{Dock,FloatingWindow,FloatingCluster,Directory, ActorsPanel,ItemsPanel,PartyPanel,ScenePanel,SceneSettings,CharacterSheet,TokenEditor, InitiativeTracker,LogPanel,LogToasts,NotesPanel,DiceTray,SettingsPanel,MapCanvas, MapToolbar,MapFog,MapVision,JoinScreen}.tsx`; DM prep pages
 `src/pages/{PageShell,PlayersPage,NpcsPage,ScenesPage,SheetCards}.tsx`; 3D dice
@@ -1737,6 +1746,10 @@ the fixed recipe (GameState field → normalize → message → redaction → ca
 >      it never undershoots (→ upscale blur) and downsamples cleanly. Source art (upload/R2) is
 >      untouched — uploads are stored **uncompressed** (dev writes raw bytes to disk; prod
 >      `UPLOADS.put(bytes)` to R2; client sends the original via `readAsDataURL`).
+>      **(2026-07-07: sizing superseded** — max-zoom sizing left a zoom-independent ~(4/zoom):1
+>      single-pass minification at draw time, which is why tokens still looked soft at normal
+>      zoom. The copy now tracks the CURRENT zoom, quantized to √2 buckets — see the
+>      render-quality round below.)
 >
 >   **Tuning knobs (all client-render only; dev hot-reloads on save — no re-upload needed):**
 >   - **Sharpness / supersampling** — `useCrispImage` in `MapCanvas.tsx`, `const SUPERSAMPLE = 2`.
@@ -1752,7 +1765,8 @@ the fixed recipe (GameState field → normalize → message → redaction → ca
 >     the copy's resolution scales up with it). `MIN_VIEWPORT_SCALE` above it caps zoom-out.
 >
 >   **Quick guidance:**
->   - "Soft — make it crisp at normal zoom" → bump **SUPERSAMPLE** to `3`.
+>   - "Soft — make it crisp at normal zoom" → bump **SUPERSAMPLE** to `3`. *(2026-07-07: the
+>     zoom-bucketed cache made this largely moot at ≤1× zoom; the knob still works.)*
 >   - "I want to zoom in and inspect the 4K detail" → raise **MAX_VIEWPORT_SCALE** to `3`–`4`.
 >   - "Big tokens still look capped" → raise the **2048** cap.
 > - **Coin flip arc (**`src/dice/engine.ts`**).** The dice scene's camera is orthographic
@@ -1812,6 +1826,75 @@ the fixed recipe (GameState field → normalize → message → redaction → ca
 > **Note:** Phases 6.7–6.8 already shipped much of the items/tokens/directory scope (Item Sheet,
 > item tokens, token shapes + sizing, item duplicate/drag, an Items page, independent NPC folder
 > trees, directory multi-select, and folder drag-reorder).
+
+> **Render-quality round (2026-07-07, user feedback — "text goes blurry at some zoom levels;
+> token images never look crisp").** Three independent blur sources on the board, fixed
+> separately (`npx tsc` + `npm run build` + new unit test + a headless-Chrome runtime pass all
+> green):
+>
+> 1. **Images were minified ~(4/zoom):1 in ONE pass at draw time.** `useCrispImage` sized its
+>    pre-shrunk copy for MAX zoom, so at zoom z the final `drawImage` downscaled by 4/z no
+>    matter the token size (cache and on-screen size both scale with radius — why bigger tokens
+>    didn't help). Chrome's "high" smoothing is a cubic filter without mipmaps — clean only to
+>    ~2–3:1. **Fix:** cache sizing now tracks the LIVE zoom quantized to **√2 buckets**
+>    (`imageScaleBucket` in `sceneUtils.ts`), keeping the draw-time ratio inside [2, 2·√2) at
+>    every zoom; copies re-shrink only when the zoom crosses a bucket, and `downscaleImageCached`
+>    (WeakMap keyed source-image × quantized size) makes revisited buckets free. The **map
+>    background** gets the same treatment (`crispMapImg` in `MapCanvas`) — it was previously
+>    drawn raw from the full-resolution upload.
+> 2. **Canvas text has no hinting or pixel-grid snapping.** At fractional effective font sizes
+>    (fontSize × zoom × dpr — fractional at nearly every zoom step, since wheel zoom is ×1.1ⁿ
+>    off a fractional fit-to-scene scale) the grayscale anti-aliasing smears glyph stems across
+>    pixel rows — the "blurry at some zoom levels, fine at others" symptom. **Fix:**
+>    `snapFontSize` (`sceneUtils.ts`) rounds the effective size to whole device pixels (≤±3%
+>    size drift); a `CrispText` wrapper applies it to token name labels (in-token AND the
+>    above-darkness copies), HP values, condition badges, the death skull, pin labels, and text
+>    annotations. It reads `MapRenderCtx` — `{scale, pixelRatio}` provided INSIDE the Stage
+>    (react-konva does not bridge outer React context across the Stage boundary); the memoized
+>    vision/wall layers deliberately don't consume it, so they stay off the zoom re-render path.
+>    The Stage translation is also snapped to the device-pixel grid (sub-half-pixel correction).
+> 3. **Late-mounted layers kept Chrome's default "low" `imageSmoothingQuality`.** The old bump
+>    effect re-applied only on stage RESIZE; conditionally-mounted layers (vision mask, light
+>    tint, DM lighting overlay, lit-labels) arrived after it with fresh low-quality canvases.
+>    `bumpStageSmoothing` (new `src/lib/renderQuality.ts`) now runs after every render, reads
+>    the live context state (a no-op pass costs a few property reads), and redraws only when it
+>    actually changed something.
+>
+> - **New setting: "Hi-res board rendering"** (Settings → This device, default OFF). Floors the
+>   Konva canvas pixel ratio at **2** via `applyRenderPixelRatio` — on standard-DPI displays
+>   (dpr 1, where canvas text is softest) the whole board supersamples 2× for visibly crisper
+>   glyphs and art at ~4× fill cost (no-op on retina/dpr≥2 screens; the escape hatch if a big
+>   map + vision feels sluggish is simply leaving it off). `renderQuality.ts` is a tiny external
+>   store: it sets `Konva.pixelRatio` (future canvases), live-`setPixelRatio`s every canvas of
+>   every mounted stage via `Konva.stages` (board AND the embedded scene editor), re-bumps
+>   smoothing, and notifies subscribers — `MapCanvas` reads it with `useSyncExternalStore`, so
+>   image caches and text snapping re-derive without a remount. Persisted per campaign
+>   (`cm:{roomId}:hi-res`, legacy global `cm-hi-res`), restored on join like the other device
+>   toggles; threaded as `PanelContext.hiResRender/setHiResRender`.
+> - **Coverage notes:** transient tool overlays (measure/ruler labels, wall/light editor text)
+>   keep plain `Text` — memoized or short-lived by design. New `tests/unit-render-crisp.test.ts`
+>   pins the bucket invariants (bucket ∈ [scale, scale·√2), clamping, degenerate inputs) and the
+>   font snap (integer device px, bounded drift, 1px floor).
+> - **Verification method (headless-Chrome runtime pass, not just tsc/build):** launched both
+>   dev servers (`partykit:dev` on :1999, `vite` — port varies, read its log), then drove the
+>   app in real Chrome via the repo's existing `playwright-core` dep (`deviceScaleFactor: 1`,
+>   the worst case for canvas text/image blur — most dev displays are hi-DPI and would have
+>   masked the bug). Flow: **+ New** campaign → **Enter campaign** as DM → open the **Actors**
+>   dock tab → pointer-drag the "Blank token" chip onto the map twice (stepped `mouse.move`,
+>   real drag threshold) → screenshot a labeled-token crop at default zoom, after 4 wheel-zoom-
+>   outs, after 6 wheel-zoom-ins (all fractional scales — the exact case that used to blur) →
+>   toggle **Hi-res board rendering** in Settings and re-screenshot the same crop → re-zoom with
+>   hi-res on → toggle off → reload the page and confirm the flag re-applies. Read back
+>   `document.querySelector(".map-root canvas")`'s backing-store size vs its CSS size at each
+>   step as the objective signal (flips 1600×1000 ↔ 3200×2000 on the hi-res toggle, matching the
+>   setting); collected `page.on("pageerror"/"console")` throughout (zero errors — the riskiest
+>   part was the new in-Stage `MapRenderCtx` provider). Screenshots eyeballed for legible,
+>   non-smeared label glyphs at every step. Cleaned up afterward: killed the dev-server process
+>   trees, restored `public/campaign/rooms.json` (test campaigns are gone from the registry).
+>   **This recipe is now a project skill** — `.claude/skills/verify/SKILL.md` — covering server
+>   launch gotchas (port collisions, stale `workerd` orphans holding :1999) and the exact
+>   selectors (`.dir-blank-chip`, `button[title="Actors"/"Settings"]`, the `ToggleRow` button
+>   pattern) so a future session doesn't re-derive them from scratch.
 
 > **RESOLVED DESIGN (2026-07-04, user + exploration) — this block is the canonical build
 > spec; the prose below it is the layout/UX reference it was distilled from.** Two new

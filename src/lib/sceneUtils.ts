@@ -27,6 +27,34 @@ export function clampViewport(viewport: Viewport): Viewport {
 }
 
 /// <summary>
+/// Quantizes the live viewport scale for image-cache sizing: the smallest power of √2 that is
+/// ≥ scale (clamped to the zoom limits). Caches sized to this bucket are always drawn with a
+/// downscale ratio in [1, √2) — comfortably inside the single-pass range the browser's cubic
+/// filter handles cleanly — while re-rendering only when the zoom crosses a √2 step, not on
+/// every wheel tick.
+/// </summary>
+export function imageScaleBucket(scale: number): number {
+  const s = clampViewportScale(Number.isFinite(scale) && scale > 0 ? scale : 1);
+  // Powers of √2: 2^(ceil(log2(s) · 2) / 2). `ceil` never undershoots (→ upscale blur).
+  return Math.pow(2, Math.ceil(Math.log2(s) * 2) / 2);
+}
+
+/// <summary>
+/// Snaps a world-space font size so the glyphs rasterize at an INTEGER device-pixel size at the
+/// current zoom. Canvas text has no hinting or pixel-grid snapping — at fractional effective
+/// sizes (fontSize × scale × dpr, which is fractional at almost every zoom step) the grayscale
+/// anti-aliasing smears every stem across two pixel rows and the text reads as blurry. Rounding
+/// the effective size to whole device pixels (≤ ±3% visual change) removes most of that smear.
+/// </summary>
+export function snapFontSize(worldPx: number, viewScale: number, pixelRatio: number): number {
+  const density = viewScale * pixelRatio;
+  if (!Number.isFinite(density) || density <= 0 || !Number.isFinite(worldPx) || worldPx <= 0) {
+    return worldPx;
+  }
+  return Math.max(1, Math.round(worldPx * density)) / density;
+}
+
+/// <summary>
 /// Loads an image URL into an HTMLImageElement.
 /// </summary>
 function loadImageElement(url: string): Promise<HTMLImageElement> {
@@ -87,6 +115,37 @@ export function downscaleImage(
     current = drawToCanvas(current, w, h);
   }
   return drawToCanvas(current, targetW, targetH);
+}
+
+/**
+ * Per-source memo of `downscaleImage` results keyed by requested `maxSide`. Cache sizing is
+ * zoom-bucketed (see `imageScaleBucket`), so zooming re-requests the same handful of quantized
+ * sizes per image — memoizing them makes bucket crossings free after the first visit. Sizes
+ * halve geometrically, so all entries together stay under ~2× the largest copy's memory; the
+ * WeakMap releases everything when the source image is dropped.
+ */
+const downscaleCache = new WeakMap<HTMLImageElement, Map<number, HTMLImageElement | HTMLCanvasElement>>();
+
+/// <summary>
+/// `downscaleImage` with per-(source, maxSide) memoization — use for repeated calls with
+/// zoom-bucketed sizes (token portraits, the map background).
+/// </summary>
+export function downscaleImageCached(
+  source: HTMLImageElement,
+  maxSide: number,
+): HTMLImageElement | HTMLCanvasElement {
+  let sizes = downscaleCache.get(source);
+  if (!sizes) {
+    sizes = new Map();
+    downscaleCache.set(source, sizes);
+  }
+  const hit = sizes.get(maxSide);
+  if (hit) {
+    return hit;
+  }
+  const result = downscaleImage(source, maxSide);
+  sizes.set(maxSide, result);
+  return result;
 }
 
 function drawToCanvas(

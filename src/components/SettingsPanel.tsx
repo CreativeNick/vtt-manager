@@ -106,6 +106,12 @@ export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
         on={ctx.spaceClick}
         onToggle={ctx.setSpaceClick}
       />
+      <ToggleRow
+        label="Hi-res board rendering"
+        hint="Renders the board at 2× resolution for crisper text and token art — most visible on standard (non-retina) displays. Higher GPU cost; turn off if the map feels sluggish."
+        on={ctx.hiResRender}
+        onToggle={ctx.setHiResRender}
+      />
       <div className="row" style={{ justifyContent: "space-between" }}>
         <label style={{ margin: 0 }} title="Windows and the dice tray return to their default spots">
           UI layout

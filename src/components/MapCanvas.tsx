@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ComponentProps,
+} from "react";
 import {
   Arrow,
   Circle,
@@ -36,11 +46,17 @@ import {
 } from "../lib/types";
 import {
   clampViewportScale,
-  downscaleImage,
+  downscaleImageCached,
+  imageScaleBucket,
   loadImageForCanvas,
-  MAX_VIEWPORT_SCALE,
+  snapFontSize,
   tokenRadius,
 } from "../lib/sceneUtils";
+import {
+  bumpStageSmoothing,
+  getRenderPixelRatio,
+  subscribeRenderPixelRatio,
+} from "../lib/renderQuality";
 import type { MeasureEvent, TemplateEvent } from "../hooks/useGameRoom";
 import type { History } from "../lib/history";
 import { clampMove, movementSegments } from "../lib/visibility";
@@ -225,31 +241,58 @@ function useImage(url: string | null): HTMLImageElement | null {
 }
 
 /// <summary>
+/// Live render metrics for nodes inside the Stage: the viewport scale and the canvas pixel
+/// ratio. Provided INSIDE the Stage (react-konva does not bridge outer React context across
+/// the Stage boundary) so token/pin/annotation nodes can size their image caches and snap
+/// their text to the device pixel grid. Changes on every zoom tick — only non-memoized
+/// consumers should subscribe (the memoized vision/wall layers stay off this on purpose).
+/// </summary>
+const MapRenderCtx = createContext<{ scale: number; pixelRatio: number }>({
+  scale: 1,
+  pixelRatio: 1,
+});
+
+/**
+ * A Konva Text whose font size is snapped so glyphs rasterize at a whole number of device
+ * pixels at the current zoom (see `snapFontSize`) — canvas text at fractional effective sizes
+ * smears its grayscale anti-aliasing and reads as blurry at most zoom levels.
+ */
+function CrispText({ fontSize = 12, ...rest }: ComponentProps<typeof Text>) {
+  const { scale, pixelRatio } = useContext(MapRenderCtx);
+  return <Text {...rest} fontSize={snapFontSize(fontSize, scale, pixelRatio)} />;
+}
+
+/** Supersample factor for pre-shrunk image caches: a ~1:1 copy drawn with smoothing at a
+ *  subpixel position looks soft, so render at 2× and let the final draw downsample cleanly. */
+const SUPERSAMPLE = 2;
+
+/// <summary>
 /// A token portrait pre-shrunk (high-quality, stepped) to roughly its on-screen size so
 /// Konva doesn't downsample a big upload into a tiny token in one soft, low-quality pass.
-/// Sized for the largest it can appear (token diameter × max zoom × device pixels) and
-/// capped, so it stays crisp all the way to max zoom without re-rendering as you zoom.
+/// Sized for the CURRENT zoom (quantized to √2 buckets via `imageScaleBucket`), so the final
+/// draw's downscale ratio stays within ~2–2.8× at every zoom level — sizing for max zoom
+/// instead left a zoom-independent ~(4/scale):1 single-pass minification that blurred every
+/// token at normal zoom regardless of token size. Re-shrinks only when the zoom crosses a
+/// bucket, and `downscaleImageCached` makes revisited buckets free.
 /// Returns the original element when it's already small enough.
 /// </summary>
 function useCrispImage(
   img: HTMLImageElement | null,
   radius: number,
 ): HTMLImageElement | HTMLCanvasElement | null {
-  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-  // Target the token's largest on-screen size × a SUPERSAMPLE factor: a ~1:1 copy drawn with
-  // smoothing at a subpixel position looks soft, so we render at 2× and let it downsample to
-  // a clean, sharp result. Cover-fit crops to the shorter image side, so also scale by the
-  // aspect ratio to keep that side well-resolved. Round UP to a 64px step: `ceil` never
-  // undershoots (nearest could land below and upscale → blur); the step keeps small radius
-  // tweaks from churning the cached copy.
-  const SUPERSAMPLE = 2;
+  const { scale, pixelRatio } = useContext(MapRenderCtx);
+  // Target the token's on-screen size at the bucketed zoom × SUPERSAMPLE. Cover-fit crops to
+  // the shorter image side, so also scale by the aspect ratio to keep that side well-resolved.
+  // Round UP to a 64px step: `ceil` never undershoots (nearest could land below and upscale →
+  // blur); the step keeps small radius tweaks from churning the cached copy.
+  const bucket = imageScaleBucket(scale);
   const aspect = img ? (img.naturalWidth || img.width) / (img.naturalHeight || img.height) : 1;
   const longSide = Number.isFinite(aspect) && aspect > 0 ? Math.max(aspect, 1 / aspect) : 1;
   const maxSide = Math.min(
     2048,
-    Math.max(128, Math.ceil((radius * 2 * MAX_VIEWPORT_SCALE * dpr * longSide * SUPERSAMPLE) / 64) * 64),
+    Math.max(128, Math.ceil((radius * 2 * bucket * pixelRatio * longSide * SUPERSAMPLE) / 64) * 64),
   );
-  return useMemo(() => (img ? downscaleImage(img, maxSide) : null), [img, maxSide]);
+  return useMemo(() => (img ? downscaleImageCached(img, maxSide) : null), [img, maxSide]);
 }
 
 /// <summary>
@@ -681,7 +724,7 @@ function TokenNode({
         />
       )}
       {dead ? (
-        <Text
+        <CrispText
           text="💀"
           fontSize={radius * 1.1}
           align="center"
@@ -692,7 +735,7 @@ function TokenNode({
         />
       ) : null}
       {badgeText ? (
-        <Text
+        <CrispText
           text={badgeText}
           fontSize={Math.max(9, radius * 0.55)}
           align="center"
@@ -723,7 +766,7 @@ function TokenNode({
             listening={false}
           />
           {showHpValues ? (
-            <Text
+            <CrispText
               text={`${hp.current}/${hp.max}`}
               fontSize={Math.max(8, radius * 0.45)}
               fill="#e6e6e8"
@@ -761,7 +804,7 @@ function TokenNameLabel({
 }) {
   const labelY = radius + (showBar ? 9 : 2);
   return (
-    <Text
+    <CrispText
       text={token.label}
       fontSize={Math.max(10, radius * 0.7)}
       fill="#e6e6e8"
@@ -808,25 +851,39 @@ export function MapCanvas({
   // images (token portraits, the map) even at normal zoom. Bump them all to "high". Crucially
   // this must include the STAGE's shared buffer canvas: a token has fill + stroke, so Konva
   // draws it through the buffer (then composites) — that's where its portrait is downsampled.
-  // A canvas resize resets context state, so re-apply whenever the stage size changes.
+  // Runs after EVERY render (no dep array): canvas resizes and pixel-ratio changes reset
+  // context state, and conditionally-mounted layers (vision mask, light tint, …) arrive with
+  // fresh "low"-quality canvases the old resize-only effect never revisited. The bump reads
+  // live context state, so a no-op pass costs a few property reads.
   useEffect(() => {
     const stage = stageRef.current;
-    if (!stage) return;
-    const bump = (canvas: { getContext?: () => unknown } | null | undefined) => {
-      const ctx = (canvas?.getContext?.() as { _context?: CanvasRenderingContext2D } | undefined)
-        ?._context;
-      if (ctx) {
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "high";
-      }
-    };
-    for (const layer of stage.getLayers()) bump(layer.getCanvas());
-    bump((stage as unknown as { bufferCanvas?: { getContext?: () => unknown } }).bufferCanvas);
-    stage.batchDraw();
-  }, [stageW, stageH]);
+    if (stage && bumpStageSmoothing(stage)) {
+      stage.batchDraw();
+    }
+  });
   const scene = state.scenes.find((item) => item.id === sceneId) ?? state.scenes[0];
   const mapImg = useImage(scene?.mapUrl ?? null);
   const sceneWalls = scene?.walls;
+  // The canvas pixel ratio (devicePixelRatio, or ≥2 with the hi-res setting) — reactive so
+  // toggling hi-res re-sizes image caches and re-snaps text without a remount.
+  const renderRatio = useSyncExternalStore(subscribeRenderPixelRatio, getRenderPixelRatio);
+  /** Zoom quantized to √2 buckets — image caches re-size only when this crosses a step. */
+  const zoomBucket = imageScaleBucket(viewport.scale);
+  // The map background pre-shrunk for the current zoom bucket, exactly like token portraits
+  // (`useCrispImage`): zoomed out, Konva otherwise minifies the full-resolution upload in one
+  // soft/aliased pass. Returns the original image while it's already ≤ the target size, so at
+  // near/full zoom this costs nothing.
+  const crispMapImg = useMemo(() => {
+    if (!mapImg || !scene) return null;
+    const worldSide = Math.max(scene.width, scene.height);
+    const maxSide = Math.ceil((worldSide * zoomBucket * renderRatio * SUPERSAMPLE) / 64) * 64;
+    return downscaleImageCached(mapImg, maxSide);
+  }, [mapImg, scene, zoomBucket, renderRatio]);
+  /** Context payload for in-Stage consumers (text snapping + token image caches). */
+  const renderCtx = useMemo(
+    () => ({ scale: viewport.scale, pixelRatio: renderRatio }),
+    [viewport.scale, renderRatio],
+  );
 
   // Stable wall/light editor callbacks so the memoized WallsLightsEditor layer bails
   // during (heavy) fog-brush strokes when a scene has many walls/lights.
@@ -1432,6 +1489,10 @@ export function MapCanvas({
   const activeTool =
     availableTools.find((tool) => tool.id === activeToolId) ?? selectTool;
   const toolActive = activeTool.id !== "select";
+  // Existing pins stay grabbable/editable during play: the DM can move & edit them in select
+  // mode exactly as in the pin tool — the only thing select mode won't do is drop a fresh pin on
+  // an empty-space click (that still needs the pin tool). Pins are DM-only, so gate on isDm.
+  const pinsInteractive = activeTool.id === "pin" || (isDm && activeTool.id === "select");
 
   const fogBrushR = scene.gridSize * fogBrushScale;
 
@@ -1715,8 +1776,11 @@ export function MapCanvas({
         ref={stageRef}
         width={stageW}
         height={stageH}
-        x={viewport.x}
-        y={viewport.y}
+        // Pan snapped to the DEVICE pixel grid: a fractional stage translation shifts every
+        // crisp edge (grid lines, walls, snapped text) onto pixel boundaries' fractions and
+        // smears them. Sub-half-pixel correction — invisible during drags.
+        x={Math.round(viewport.x * renderRatio) / renderRatio}
+        y={Math.round(viewport.y * renderRatio) / renderRatio}
         scaleX={viewport.scale}
         scaleY={viewport.scale}
         draggable={stageDraggable}
@@ -1797,10 +1861,11 @@ export function MapCanvas({
           }
         }}
       >
+        <MapRenderCtx.Provider value={renderCtx}>
         <Layer listening={false}>
           <Rect x={0} y={0} width={scene.width} height={scene.height} fill={scene.backgroundColor} />
-          {mapImg ? (
-            <KonvaImage image={mapImg} x={0} y={0} width={scene.width} height={scene.height} />
+          {crispMapImg ? (
+            <KonvaImage image={crispMapImg} x={0} y={0} width={scene.width} height={scene.height} />
           ) : null}
         </Layer>
 
@@ -1985,6 +2050,7 @@ export function MapCanvas({
           <DoorLayer
             scene={scene}
             isDm={isDm}
+            interactive={activeTool.id === "select"}
             visibleDoorIds={visibleDoorIds}
             onToggleDoor={onToggleDoor}
             onSetDoorState={onSetDoorState}
@@ -1994,7 +2060,7 @@ export function MapCanvas({
         {/* Map pins (DM-only): drawn ABOVE tokens, walls, lights, fog, and doors so the DM's
             markers are never hidden behind them. Interactive (edit/move/erase) with the pin
             tool; erasable with the draw tool too, matching the other annotations. */}
-        <Layer listening={activeTool.id === "draw" || activeTool.id === "pin"}>
+        <Layer listening={activeTool.id === "draw" || pinsInteractive}>
           {scene.annotations.map((annotation) =>
             annotation.kind === "pin" ? (
               <AnnotationNode
@@ -2003,7 +2069,7 @@ export function MapCanvas({
                 now={fadeClock}
                 onErase={() => eraseAnnotation(annotation)}
                 onEdit={
-                  activeTool.id === "pin"
+                  pinsInteractive
                     ? () =>
                         setDraft({
                           x: annotation.x ?? 0,
@@ -2014,7 +2080,7 @@ export function MapCanvas({
                     : undefined
                 }
                 onMove={
-                  activeTool.id === "pin"
+                  pinsInteractive
                     ? (x, y) => movePin(runtime, annotation.id, x, y)
                     : undefined
                 }
@@ -2049,9 +2115,10 @@ export function MapCanvas({
           ) : null}
           {activeTool.renderDraft?.(draft, runtime)}
         </Layer>
+        </MapRenderCtx.Provider>
       </Stage>
 
-      {activeTool.id === "pin" && draft ? (
+      {pinsInteractive && draft ? (
         (() => {
           const pin = draft as PinDraft;
           return (
@@ -2300,7 +2367,7 @@ function AnnotationNode({
       );
     case "text":
       return (
-        <Text
+        <CrispText
           x={annotation.x ?? 0}
           y={annotation.y ?? 0}
           text={annotation.text ?? ""}
@@ -2412,7 +2479,7 @@ function PinNode({
             stroke={highlight ? "#ffe0a3" : annotation.color}
             strokeWidth={1}
           />
-          <Text name="map-handle pin-label" x={20} y={-31} text={annotation.text} fontSize={12} fill="#e6e6e8" />
+          <CrispText name="map-handle pin-label" x={20} y={-31} text={annotation.text} fontSize={12} fill="#e6e6e8" />
         </>
       ) : null}
     </Group>

@@ -703,19 +703,27 @@ function WallNode({
     additive: e.evt.shiftKey,
     contiguous: e.evt.altKey,
   });
+  // Swap the stage cursor on hover so a wall doesn't sit under the tool's crosshair — "move" over
+  // the draggable body, "grab" over an endpoint handle. Cleared on leave so the crosshair returns.
+  const setCursor = (e: Konva.KonvaEventObject<Event>, cursor: string) => {
+    const c = e.target.getStage()?.container();
+    if (c) c.style.cursor = cursor;
+  };
 
   const endpoint = (which: "a" | "b") => ({
     name: "map-handle",
     draggable: interactive,
     hitStrokeWidth: 14,
-    onMouseEnter: () => {
+    onMouseEnter: (e: Konva.KonvaEventObject<MouseEvent>) => {
       if (!interactive) return;
       setHovered(true);
       onHover(wall.id, true);
+      setCursor(e, "grab");
     },
-    onMouseLeave: () => {
+    onMouseLeave: (e: Konva.KonvaEventObject<MouseEvent>) => {
       setHovered(false);
       onHover(wall.id, false);
+      setCursor(e, "move"); // still inside the draggable wall body
     },
     onClick: (e: Konva.KonvaEventObject<MouseEvent>) => interactive && onSelect(wall.id, mods(e)),
     onDragStart: (e: Konva.KonvaEventObject<DragEvent>) => {
@@ -744,14 +752,16 @@ function WallNode({
   return (
     <Group
       draggable={interactive}
-      onMouseEnter={() => {
+      onMouseEnter={(e) => {
         if (!interactive) return;
         setHovered(true);
         onHover(wall.id, true);
+        setCursor(e, "move");
       }}
-      onMouseLeave={() => {
+      onMouseLeave={(e) => {
         setHovered(false);
         onHover(wall.id, false);
+        setCursor(e, "");
       }}
       onDragStart={(e) => {
         if (e.target !== e.currentTarget) return; // endpoint drags cancelBubble; ignore any stray
@@ -818,6 +828,89 @@ function WallNode({
   );
 }
 
+/** Stroke color for a door glyph, by state (secret = magenta, open = green, locked = red, else blue). */
+function doorColor(door: Wall): string {
+  if (door.door === "secret") return "#d048d0";
+  if (door.state === "open") return "#7bd88f";
+  if (door.state === "locked") return "#ff6b6b";
+  return "#5b9bf0";
+}
+
+/// <summary>
+/// One clickable door glyph at a door's midpoint. When `interactive` (the viewer is in select
+/// mode), hovering brightens the glyph + adds a colored glow and swaps the cursor to a pointer, so
+/// it's clear the door can be clicked to toggle its state. Left-click toggles open/closed; the DM
+/// right-clicks to lock/unlock.
+/// </summary>
+function DoorGlyph({
+  door,
+  isDm,
+  interactive,
+  onToggleDoor,
+  onSetDoorState,
+}: {
+  door: Wall;
+  isDm: boolean;
+  /** Select mode: show the hover highlight + pointer cursor (the door is meant to be clicked). */
+  interactive: boolean;
+  onToggleDoor: (id: string) => void;
+  onSetDoorState: (id: string, state: "closed" | "open" | "locked") => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const mx = (door.x1 + door.x2) / 2;
+  const my = (door.y1 + door.y2) / 2;
+  const color = doorColor(door);
+  const hot = hovered && interactive;
+  return (
+    <Group
+      x={mx}
+      y={my}
+      name="map-handle"
+      onClick={() => onToggleDoor(door.id)}
+      onTap={() => onToggleDoor(door.id)}
+      onContextMenu={(e) => {
+        e.evt.preventDefault();
+        // DM right-click toggles the lock; players can't lock/unlock.
+        if (isDm) onSetDoorState(door.id, door.state === "locked" ? "closed" : "locked");
+      }}
+      onMouseEnter={(e) => {
+        if (!interactive) return;
+        setHovered(true);
+        const c = e.target.getStage()?.container();
+        if (c) c.style.cursor = "pointer";
+      }}
+      onMouseLeave={(e) => {
+        setHovered(false);
+        const c = e.target.getStage()?.container();
+        if (c) c.style.cursor = "";
+      }}
+    >
+      <Circle
+        radius={hot ? 12 : 10}
+        fill="#1a1408"
+        opacity={hot ? 1 : door.state === "open" ? 0.6 : 0.85}
+        stroke={hot ? "#fff6e0" : color}
+        strokeWidth={hot ? 3 : 2}
+        hitStrokeWidth={6}
+        shadowColor={color}
+        shadowBlur={hot ? 12 : 0}
+        shadowOpacity={hot ? 0.9 : 0}
+      />
+      <Text
+        text={door.state === "locked" ? "🔒" : "🚪"}
+        fontSize={11}
+        width={20}
+        height={20}
+        offsetX={10}
+        offsetY={10}
+        align="center"
+        verticalAlign="middle"
+        listening={false}
+      />
+    </Group>
+  );
+}
+
 /// <summary>
 /// Clickable door glyphs at door midpoints, shown to ALL clients (players open doors as they
 /// explore). Secret doors render only for the DM. A door only renders for a player/preview viewer
@@ -828,12 +921,15 @@ function WallNode({
 export const DoorLayer = memo(function DoorLayer({
   scene,
   isDm,
+  interactive,
   visibleDoorIds,
   onToggleDoor,
   onSetDoorState,
 }: {
   scene: Scene;
   isDm: boolean;
+  /** Select mode — doors get a hover highlight + pointer cursor so they read as clickable. */
+  interactive: boolean;
   /** Door ids lit enough to show, or `null` to show every door (lit scene / DM's own overview). */
   visibleDoorIds: Set<string> | null;
   onToggleDoor: (id: string) => void;
@@ -849,53 +945,16 @@ export const DoorLayer = memo(function DoorLayer({
   if (doors.length === 0) return null;
   return (
     <Layer>
-      {doors.map((d) => {
-        const mx = (d.x1 + d.x2) / 2;
-        const my = (d.y1 + d.y2) / 2;
-        const color =
-          d.door === "secret"
-            ? "#d048d0"
-            : d.state === "open"
-              ? "#7bd88f"
-              : d.state === "locked"
-                ? "#ff6b6b"
-                : "#5b9bf0";
-        return (
-          <Group
-            key={d.id}
-            x={mx}
-            y={my}
-            name="map-handle"
-            onClick={() => onToggleDoor(d.id)}
-            onTap={() => onToggleDoor(d.id)}
-            onContextMenu={(e) => {
-              e.evt.preventDefault();
-              // DM right-click toggles the lock; players can't lock/unlock.
-              if (isDm) onSetDoorState(d.id, d.state === "locked" ? "closed" : "locked");
-            }}
-          >
-            <Circle
-              radius={10}
-              fill="#1a1408"
-              opacity={d.state === "open" ? 0.6 : 0.85}
-              stroke={color}
-              strokeWidth={2}
-              hitStrokeWidth={6}
-            />
-            <Text
-              text={d.state === "locked" ? "🔒" : "🚪"}
-              fontSize={11}
-              width={20}
-              height={20}
-              offsetX={10}
-              offsetY={10}
-              align="center"
-              verticalAlign="middle"
-              listening={false}
-            />
-          </Group>
-        );
-      })}
+      {doors.map((d) => (
+        <DoorGlyph
+          key={d.id}
+          door={d}
+          isDm={isDm}
+          interactive={interactive}
+          onToggleDoor={onToggleDoor}
+          onSetDoorState={onSetDoorState}
+        />
+      ))}
     </Layer>
   );
 });

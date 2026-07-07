@@ -38,12 +38,15 @@ import {
   type Viewport,
 } from "./lib/types";
 
+import { applyRenderPixelRatio } from "./lib/renderQuality";
+
 type SessionParams = JoinParams & { roomId: string };
 
 const SNAP_KEY = "cm-map-snap";
 const TOASTS_KEY = "cm-log-toasts";
 const SPACE_CLICK_KEY = "cm-space-click";
 const TOKEN_PANEL_KEY = "cm-token-panel-on-click";
+const HI_RES_KEY = "cm-hi-res";
 
 /** The per-campaign UI layout blob (localStorage `cm:{roomId}:layout`). Entity-bound windows
  *  (open sheet/item) and transient state (selection, viewport) are deliberately excluded. */
@@ -119,6 +122,7 @@ export default function App() {
   const [toastsEnabled, setToastsEnabledState] = useState(() => readLocalFlag(TOASTS_KEY, true));
   const [spaceClick, setSpaceClickState] = useState(() => readLocalFlag(SPACE_CLICK_KEY, false));
   const [tokenPanelOnClick, setTokenPanelOnClickState] = useState(() => readLocalFlag(TOKEN_PANEL_KEY, true));
+  const [hiResRender, setHiResRenderState] = useState(() => readLocalFlag(HI_RES_KEY, false));
   /** Bumped by "Reset UI layout" — remounts windows / repositions the tray. */
   const [layoutEpoch, setLayoutEpoch] = useState(0);
   const lastSceneRef = useRef<string | null>(null);
@@ -331,6 +335,19 @@ export default function App() {
     },
     [roomId],
   );
+
+  const setHiResRender = useCallback(
+    (on: boolean) => {
+      if (roomId) writeCampaignFlag(roomId, "hi-res", on);
+      setHiResRenderState(on);
+    },
+    [roomId],
+  );
+  // Applies the hi-res setting to every mounted Konva stage (board + embedded scene editor)
+  // and to canvases created later; components re-read the ratio via the renderQuality store.
+  useEffect(() => {
+    applyRenderPixelRatio(hiResRender);
+  }, [hiResRender]);
   // Holding SpaceBar acts as the left mouse button when this device opts in.
   useSpaceClick(spaceClick);
 
@@ -363,6 +380,7 @@ export default function App() {
     setToastsEnabledState(readCampaignFlag(roomId, "toasts", true, TOASTS_KEY));
     setSpaceClickState(readCampaignFlag(roomId, "space-click", false, SPACE_CLICK_KEY));
     setTokenPanelOnClickState(readCampaignFlag(roomId, "token-panel", true, TOKEN_PANEL_KEY));
+    setHiResRenderState(readCampaignFlag(roomId, "hi-res", false, HI_RES_KEY));
   }, [roomId]);
 
   // Persist the layout blob whenever it changes (only after this campaign has been restored, so
@@ -516,6 +534,8 @@ export default function App() {
     setSpaceClick,
     tokenPanelOnClick,
     setTokenPanelOnClick,
+    hiResRender,
+    setHiResRender,
     resetUiLayout,
     leave,
   };

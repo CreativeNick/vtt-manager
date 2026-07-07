@@ -63,6 +63,9 @@ export type PanelContext = {
   /** DM per-client: single-clicking a token opens its Token editor panel. */
   tokenPanelOnClick: boolean;
   setTokenPanelOnClick: (on: boolean) => void;
+  /** Per-client: render the board at ≥2× pixel ratio (crisper text/art, higher GPU cost). */
+  hiResRender: boolean;
+  setHiResRender: (on: boolean) => void;
   /** Clears saved window/tray positions and returns floating UI to defaults. */
   resetUiLayout: () => void;
   /** Leaves the campaign (back to the lobby). */

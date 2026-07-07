@@ -3,8 +3,8 @@
     {
       "roomId": "campaign1",
       "name": "Campaign 1",
-      "createdAt": 0,
-      "iconUrl": null
+      "iconUrl": null,
+      "createdAt": 0
     }
   ]
 }
