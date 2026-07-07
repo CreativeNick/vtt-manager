@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { Light, LightAnimation } from "../lib/types";
 
 /// <summary>
@@ -22,6 +23,36 @@ export function LightConfigPanel({
   const anim: LightAnimation = light.animation ?? { type: "none", speed: 1, intensity: 0.5 };
   const patchAnim = (fields: Partial<LightAnimation>) =>
     patch({ animation: { ...anim, ...fields } });
+
+  // Bright/Dim are edited as free local text and only committed (validated) on blur/Enter — so a
+  // keystroke is never clamped mid-type (typing "25" while Bright is 20 used to collapse to 20 on
+  // the first digit). The drafts re-seed whenever the authoritative radii change (switching lights,
+  // or a commit that couples the two), keeping them in sync without fighting the input.
+  const [brightDraft, setBrightDraft] = useState(String(light.brightR));
+  const [dimDraft, setDimDraft] = useState(String(light.dimR));
+  const [dimError, setDimError] = useState<string | null>(null);
+  useEffect(() => {
+    setBrightDraft(String(light.brightR));
+    setDimDraft(String(light.dimR));
+    setDimError(null);
+  }, [light.id, light.brightR, light.dimR]);
+
+  const commitBright = () => {
+    const brightR = Math.max(0, Number(brightDraft) || 0);
+    // Raising Bright still pulls Dim up to keep Dim ≥ Bright (the intended coupling).
+    patch({ brightR, dimR: Math.max(brightR, light.dimR) });
+  };
+  const commitDim = () => {
+    const dimR = Math.max(0, Number(dimDraft) || 0);
+    if (dimR < light.brightR) {
+      // Reject: keep the old value and tell the DM why (Dim can't be smaller than Bright).
+      setDimError(`Dim must be ≥ Bright (${light.brightR} ft)`);
+      setDimDraft(String(light.dimR));
+      return;
+    }
+    setDimError(null);
+    patch({ dimR });
+  };
 
   return (
     <div className="panel" style={{ width: "min(280px, 92vw)" }}>
@@ -49,10 +80,11 @@ export function LightConfigPanel({
               type="number"
               min={0}
               step={5}
-              value={light.brightR}
-              onChange={(e) => {
-                const brightR = Math.max(0, Number(e.target.value) || 0);
-                patch({ brightR, dimR: Math.max(brightR, light.dimR) });
+              value={brightDraft}
+              onChange={(e) => setBrightDraft(e.target.value)}
+              onBlur={commitBright}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
               }}
             />
           </div>
@@ -62,12 +94,21 @@ export function LightConfigPanel({
               type="number"
               min={0}
               step={5}
-              value={light.dimR}
-              onChange={(e) =>
-                patch({ dimR: Math.max(light.brightR, Number(e.target.value) || 0) })
-              }
+              value={dimDraft}
+              onChange={(e) => {
+                setDimDraft(e.target.value);
+                if (dimError) setDimError(null);
+              }}
+              onBlur={commitDim}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
             />
           </div>
+        </div>
+        {/* Fixed-height slot so showing/clearing the error never reflows the panel. */}
+        <div className="light-field-note" role="alert">
+          {dimError}
         </div>
 
         <div className="field">

@@ -114,6 +114,23 @@ function useEased(target: number, snapKey: string, rate = 2.5): number {
   return value;
 }
 
+/** Tracks the OS `prefers-reduced-motion` setting (live), for surfacing the animation-override hint. */
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!mq) return;
+    const onChange = () => setReduced(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return reduced;
+}
+
 /** One remote client's live ruler, kept until cleared or stale (~2.5s). */
 type RemoteRuler = {
   points: number[];
@@ -176,6 +193,8 @@ type MapCanvasProps = {
   embedded?: boolean;
   /** DM undo/redo for map/token edits — renders the ↶/↷ rail buttons when present. */
   history?: History;
+  /** Whether the right dock panel is expanded — offsets the floating light/wall config panel. */
+  dockOpen?: boolean;
 };
 
 /// <summary>
@@ -778,6 +797,7 @@ export function MapCanvas({
   hotkeysEnabled = true,
   embedded = false,
   history,
+  dockOpen = false,
 }: MapCanvasProps) {
   const stageRef = useRef<Konva.Stage>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -1028,6 +1048,8 @@ export function MapCanvas({
   const [lightAnimations, setLightAnimations] = useState(() =>
     readCampaignFlag(state.roomId, "light-anim", true, "lightAnimations"),
   );
+  /** OS reduce-motion — the ✨ toggle overrides it, so the toolbar shows a hint when both are on. */
+  const prefersReducedMotion = usePrefersReducedMotion();
   /** DM toggle: show wall lines while NOT in the walls tool (always shown while editing). */
   const [showWalls, setShowWalls] = useState(() =>
     readCampaignFlag(state.roomId, "show-walls", true, "showWalls"),
@@ -2017,6 +2039,7 @@ export function MapCanvas({
         onDarknessCommit={commitDarkness}
         lightAnimations={lightAnimations}
         onToggleLightAnimations={toggleLightAnimations}
+        reducedMotion={prefersReducedMotion}
         lightBlendMode={scene.lightBlendMode ?? "screen"}
         onLightBlendMode={(mode) =>
           send({ type: "UPDATE_SCENE", scene: { ...scene, lightBlendMode: mode } })
@@ -2047,7 +2070,7 @@ export function MapCanvas({
       />
 
       {isDm && editingLight ? (
-        <div className="map-light-config">
+        <div className={`map-light-config${dockOpen ? " map-light-config--dock-open" : ""}`}>
           <LightConfigPanel
             light={editingLight}
             onChange={onMoveLight}
@@ -2058,7 +2081,7 @@ export function MapCanvas({
       ) : null}
 
       {isDm && editingWall ? (
-        <div className="map-light-config">
+        <div className={`map-light-config${dockOpen ? " map-light-config--dock-open" : ""}`}>
           <WallConfigPanel
             wall={editingWall}
             selectionCount={wallConfigCount}

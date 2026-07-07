@@ -137,14 +137,29 @@ label {
   font-family: var(--font-display);
 }
 
-/* Phase 6.6: per-light config panel — floats over the map, clear of the left toolbar. */
+/* Phase 6.6: per-light config panel — floats over the map, clear of the left toolbar AND the
+   right dock. Offset left of the always-present dock rail; slide further left (by the panel
+   width) while the dock panel is open, matching the log-toasts behaviour. */
 .map-light-config {
   position: absolute;
   top: 12px;
-  right: 12px;
+  right: calc(var(--dock-rail-w) + 12px);
   z-index: 5;
   max-height: calc(100% - 24px);
   overflow-y: auto;
+  transition: right 0.18s ease;
+}
+.map-light-config--dock-open {
+  right: calc(var(--dock-rail-w) + var(--dock-panel-w) + 12px);
+}
+/* Reserved inline-validation slot under the Bright/Dim inputs — always occupies its line so
+   showing/hiding the message never reflows the light panel. */
+.light-field-note {
+  min-height: 1rem;
+  margin-top: -0.15rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--danger, #ff6b6b);
 }
 
 /* Phase 6.6: darkness day↔night slider in the lighting toolbar. */

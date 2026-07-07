@@ -159,10 +159,11 @@ function animModulation(light: Light, time: number): { radiusMul: number; peak: 
     return { radiusMul: 1 - 0.3 * intensity * (1 - s), peak: 1 - 0.4 * intensity * (1 - s) };
   }
   // Flicker (torch/candle): summed incommensurate sines → pseudo-random jitter in ~[-1,1].
+  // Amplitudes are deliberately punchier than a subtle shimmer so the flicker actually reads.
   const f = Math.sin(t * 11) * 0.5 + Math.sin(t * 17.3) * 0.3 + Math.sin(t * 29.7) * 0.2;
   return {
-    radiusMul: 1 + 0.1 * intensity * f,
-    peak: Math.min(1, 1 - 0.3 * intensity * (0.5 - 0.5 * f)),
+    radiusMul: 1 + 0.14 * intensity * f,
+    peak: Math.min(1, 1 - 0.45 * intensity * (0.5 - 0.5 * f)),
   };
 }
 
@@ -174,19 +175,16 @@ function sceneHasAnimatedLight(scene: Scene): boolean {
 }
 
 /**
- * A wall-clock time (seconds) that ticks ~30fps ONLY while `active`, and never while the OS
- * asks to reduce motion — idle/animation-free scenes schedule no frames at all.
+ * A wall-clock time (seconds) that ticks ~30fps ONLY while `active` — idle/animation-free scenes
+ * schedule no frames at all. `active` is driven by the DM's ✨ Animations toggle, which is treated
+ * as an explicit opt-in: we intentionally do NOT gate on `prefers-reduced-motion` here, so a DM who
+ * turns lighting animation on still sees it. (The toolbar surfaces a hint when the OS asks to reduce
+ * motion, so the override isn't silent.)
  */
 function useAnimationClock(active: boolean): number {
   const [time, setTime] = useState(0);
   useEffect(() => {
     if (!active) return;
-    if (
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-    ) {
-      return;
-    }
     let raf = 0;
     let last = performance.now();
     const frame = 1000 / 30;
@@ -948,6 +946,9 @@ export const WallsLightsEditor = memo(function WallsLightsEditor({
   const [hoveredLightId, setHoveredLightId] = useState<string | null>(null);
   // Live ring-resize draft: radii shown while dragging a reach ring; committed on release.
   const [resize, setResize] = useState<{ id: string; brightR: number; dimR: number } | null>(null);
+  // Which reach ring the pointer is over — highlights it (esp. the faint dashed dim ring) so the
+  // DM can see the drag-to-resize handle they're about to grab.
+  const [hoveredRing, setHoveredRing] = useState<{ id: string; kind: "bright" | "dim" } | null>(null);
   // Live body-drag delta so a whole multi-selection visibly moves together (not just on release).
   const [bodyDrag, setBodyDrag] = useState<{ id: string; dx: number; dy: number } | null>(null);
 
@@ -1013,6 +1014,9 @@ export const WallsLightsEditor = memo(function WallsLightsEditor({
         const wedgeRot = (light.rotation ?? 0) - angle / 2;
         // Neutral gold so the rings read as edit-UI, not as part of the light itself.
         const ringStroke = "#ffd166";
+        // Hovered ring lights up (thicker + brighter) so the resize handle is discoverable.
+        const brightHot = hoveredRing?.id === light.id && hoveredRing.kind === "bright";
+        const dimHot = hoveredRing?.id === light.id && hoveredRing.kind === "dim";
 
         // Ring drag = resize: the ring is pinned in place (dragBoundFunc) and we read the
         // pointer's distance from the light center instead, snapped to 5 ft.
@@ -1021,6 +1025,18 @@ export const WallsLightsEditor = memo(function WallsLightsEditor({
           draggable: true,
           dragBoundFunc: pinToParentCenter,
           hitStrokeWidth: 12,
+          onMouseEnter: (e: Konva.KonvaEventObject<MouseEvent>) => {
+            setHoveredRing({ id: light.id, kind });
+            const c = e.target.getStage()?.container();
+            if (c) c.style.cursor = "grab";
+          },
+          onMouseLeave: (e: Konva.KonvaEventObject<MouseEvent>) => {
+            // Only clear if we're still the hovered ring (another ring's enter may have won).
+            setHoveredRing((cur) => (cur?.id === light.id && cur.kind === kind ? null : cur));
+            // Still inside the light group (which is draggable) → fall back to the move cursor.
+            const c = e.target.getStage()?.container();
+            if (c) c.style.cursor = "move";
+          },
           onDragStart: (e: Konva.KonvaEventObject<DragEvent>) => {
             e.cancelBubble = true;
             setResize({ id: light.id, brightR: light.brightR, dimR: light.dimR });
@@ -1052,8 +1068,18 @@ export const WallsLightsEditor = memo(function WallsLightsEditor({
             x={light.x}
             y={light.y}
             draggable={lightsActive}
-            onMouseEnter={() => lightsActive && setHoveredLightId(light.id)}
-            onMouseLeave={() => setHoveredLightId((id) => (id === light.id ? null : id))}
+            onMouseEnter={(e) => {
+              if (!lightsActive) return;
+              setHoveredLightId(light.id);
+              const c = e.target.getStage()?.container();
+              if (c) c.style.cursor = "move";
+            }}
+            onMouseLeave={(e) => {
+              setHoveredLightId((id) => (id === light.id ? null : id));
+              setHoveredRing((cur) => (cur?.id === light.id ? null : cur));
+              const c = e.target.getStage()?.container();
+              if (c) c.style.cursor = ""; // revert to the inherited tool crosshair
+            }}
             onDragEnd={(e) => {
               // Ring drags bubble here too — only commit a MOVE for the group itself.
               if (e.target !== e.currentTarget) return;
@@ -1077,8 +1103,8 @@ export const WallsLightsEditor = memo(function WallsLightsEditor({
                     angle={angle}
                     rotation={wedgeRot}
                     stroke={ringStroke}
-                    strokeWidth={1}
-                    opacity={0.35}
+                    strokeWidth={brightHot ? 2 : 1}
+                    opacity={brightHot ? 0.6 : 0.35}
                     {...ringResizeProps("bright")}
                   />
                   <Wedge
@@ -1086,8 +1112,8 @@ export const WallsLightsEditor = memo(function WallsLightsEditor({
                     angle={angle}
                     rotation={wedgeRot}
                     stroke={ringStroke}
-                    strokeWidth={1}
-                    opacity={0.18}
+                    strokeWidth={dimHot ? 2 : 1}
+                    opacity={dimHot ? 0.5 : 0.18}
                     dash={[8, 8]}
                     {...ringResizeProps("dim")}
                   />
@@ -1097,15 +1123,15 @@ export const WallsLightsEditor = memo(function WallsLightsEditor({
                   <Circle
                     radius={brightPx}
                     stroke={ringStroke}
-                    strokeWidth={1}
-                    opacity={0.35}
+                    strokeWidth={brightHot ? 2 : 1}
+                    opacity={brightHot ? 0.6 : 0.35}
                     {...ringResizeProps("bright")}
                   />
                   <Circle
                     radius={dimPx}
                     stroke={ringStroke}
-                    strokeWidth={1}
-                    opacity={0.18}
+                    strokeWidth={dimHot ? 2 : 1}
+                    opacity={dimHot ? 0.5 : 0.18}
                     dash={[8, 8]}
                     {...ringResizeProps("dim")}
                   />

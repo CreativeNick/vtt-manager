@@ -600,6 +600,7 @@ export default function App() {
         onToggleSnap={toggleSnap}
         hotkeysEnabled={onBoard}
         history={isDm ? history : undefined}
+        dockOpen={dockOpen}
       />
 
       {/* 3D dice canvas: above the map, below all UI, never takes pointer events. */}

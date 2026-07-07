@@ -20,12 +20,12 @@ const TEMPLATE_ICON: Record<TemplateKind, string> = {
 const DRAW_WIDTHS = [2, 4, 7];
 /** CSP-style labels for the light tint blend modes (+ the tint-off escape hatch). */
 const LIGHT_BLEND_OPTIONS: Array<{ id: LightBlendMode; label: string }> = [
+  { id: "none", label: "None (fog only)" },
   { id: "screen", label: "Screen" },
   { id: "overlay", label: "Overlay" },
   { id: "soft-light", label: "Soft Light" },
   { id: "multiply", label: "Multiply" },
   { id: "plus-lighter", label: "Add (Glow)" },
-  { id: "none", label: "None (fog only)" },
 ];
 const LIGHT_PRESET_LIST: Array<{ id: LightPreset; label: string }> = [
   { id: "candle", label: "Candle" },
@@ -90,6 +90,8 @@ type MapToolbarProps = {
   /** Phase 6.6: per-frame light animations (client toggle / low-end escape hatch). */
   lightAnimations: boolean;
   onToggleLightAnimations: () => void;
+  /** OS `prefers-reduced-motion` is on — the ✨ toggle overrides it, so surface a hint. */
+  reducedMotion?: boolean;
   /** Phase 6.6b: how colored-light tint composites over the scene (per-scene, synced). */
   lightBlendMode: LightBlendMode;
   onLightBlendMode: (mode: LightBlendMode) => void;
@@ -190,6 +192,7 @@ export function MapToolbar({
   onDarknessCommit,
   lightAnimations,
   onToggleLightAnimations,
+  reducedMotion = false,
   lightBlendMode,
   onLightBlendMode,
   visionPreview,
@@ -272,6 +275,14 @@ export function MapToolbar({
             >
               ✨ Animations {lightAnimations ? "on" : "off"}
             </OptBtn>
+            {reducedMotion && lightAnimations ? (
+              <span
+                className="map-toolbar-hint"
+                title="Windows 'reduce motion' is on. Lighting animations are playing because you enabled them here — turn ✨ Animations off to respect the system setting."
+              >
+                ⚠ overriding system reduce-motion
+              </span>
+            ) : null}
             <select
               className="map-blend-select"
               value={lightBlendMode}
