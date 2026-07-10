@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, Upload } from "lucide-react";
 import type { PanelContext } from "../panels/registry";
 import {
@@ -12,6 +12,7 @@ import {
   type TokenShape,
   type TokenShapeDefaults,
   type UiAccent,
+  type UiThemeOverride,
 } from "../lib/types";
 import type { CampaignManifest } from "../lib/campaignManifest";
 
@@ -92,6 +93,27 @@ export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
   const [layoutReset, setLayoutReset] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
+
+  // Table-look override (DM): the theme/accent the DM has DIALED IN, editable
+  // whether or not the override is live. While off, this is a private draft
+  // (nothing broadcasts) so the DM can set the look first and flip it on in one
+  // atomic step — players never flash a wrong default. While on, edits go live
+  // immediately and we mirror the live value back into the draft.
+  const [stagedLook, setStagedLook] = useState<UiThemeOverride>(
+    () => state.uiOverride ?? { theme: ctx.nightMode ? "night" : "day", accent: ctx.accent },
+  );
+  const overrideOn = state.uiOverride !== null;
+  useEffect(() => {
+    if (state.uiOverride) {
+      setStagedLook(state.uiOverride);
+    }
+  }, [state.uiOverride]);
+  const editLook = (next: UiThemeOverride) => {
+    setStagedLook(next);
+    if (overrideOn) {
+      room.send({ type: "SET_UI_OVERRIDE", override: next });
+    }
+  };
 
   const handleImportFile = async (file: File) => {
     setImportError(null);
@@ -191,51 +213,35 @@ export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
       {isDm ? (
         <>
           <div className="section-title">Table look (DM)</div>
+          <span className="muted" style={{ fontSize: "0.75rem" }}>
+            Set the theme and accent below, then turn the override on to apply it to every
+            player at once. Off (default) = each player picks their own look.
+          </span>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <label style={{ margin: 0 }}>Table theme</label>
+            <button
+              onClick={() =>
+                editLook({ ...stagedLook, theme: stagedLook.theme === "night" ? "day" : "night" })
+              }
+            >
+              {stagedLook.theme === "night" ? "Night" : "Day"}
+            </button>
+          </div>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <label style={{ margin: 0 }}>Table accent</label>
+            <AccentSwatches
+              value={stagedLook.accent}
+              onPick={(accent) => editLook({ ...stagedLook, accent })}
+            />
+          </div>
           <ToggleRow
             label="Override everyone's look"
-            hint="Force one theme + accent for every player at the table. Off (default) = each player picks their own in Settings."
-            on={state.uiOverride !== null}
+            hint="Force the theme + accent above on every player. Off (default) = each player picks their own in Settings."
+            on={overrideOn}
             onToggle={(on) =>
-              room.send({
-                type: "SET_UI_OVERRIDE",
-                override: on
-                  ? { theme: ctx.nightMode ? "night" : "day", accent: ctx.accent }
-                  : null,
-              })
+              room.send({ type: "SET_UI_OVERRIDE", override: on ? stagedLook : null })
             }
           />
-          {state.uiOverride ? (
-            <>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <label style={{ margin: 0 }}>Table theme</label>
-                <button
-                  onClick={() =>
-                    room.send({
-                      type: "SET_UI_OVERRIDE",
-                      override: {
-                        theme: state.uiOverride!.theme === "night" ? "day" : "night",
-                        accent: state.uiOverride!.accent,
-                      },
-                    })
-                  }
-                >
-                  {state.uiOverride.theme === "night" ? "Night" : "Day"}
-                </button>
-              </div>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <label style={{ margin: 0 }}>Table accent</label>
-                <AccentSwatches
-                  value={state.uiOverride.accent}
-                  onPick={(accent) =>
-                    room.send({
-                      type: "SET_UI_OVERRIDE",
-                      override: { theme: state.uiOverride!.theme, accent },
-                    })
-                  }
-                />
-              </div>
-            </>
-          ) : null}
 
           <div className="section-title">Room (DM)</div>
           <ToggleRow

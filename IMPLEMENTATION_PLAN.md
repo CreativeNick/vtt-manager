@@ -2422,6 +2422,12 @@ scoped placeholder).
 > `GameState.uiOverride` (normalized in `normalizeUiOverride`, default null) +
 > DM-gated `SET_UI_OVERRIDE`; the client applies `state.uiOverride` over device prefs
 > while joined and falls back the moment it's released (device prefs untouched).
+> **Staged before it goes live (user feedback):** the Table theme + accent controls
+> render ABOVE the toggle and are always editable — while off they mutate a private
+> local `stagedLook` draft (nothing broadcasts), so the DM dials in the look and flips
+> the switch to apply it atomically; players never flash a wrong default. While on,
+> edits go live immediately and an effect mirrors `state.uiOverride` back into the
+> draft.
 > - **Verified:** build green; headless-Chrome E2E — lobby toggle, moss accent pick,
 > DM override to night+ember round-tripped through the live PartyKit server, release
 > restored device prefs; zero console errors. (`npm i` note: adding `lucide-react`
