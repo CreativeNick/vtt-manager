@@ -113,9 +113,10 @@
 /* ============================================================================
    Accent variations (Quill & Ember "Variations" cards): alternate interactive
    accents that replace the sky family + the slate header band. Gold, terra,
-   and sage stay put. Set data-accent="moss|ember|lapis" on <html> (no
-   attribute = the default sky). Day values are verbatim from the bundle's
-   variation cards; night values are derived (brightened accent on stone).
+   and sage stay put. Set data-accent="moss|ember|lapis|amethyst|rose|teal" on
+   <html> (no attribute = the default sky). Moss/ember/lapis day values are
+   verbatim from the bundle's variation cards; the extra three follow the same
+   recipe. Night values are derived (brightened accent on stone).
    ========================================================================== */
 
 [data-accent="moss"] {
@@ -141,6 +142,39 @@
   --accent-bright: #6d8cc7;
   --accent-soft: #d3dcef;
   --surface-slate: #46598c;
+}
+[data-accent="amethyst"] {
+  /* Amethyst & Dusk — arcane sanctum */
+  --bg: #e8e2ee;
+  --accent: #7a52a6;
+  --accent-bright: #9a75c2;
+  --accent-soft: #e3d8ef;
+  --surface-slate: #5d4a7a;
+}
+[data-accent="rose"] {
+  /* Rose & Bramble — briar court */
+  --bg: #f0dde5;
+  --accent: #b04f78;
+  --accent-bright: #cf7098;
+  --accent-soft: #f2d5e0;
+  --surface-slate: #7a4a5e;
+}
+[data-accent="teal"] {
+  /* Teal & Reef — sunken temple */
+  --bg: #dcebe8;
+  --accent: #2f8a80;
+  --accent-bright: #4faaa0;
+  --accent-soft: #c9e6e1;
+  --surface-slate: #3f6b64;
+}
+[data-accent="crimson"] {
+  /* Crimson & Garnet — a truer, cooler red than the terracotta DANGER color, so
+     selection/interaction stays distinct from destructive actions. */
+  --bg: #f0dad6;
+  --accent: #b83232;
+  --accent-bright: #d15c56;
+  --accent-soft: #f2d3ce;
+  --surface-slate: #7a3c3c;
 }
 
 /* Night = stone. Day is ink on paper; night is chalk on carved rock: cool
@@ -226,4 +260,36 @@
   --accent-soft: #303c57;
   --on-accent: #16233f;
   --surface-slate: #3a4a75;
+}
+[data-theme="night"][data-accent="amethyst"] {
+  --bg: #26282e;
+  --accent: #b295d6;
+  --accent-bright: #cab2e6;
+  --accent-soft: #382e4e;
+  --on-accent: #241638;
+  --surface-slate: #493c66;
+}
+[data-theme="night"][data-accent="rose"] {
+  --bg: #26282e;
+  --accent: #d98aac;
+  --accent-bright: #e7a8c2;
+  --accent-soft: #4e2b3a;
+  --on-accent: #38182a;
+  --surface-slate: #5c3a4a;
+}
+[data-theme="night"][data-accent="teal"] {
+  --bg: #26282e;
+  --accent: #63c0b4;
+  --accent-bright: #8ad6cc;
+  --accent-soft: #26443f;
+  --on-accent: #10302b;
+  --surface-slate: #35594f;
+}
+[data-theme="night"][data-accent="crimson"] {
+  --bg: #26282e;
+  --accent: #dd7168;
+  --accent-bright: #ea968f;
+  --accent-soft: #4e2c29;
+  --on-accent: #3a1613;
+  --surface-slate: #5c3838;
 }

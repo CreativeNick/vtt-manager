@@ -1273,13 +1273,26 @@ export type GameState = {
 };
 
 /** Accent variations of the Quill & Ember skin (Phase 8). "sky" is the default. */
-export const UI_ACCENTS = ["sky", "moss", "ember", "lapis"] as const;
+export const UI_ACCENTS = [
+  "sky",
+  "moss",
+  "ember",
+  "lapis",
+  "amethyst",
+  "rose",
+  "teal",
+  "crimson",
+] as const;
 export type UiAccent = (typeof UI_ACCENTS)[number];
 export const UI_ACCENT_LABEL: Record<UiAccent, string> = {
   sky: "Sky (default)",
   moss: "Moss & Loam",
   ember: "Ember & Wine",
   lapis: "Tide & Lapis",
+  amethyst: "Amethyst & Dusk",
+  rose: "Rose & Bramble",
+  teal: "Teal & Reef",
+  crimson: "Crimson & Garnet",
 };
 export type UiTheme = "day" | "night";
 export type UiThemeOverride = { theme: UiTheme; accent: UiAccent };

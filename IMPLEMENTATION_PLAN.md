@@ -2414,7 +2414,14 @@ scoped placeholder).
 > Accent color swatches): Sky (default) / **Moss & Loam** / **Ember & Wine** /
 > **Tide & Lapis** — day values verbatim from the bundle's variation cards, night
 > values derived; applied via `data-accent` on `<html>` next to `data-theme`
-> (key `cm-ui-accent`).
+> (key `cm-ui-accent`). Later extended to eight with **Amethyst & Dusk** (purple),
+> **Rose & Bramble**, **Teal & Reef**, and **Crimson & Garnet** (a cooler/purer red
+> than the terracotta DANGER color, so selection stays distinct from destructive
+> actions) — same recipe; the swatch row wraps at 1.3rem coins. Adding an accent is
+> three edits: `UI_ACCENTS` +
+> `UI_ACCENT_LABEL` (types), the day+night `[data-accent]` blocks (tokens.css), and
+> `ACCENT_SWATCH` (SettingsPanel); the override validator keys off `UI_ACCENTS` so no
+> server change is needed.
 > - **Night mode discoverability:** a sun/moon toggle now sits on the lobby card's
 > top-right corner (same `cm-night-mode` flag as the Settings row).
 > - **DM "Table look" override (off by default):** Settings → Table look (DM) →

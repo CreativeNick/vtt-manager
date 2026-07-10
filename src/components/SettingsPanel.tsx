@@ -31,6 +31,10 @@ const ACCENT_SWATCH: Record<UiAccent, string> = {
   moss: "#6f8a48",
   ember: "#b05f33",
   lapis: "#4b69a6",
+  amethyst: "#7a52a6",
+  rose: "#b04f78",
+  teal: "#2f8a80",
+  crimson: "#b83232",
 };
 
 /** A row of four accent "coins"; the active one wears a cream inner ring. */
