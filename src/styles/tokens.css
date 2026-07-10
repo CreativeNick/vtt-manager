@@ -1,35 +1,60 @@
 /* ============================================================================
    Design tokens — the single re-theming surface.
    Components consume ONLY these variables; a new skin (or a user CSS theme
-   later) is just a new set of values for these properties. The current dark
-   palette is a placeholder skin, not the final look.
+   later) is just a new set of values for these properties.
+
+   Current skin: "Quill & Ember" — a cozy hand-drawn fantasy system (parchment,
+   2px drawn ink outlines, wobble radii, craft shadows). Day is the default;
+   night ("chalk on carved stone") is scoped under [data-theme="night"] on
+   <html>. Ported from the Blue Turtle UI V2 handoff bundle.
    ========================================================================== */
 
 :root {
+  color-scheme: light;
+
   /* -- Palette --------------------------------------------------------------- */
-  --bg: #1a1a1c;
-  --surface: rgba(38, 38, 42, 0.95);
-  --surface-solid: #262629;
-  --surface-2: #303035;
-  --surface-inset: rgba(0, 0, 0, 0.2);
-  --input-bg: rgba(0, 0, 0, 0.28);
-  --border: #45454b;
-  --border-subtle: #333338;
-  --text: #e6e6e8;
-  --text-muted: #9a9aa2;
-  --accent: #4a9eff;
-  --accent-bright: #7bb8ff;
-  --on-accent: #08182b;
-  --danger: #e5686b;
-  --danger-soft: rgba(229, 104, 107, 0.16);
-  --danger-text: #ffd9d9;
-  --success: #7bc488;
+  --bg: #f1e4df; /* dusty plaster room wash */
+  --surface: rgba(237, 229, 209, 0.96); /* parchment panels */
+  --surface-solid: #ede5d1;
+  --surface-2: #e3d8be; /* inset wells, hover fills */
+  --surface-inset: rgba(74, 59, 47, 0.1);
+  --input-bg: rgba(74, 59, 47, 0.07);
+  --border: #4a3b2f; /* drawn ink outlines */
+  --border-subtle: rgba(74, 59, 47, 0.35);
+  --text: #40332a; /* warm ink */
+  --text-muted: #6a5947;
+  --accent: #4f8cbf; /* sky — selection & interaction */
+  --accent-bright: #74b2e0;
+  --on-accent: #f6f0df;
+  --danger: #c05b49; /* terracotta — destructive, close, damage */
+  --danger-strong: #9c4534;
+  --danger-soft: rgba(192, 91, 73, 0.16);
+  --danger-text: #7c3728;
+  --success: #6e8148; /* sage — healing, complete */
+
+  /* Quill & Ember extensions ------------------------------------------------- */
+  --text-faint: #98866b; /* placeholders, ghost text */
+  --text-invert: #f6f0df; /* cream text on wood/slate/ink — both modes */
+  --surface-page: #f4eedf; /* brightest page (hover fills) */
+  --surface-plaque: #b7a585; /* torn tan strip headers */
+  --surface-plaque-2: #a28e6c;
+  --surface-wood: #8a6e52; /* frames, ribbons */
+  --surface-wood-2: #66503a; /* deep wood, stepper plates */
+  --surface-slate: #56688a; /* painted night-sky band (window headers) */
+  --map-bg: #ead9d3; /* the tabletop behind/around the scene image */
+  --primary: #e2b458; /* gold — the one main action per view */
+  --primary-strong: #c2913c;
+  --primary-soft: #f1dfae;
+  --on-primary: #3a2e1d; /* dark ink on gold/sky chips — both modes */
+  --accent-soft: #c7dff1;
+  --success-soft: #dde2c6;
+  --backdrop: rgba(52, 38, 28, 0.42);
 
   /* -- Typography -------------------------------------------------------------
      display = narrative headers, body = UI text, mono = stats/data. */
-  --font-display: "Cinzel", Georgia, serif;
-  --font-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", Consolas, monospace;
+  --font-display: "Alegreya", Georgia, "Times New Roman", serif;
+  --font-body: "PT Sans", "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "PT Mono", Consolas, monospace;
 
   /* -- Spacing (4px unit) ------------------------------------------------------ */
   --space-1: 4px;
@@ -38,14 +63,92 @@
   --space-4: 16px;
   --space-6: 24px;
 
-  /* -- Shape ------------------------------------------------------------------- */
-  --radius: 6px;
-  --radius-lg: 12px;
+  /* -- Shape -------------------------------------------------------------------
+     Wobble radii are the hand-drawn signature: four unequal corner pairs so
+     nothing is machine-perfect. Prefer them over the fixed radii where the
+     element is big enough to show it. */
+  --radius: 8px;
+  --radius-lg: 14px;
+  --r-wob-sm: 8px 10px 7px 11px / 10px 7px 11px 8px;
+  --r-wob-md: 14px 11px 15px 10px / 11px 15px 10px 14px;
+  --r-wob-lg: 22px 17px 24px 15px / 17px 23px 15px 22px;
+  --r-wob-pill: 49% 51% 48% 52% / 52% 48% 53% 47%;
 
-  /* -- Elevation (map → cluster → window → modal) -------------------------------- */
-  --elev-1: 0 2px 8px rgba(0, 0, 0, 0.35);
-  --elev-2: 0 8px 30px rgba(0, 0, 0, 0.5);
-  --elev-3: 0 16px 50px rgba(0, 0, 0, 0.6);
+  /* -- Elevation (map → cluster → window → modal): warm graphite, not black --- */
+  --elev-1: 0 2px 8px rgba(74, 59, 47, 0.18);
+  --elev-2: 0 8px 26px rgba(74, 59, 47, 0.22);
+  --elev-3: 0 16px 44px rgba(58, 44, 32, 0.3);
   --shadow: var(--elev-2);
-  --blur: blur(10px);
+  --blur: blur(6px);
+
+  /* Craft shadows: panels sit on the table, pressables rest on a "ledge",
+     fields are carved "wells". */
+  --shadow-panel: 0 2px 0 rgba(74, 59, 47, 0.05), 0 10px 26px rgba(74, 59, 47, 0.16);
+  --shadow-pop: 0 4px 0 rgba(74, 59, 47, 0.05), 0 20px 44px rgba(58, 44, 32, 0.3);
+  --shadow-ledge: inset 0 -3px 0 rgba(74, 59, 47, 0.16);
+  --shadow-well: inset 0 2px 5px rgba(74, 59, 47, 0.16);
+  --shadow-lift: 0 6px 14px rgba(74, 59, 47, 0.22);
+
+  /* -- Paper textures (tileable PNGs in public/textures/) --------------------- */
+  --tex-grain: url("/textures/paper-grain.png");
+  --tex-speckle: url("/textures/ink-speckles.png");
+
+  /* -- Motion: press onto the ledge, panels drift up like turned pages -------- */
+  --dur-1: 120ms; /* hover / press */
+  --dur-2: 220ms; /* toggles, fills */
+  --dur-3: 340ms; /* panels, dialogs */
+  --ease-out: cubic-bezier(0.22, 0.9, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.42, 0.44, 1);
+}
+
+/* Night = stone. Day is ink on paper; night is chalk on carved rock: cool
+   slab grays, blue-gray plaques, basalt frames, near-black incised lines. */
+[data-theme="night"] {
+  color-scheme: dark;
+
+  --bg: #26282e; /* dark stone hall */
+  --surface: rgba(75, 79, 87, 0.97); /* stone slab */
+  --surface-solid: #4b4f57;
+  --surface-2: #40444b; /* carved wells */
+  --surface-inset: rgba(0, 0, 0, 0.3);
+  --input-bg: rgba(0, 0, 0, 0.24);
+  --border: #15161a;
+  --border-subtle: rgba(10, 11, 14, 0.55);
+  --text: #eae7de; /* chalk */
+  --text-muted: #c2c0b6;
+  --accent: #7fb3e2;
+  --accent-bright: #9fc8ec;
+  --on-accent: #1b2b3c;
+  --danger: #cd6a55;
+  --danger-strong: #e08d77;
+  --danger-soft: rgba(205, 106, 85, 0.2);
+  --danger-text: #f2c4b6;
+  --success: #9cb070;
+
+  --text-faint: #92918a;
+  --text-invert: #f6f0df;
+  --surface-page: #5b5f67; /* polished slab face */
+  --surface-plaque: #5a6170; /* blue-gray stone strip */
+  --surface-plaque-2: #4c525f;
+  --surface-wood: #3a3d44; /* basalt frames */
+  --surface-wood-2: #2b2e34;
+  --surface-slate: #3c4c6e;
+  --map-bg: #1f2126;
+  --primary: #e7bc5f;
+  --primary-strong: #f2d186;
+  --primary-soft: #544b31;
+  --on-primary: #3a2e1d;
+  --accent-soft: #31435c;
+  --success-soft: #3d4432;
+  --backdrop: rgba(8, 9, 13, 0.6);
+
+  --elev-1: 0 2px 8px rgba(6, 4, 10, 0.45);
+  --elev-2: 0 8px 26px rgba(6, 4, 10, 0.55);
+  --elev-3: 0 16px 44px rgba(6, 4, 10, 0.65);
+
+  --shadow-panel: 0 2px 0 rgba(0, 0, 0, 0.12), 0 12px 28px rgba(8, 5, 12, 0.5);
+  --shadow-pop: 0 4px 0 rgba(0, 0, 0, 0.12), 0 22px 48px rgba(6, 4, 10, 0.65);
+  --shadow-ledge: inset 0 -3px 0 rgba(0, 0, 0, 0.3);
+  --shadow-well: inset 0 2px 5px rgba(0, 0, 0, 0.35);
+  --shadow-lift: 0 6px 14px rgba(6, 4, 10, 0.5);
 }

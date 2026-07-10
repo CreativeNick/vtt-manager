@@ -54,7 +54,7 @@ export function AssetPickerModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal asset-picker" onClick={(e) => e.stopPropagation()}>
         <div className="asset-picker-head">
-          <h2 style={{ color: "var(--accent-bright)", margin: 0 }}>{title}</h2>
+          <h2 style={{ margin: 0 }}>{title}</h2>
           <button className="btn-ghost icon-btn" title="Close" onClick={onClose}>
             ✕
           </button>

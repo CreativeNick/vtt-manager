@@ -120,7 +120,7 @@
   /* The extra width tucks LEFT behind the panel; keep the glyph in the visible right part. */
   justify-items: end;
   padding-right: 9px;
-  color: var(--accent-bright);
+  color: var(--accent);
   background: var(--surface-solid);
   border-color: var(--border);
   border-left-color: var(--surface-solid);
@@ -171,7 +171,7 @@
   position: relative;
   font-family: var(--font-display);
   font-size: 1.2rem;
-  color: var(--accent-bright);
+  color: var(--accent);
   width: 2.2rem;
   text-align: center;
   background: none;
@@ -192,7 +192,7 @@
 }
 .stat-badge-value {
   font-family: var(--font-display);
-  color: var(--accent-bright);
+  color: var(--accent);
   font-size: 0.95rem;
 }
 .stat-badge-label {
@@ -232,7 +232,7 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 .vitals-skill .total {
-  color: var(--accent-bright);
+  color: var(--accent);
   font-family: var(--font-display);
 }
 
@@ -384,7 +384,7 @@
 .level-ring-value {
   font-family: var(--font-display);
   font-size: 1.2rem;
-  color: var(--accent-bright);
+  color: var(--accent);
 }
 .level-ring-input {
   width: 2rem;
@@ -393,7 +393,7 @@
   border: none;
   font-family: var(--font-display);
   font-size: 1.1rem;
-  color: var(--accent-bright);
+  color: var(--accent);
 }
 .sheet-size-warn {
   padding: 0.3rem 0.5rem;
@@ -455,7 +455,7 @@
 }
 .prof-dot--expertise {
   background: var(--accent-bright);
-  border-color: var(--accent-bright);
+  border-color: var(--accent);
   box-shadow: inset 0 0 0 2px var(--surface-solid);
 }
 .uses-cell {
@@ -687,7 +687,7 @@
 .prepared-toggle--on,
 .effect-toggle--on {
   opacity: 1;
-  color: var(--accent-bright);
+  color: var(--accent);
   border-color: var(--accent);
 }
 .inv-expand-grid {
@@ -726,7 +726,7 @@
 .ability-block-mod {
   font-family: var(--font-display);
   font-size: 1rem;
-  color: var(--accent-bright);
+  color: var(--accent);
   background: none;
   border: none;
   cursor: pointer;
@@ -771,7 +771,7 @@
 }
 .skill-total {
   font-family: var(--font-display);
-  color: var(--accent-bright);
+  color: var(--accent);
   background: none;
   border: none;
   cursor: pointer;
@@ -799,7 +799,7 @@
 }
 .save-total {
   font-family: var(--font-display);
-  color: var(--accent-bright);
+  color: var(--accent);
   background: none;
   border: none;
   cursor: pointer;
@@ -831,7 +831,7 @@
   font-size: 0.75rem;
 }
 .npc-save-chip .total {
-  color: var(--accent-bright);
+  color: var(--accent);
   font-family: var(--font-display);
 }
 .class-chip {
@@ -949,7 +949,7 @@
 }
 .sc-value {
   font-family: var(--font-display);
-  color: var(--accent-bright);
+  color: var(--accent);
   font-size: 1rem;
   text-align: center;
   width: 3rem;
@@ -1172,20 +1172,20 @@
   font-family: var(--font-mono);
 }
 .roll-chip--die {
-  background: rgba(122, 90, 45, 0.35);
-  border-color: rgba(201, 162, 39, 0.5);
+  background: var(--primary-soft);
+  border-color: var(--primary-strong);
 }
 .roll-chip--ability {
-  background: rgba(45, 74, 123, 0.35);
-  border-color: rgba(74, 158, 255, 0.5);
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 .roll-chip--prof {
-  background: rgba(58, 123, 45, 0.35);
-  border-color: rgba(123, 196, 136, 0.5);
+  background: var(--success-soft);
+  border-color: var(--success);
 }
 .roll-chip--item {
-  background: rgba(123, 45, 58, 0.35);
-  border-color: rgba(196, 92, 92, 0.5);
+  background: var(--danger-soft);
+  border-color: var(--danger);
 }
 .roll-chip--flat {
   background: var(--surface-2);
@@ -1196,9 +1196,9 @@
   color: var(--text-muted);
 }
 .roll-chip--crit {
-  background: rgba(196, 60, 60, 0.85);
-  border-color: rgba(255, 120, 120, 0.9);
-  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger-strong);
+  color: var(--text-invert);
   font-weight: 700;
   letter-spacing: 0.06em;
 }
@@ -1215,7 +1215,7 @@
   white-space: nowrap;
 }
 .hp-temp {
-  color: var(--accent-bright);
+  color: var(--accent);
   margin-left: 0.15rem;
 }
 .hp-step {
@@ -1328,7 +1328,7 @@
   color: var(--text-muted);
 }
 .asset-usage--used {
-  color: var(--accent-bright);
+  color: var(--accent);
 }
 .asset-actions {
   display: flex;
@@ -1377,7 +1377,7 @@
   cursor: pointer;
 }
 .asset-picker-item:hover {
-  border-color: var(--accent-bright);
+  border-color: var(--accent);
 }
 .asset-picker-item img {
   width: 100%;
@@ -1397,13 +1397,18 @@
   padding: 2px 8px;
   font-size: 0.62rem;
   border-radius: 6px;
-  color: var(--text);
-  background: rgba(10, 12, 16, 0.72);
+  color: var(--text-invert);
+  background: rgba(30, 24, 18, 0.72);
+  background-image: none;
   border: 1px solid var(--border);
+  box-shadow: none;
   cursor: pointer;
 }
-.sheet-portrait-lib:hover {
-  background: rgba(10, 12, 16, 0.92);
+.sheet-portrait-lib:hover:not(:disabled) {
+  background: rgba(30, 24, 18, 0.92);
+  color: var(--text-invert);
+  transform: none;
+  box-shadow: none;
 }
 /* Empty state has no "Change" pill above it, so sit in the top corner itself. */
 .sheet-portrait-lib--empty {
@@ -1436,7 +1441,7 @@
   border: none;
   padding: 0;
   cursor: pointer;
-  color: var(--accent-bright);
+  color: var(--accent);
   font-size: 0.5rem;
   line-height: 1;
 }
@@ -1474,7 +1479,7 @@
   text-align: center;
   padding: 0.05rem;
   font-family: var(--font-display);
-  color: var(--accent-bright);
+  color: var(--accent);
   background: none;
   border: 1px solid transparent;
 }
@@ -1499,10 +1504,12 @@
   gap: 0.35rem;
   min-width: 13rem;
   padding: 0.55rem 0.65rem;
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-sm);
+  box-shadow: var(--shadow-pop);
   font-size: 0.78rem;
 }
 .short-rest-pop label {
@@ -1543,7 +1550,7 @@
   font-size: 0.66rem;
   line-height: 1;
   padding: 0.15rem 0.3rem;
-  color: var(--accent-bright);
+  color: var(--accent);
 }
 .use-btn:disabled {
   opacity: 0.35;

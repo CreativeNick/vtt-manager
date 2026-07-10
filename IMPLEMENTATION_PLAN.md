@@ -9,9 +9,19 @@ architecture reference — **historical**, describes the codebase before Phases 
 overrides, trait/condition-aware rolls, real rests/casting/death saves — see its
 "as built" note).
 
-## STATUS (2026-07-07) — read this first in a fresh session
+## STATUS (2026-07-10) — read this first in a fresh session
 
-**Latest (2026-07-07): map-interaction QoL round** — hover/drag affordances plus a
+**Latest (2026-07-10): Phase 8 STARTED — "Quill & Ember" aesthetic revamp, round 1
+shipped.** The full parchment/ink visual identity arrived as a ready-made design system
+(claude.ai/design handoff bundle at `Blue Turtle UI V2-handoff/` — treat it as the design
+source of truth) and is now applied app-wide: `tokens.css` rewritten with day + night
+themes (per-device **Night mode** toggle in Settings), a chrome pass over
+`index.css`/`sheet7.css`, new fonts (Alegreya / PT Sans / PT Mono), and bundled paper
+textures in `public/textures/`. Build green + headless-Chrome verified, zero console
+errors. Details in Phase 8's "as built" note; still open there: emoji→Lucide icon swap,
+sound design, motion language, dice/coin skins, integrated-GPU pass.
+
+**Prior (2026-07-07): map-interaction QoL round** — hover/drag affordances plus a
 direct-manipulation grid calibrator: pins are grabbable/editable in **select** mode (not just the
 pin tool); hovering a wall in the **walls** tool shows a move/grab cursor (not the crosshair); doors
 **highlight + show a pointer** cursor on hover in select mode; and the 🎯 grid-calibrate tool's
@@ -31,7 +41,8 @@ color-coded log chips, quick-HP steppers, token facing, measurement templates, c
 map pins + scene pre-staging, a DM Assets page, and full campaign export/import — see its
 "as built" note. **Phase 6.9 (walls revamp — types+channels, movement blocking, full editing) shipped
 and machine-verified (manual two-window UX pass still owed); Phase 8 (full aesthetic
-revamp + sound design) follows.** Phases 6.6–6.8
+revamp + sound design) is IN PROGRESS — round 1, the Quill & Ember skin, shipped
+2026-07-10.** Phases 6.6–6.8
 had already pulled a lot forward (lighting revamp; token shapes/sizing/image tokens; item
 tokens + Item Sheet + Items page; independent NPC folder trees; directory multi-select +
 folder reorder). The roadmap was restructured
@@ -86,9 +97,11 @@ each pop-out-able into a draggable window; sheets are floating windows.
 players stay on the Board — sheets open as (resizable, maximizable) windows. The Board
 remains the play surface: nothing needed mid-encounter may require leaving it. See
 Phase 5.5.)*
-- **Visual style:** CSS design-token layer (`src/styles/tokens.css`); current look is a
-placeholder skin somewhere between the `design_example/` MythicScribe system and
-FoundryVTT's minimal UI. Invest in the token architecture, not final polish.
+- **Visual style:** CSS design-token layer (`src/styles/tokens.css`); the token
+architecture paid off in Phase 8 — the placeholder dark skin is REPLACED by the
+**Quill & Ember** parchment/ink system (day + night themes) from the
+`Blue Turtle UI V2-handoff/` design bundle. *(The old "placeholder skin between
+MythicScribe and FoundryVTT" note is superseded.)*
 - **3D dice (superseded "rebuild fresh"):** **hybrid, shipped** — debugged v1 core recovered
 from git `e23a632` (geometry/pre-sim/track/face-labeling), integration rebuilt fresh;
 grab-shake-throw from a tray UI onto the board; recorded-track sync.
@@ -131,7 +144,7 @@ stripped server-side in `redactStateFor` (Phase 0) and verified at the WebSocket
 | Sheets/items depth, roll breakdown colors, fog brush, HP quick-adjust, templates, coin flip *(user 2026-07-02)*           | 7                                                                                                                                 |
 | Tabbed character-sheet redesign (reference layout) + token facing/rotation *(user 2026-07-02)*                            | 7 (structure; final skin in 8)                                                                                                    |
 | Fog brush + invert, Scenes page = full editor (live toggle + Set Live), Players tab bar, prep secrecy *(user 2026-07-03)* | 6.5 ✅                                                                                                                             |
-| Full aesthetic revamp — tactile/paper/wood + sound design *(user 2026-07-02)*                                             | 8                                                                                                                                 |
+| Full aesthetic revamp — tactile/paper/wood + sound design *(user 2026-07-02)*                                             | 8 🔨 — Quill & Ember skin shipped; icons/sound/motion open                                                                        |
 
 
 ---
@@ -2316,11 +2329,63 @@ campaign byte-identically (minus connection fields).
 
 
 
-## Phase 8 — Aesthetic revamp: the ENTIRE UI, tactile + real — planned
+## Phase 8 — Aesthetic revamp: the ENTIRE UI, tactile + real — 🔨 IN PROGRESS
 
 Full visual + audio identity pass over **everything** (user, 2026-07-02 — detailed ideas
 to be fleshed out with the user before this phase starts; this section is deliberately a
 scoped placeholder).
+
+> **As built — round 1: the "Quill & Ember" skin (2026-07-10):** the visual direction
+> stopped being an open question — the user supplied a complete, purpose-built design
+> system via a claude.ai/design handoff bundle at **`Blue Turtle UI V2-handoff/`** (repo
+> root): README, live component gallery (`project/gallery.html`), guideline specimen
+> cards, React reference components, and crucially `project/skins/campaign-manager.css`
+> mapping the system onto OUR `tokens.css` variable names. **Treat that folder as the
+> design source of truth for the rest of Phase 8.** The look: warm parchment surfaces
+> with tileable paper-grain + ink-speckle textures, 2px drawn-ink outlines, hand-cut
+> "wobble" corner radii (four unequal pairs), press-**ledge** buttons / carved-**well**
+> fields, torn-plaque section headers, slate window-header bands, coin-shaped rail
+> buttons; accents gold=primary action, sky=selection/interaction, terracotta=danger,
+> sage=success. Night mode trades paper for carved stone (chalk ink, basalt frames).
+> Shipped in this round:
+>
+> - **`tokens.css` fully rewritten** — day palette default, night under
+> `[data-theme="night"]`. Every pre-existing variable name kept (components reskinned
+> with zero markup surgery), plus new tokens: wobble radii (`--r-wob-*`), craft shadows
+> (`--shadow-ledge/well/panel/pop/lift`), plaque/wood/slate/page surfaces, the gold
+> `--primary` family, `--map-bg`, texture URLs (`--tex-grain/speckle`), and motion
+> durations/easings (`--dur-1/2/3`, `--ease-out/spring`).
+> - **Chrome pass over `index.css`** (visual properties only — zero layout changes):
+> buttons/inputs/clusters/windows/dock/tray/toolbar/modals/lobby/toasts/pages/chip-tabs;
+> parchment scrollbars; sky focus rings + `::selection`; stat digits moved to PT Mono
+> (system rule: "numbers are mono"); interactive text uses `--accent` (the strong sky
+> step) — `--accent-bright` text was too low-contrast on parchment.
+> - **`sheet7.css` sweep:** roll-breakdown chips retinted to the soft accent steps;
+> portrait-overlay pills fixed (were ink-on-dark = illegible in day theme); fixed a
+> pre-existing bug where `.short-rest-pop` referenced an undefined `--surface-1`.
+> - **Fonts:** Alegreya (display) / PT Sans (UI) / PT Mono (digits) via Google Fonts in
+> `index.html`, replacing Cinzel / Source Sans 3 / JetBrains Mono.
+> - **Textures** bundled at `public/textures/` (grain, speckles, + the opal photo for the
+> future crystal variant) — app-bundle static, zero R2, per the asset strategy below.
+> - **Night mode:** per-device Settings toggle (top of "This device", key
+> `cm-night-mode`) → sets `data-theme="night"` on `<html>` from `App.tsx`, so lobby,
+> board, portaled modals, and toasts all flip together. `PanelContext` gained
+> `nightMode`/`setNightMode`.
+> - **Deliberately untouched:** on-map Konva rendering (fog/walls/vision/token
+> rings/pins) — board visuals, not UI chrome; they restyle in a later round.
+> - **Verified:** `npm run build` green; headless-Chrome runtime pass (lobby → create
+> campaign → board → dock panels → settings → night toggle) with zero console errors,
+> day + night screenshots reviewed. Test campaign + rooms.json restored after.
+>
+> **Still open in Phase 8 (next rounds):** (a) **emoji → Lucide icons** everywhere — the
+> system is explicit ("no emoji anywhere; Lucide or CSS glyphs only"); touches ~30 files
+> of glyphs (dock tabs, registry icons, toolbar, directory rows, settings buttons);
+> (b) the **crystal** variant for arcane actions (spell slots, maybe the d20) — opal
+> texture already bundled; (c) **motion language** micro-animations (the token sheet
+> already carries the durations/easings + the bundle has keyframe specs); (d) **sound
+> design** (below); (e) **dice/coin texture skins** (UV prerequisite below); (f) board
+> furniture restyle (grid/ruler/selection colors → tokens); (g) the integrated-GPU perf
+> pass + the manual both-roles visual pass over every panel/page/window.
 
 - **Direction:** tactile, real, paper-like. Textures for natural materials — paper,
 parchment, polished wood — as panel/chrome surfaces; the current dark placeholder skin

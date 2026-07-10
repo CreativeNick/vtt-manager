@@ -66,6 +66,9 @@ export type PanelContext = {
   /** Per-client: render the board at ≥2× pixel ratio (crisper text/art, higher GPU cost). */
   hiResRender: boolean;
   setHiResRender: (on: boolean) => void;
+  /** Per-client theme: day (parchment) or night (carved stone). */
+  nightMode: boolean;
+  setNightMode: (on: boolean) => void;
   /** Clears saved window/tray positions and returns floating UI to defaults. */
   resetUiLayout: () => void;
   /** Leaves the campaign (back to the lobby). */

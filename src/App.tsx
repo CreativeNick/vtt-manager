@@ -18,7 +18,7 @@ import { PageSwitcher, type PageId } from "./pages/PageSwitcher";
 import { useDiceOverlay } from "./dice/useDiceOverlay";
 import { useDmActions, useGameRoom, type JoinParams } from "./hooks/useGameRoom";
 import { buildInverse, useHistory } from "./lib/history";
-import { readLocalFlag } from "./lib/localFlags";
+import { readLocalFlag, writeLocalFlag } from "./lib/localFlags";
 import {
   clearCampaignLayout,
   readCampaignFlag,
@@ -47,6 +47,7 @@ const TOASTS_KEY = "cm-log-toasts";
 const SPACE_CLICK_KEY = "cm-space-click";
 const TOKEN_PANEL_KEY = "cm-token-panel-on-click";
 const HI_RES_KEY = "cm-hi-res";
+const NIGHT_KEY = "cm-night-mode";
 
 /** The per-campaign UI layout blob (localStorage `cm:{roomId}:layout`). Entity-bound windows
  *  (open sheet/item) and transient state (selection, viewport) are deliberately excluded. */
@@ -123,6 +124,7 @@ export default function App() {
   const [spaceClick, setSpaceClickState] = useState(() => readLocalFlag(SPACE_CLICK_KEY, false));
   const [tokenPanelOnClick, setTokenPanelOnClickState] = useState(() => readLocalFlag(TOKEN_PANEL_KEY, true));
   const [hiResRender, setHiResRenderState] = useState(() => readLocalFlag(HI_RES_KEY, true));
+  const [nightMode, setNightModeState] = useState(() => readLocalFlag(NIGHT_KEY, false));
   /** Bumped by "Reset UI layout" — remounts windows / repositions the tray. */
   const [layoutEpoch, setLayoutEpoch] = useState(0);
   const lastSceneRef = useRef<string | null>(null);
@@ -348,6 +350,20 @@ export default function App() {
   useEffect(() => {
     applyRenderPixelRatio(hiResRender);
   }, [hiResRender]);
+
+  const setNightMode = useCallback((on: boolean) => {
+    writeLocalFlag(NIGHT_KEY, on);
+    setNightModeState(on);
+  }, []);
+  // The theme lives on <html> so every token (day parchment / night stone) flips
+  // everywhere at once — lobby, portaled modals, and toasts included.
+  useEffect(() => {
+    if (nightMode) {
+      document.documentElement.setAttribute("data-theme", "night");
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+    }
+  }, [nightMode]);
   // Holding SpaceBar acts as the left mouse button when this device opts in.
   useSpaceClick(spaceClick);
 
@@ -536,6 +552,8 @@ export default function App() {
     setTokenPanelOnClick,
     hiResRender,
     setHiResRender,
+    nightMode,
+    setNightMode,
     resetUiLayout,
     leave,
   };

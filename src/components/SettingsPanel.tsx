@@ -77,6 +77,12 @@ export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
     <div className="panel-body stack">
       <div className="section-title">This device</div>
       <ToggleRow
+        label="Night mode"
+        hint="Trade the daytime parchment for carved stone — chalk ink, moonlit accents."
+        on={ctx.nightMode}
+        onToggle={ctx.setNightMode}
+      />
+      <ToggleRow
         label="3D dice"
         hint="Physical dice you grab, shake, and throw. Off = instant text rolls."
         on={dice.enabled}

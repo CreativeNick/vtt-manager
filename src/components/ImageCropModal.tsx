@@ -158,7 +158,7 @@ export function ImageCropModal({
   return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal stack image-crop-modal" onClick={(e) => e.stopPropagation()}>
-        <h2 style={{ color: "var(--accent-bright)" }}>{title}</h2>
+        <h2>{title}</h2>
         <div
           ref={stageRef}
           className="crop-stage"

@@ -224,7 +224,7 @@ function CreateCampaignModal({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal stack" onClick={(e) => e.stopPropagation()}>
-        <h2 style={{ color: "var(--accent-bright)" }}>New campaign</h2>
+        <h2>New campaign</h2>
         <div className="field">
           <label>Name</label>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="The Sunken Keep" />
@@ -233,7 +233,7 @@ function CreateCampaignModal({
           <label>Icon (optional)</label>
           <input type="file" accept="image/*" onChange={(e) => setIconFile(e.target.files?.[0] ?? null)} />
         </div>
-        {error ? <span className="muted" style={{ color: "#ffb4ab" }}>{error}</span> : null}
+        {error ? <span className="muted" style={{ color: "var(--danger-text)" }}>{error}</span> : null}
         <div className="row" style={{ justifyContent: "flex-end" }}>
           <button onClick={onClose}>Cancel</button>
           <button className="btn-primary" disabled={busy || !name.trim()} onClick={() => void create()}>

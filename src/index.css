@@ -3,13 +3,16 @@
    Layout model: a full-bleed map fills the viewport; all UI is floating
    clusters (.cluster) and draggable windows (.window) on a pointer-transparent
    .overlay above it. All colors/type/spacing come from styles/tokens.css.
+
+   Skin: "Quill & Ember" — parchment surfaces with paper-grain + ink-speckle
+   textures, 2px drawn ink outlines, hand-cut wobble radii, press "ledges" on
+   buttons and carved "wells" on fields. Day/night themes flip via tokens.
    ========================================================================== */
 
 @import "./styles/tokens.css";
 @import "./styles/sheet7.css";
 
 :root {
-  color-scheme: dark;
   font-family: var(--font-body);
   font-size: 15px;
   line-height: 1.4;
@@ -18,6 +21,12 @@
   /* Docked sidebar geometry (shared by the dock and the toast offset). */
   --dock-rail-w: 3.25rem;
   --dock-panel-w: 320px;
+
+  /* The standard parchment fill: speckle + grain over the panel color.
+     (Custom props can't carry background shorthand pairs, so classes set
+     background-color themselves and share these two image layers.) */
+  --paper-layers: var(--tex-speckle), var(--tex-grain);
+  --paper-sizes: 480px, 280px;
 }
 
 * {
@@ -34,72 +43,166 @@ body,
 body {
   background: var(--bg);
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color var(--dur-3) var(--ease-out), color var(--dur-3) var(--ease-out);
 }
 
 h1,
 h2,
 h3 {
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 700;
   margin: 0;
 }
 
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+:focus-visible {
+  outline: 2.5px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Parchment scrollbars: a plaque-tan pill in a transparent track. */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--surface-plaque);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--surface-plaque-2);
+}
+
+/* Drawn button: paper fill, 2px ink outline, hand-cut corners, resting on a
+   ledge. Hover lifts 1px and lightens; press sinks onto the ledge. */
 button {
   font: inherit;
+  font-weight: 700;
   cursor: pointer;
   color: var(--text);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.28rem 0.55rem;
-  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-sm);
+  box-shadow: var(--shadow-ledge);
+  padding: 0.24rem 0.55rem;
+  transition:
+    transform var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
 }
 button:hover:not(:disabled) {
-  border-color: var(--accent);
+  background-color: var(--surface-page);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-ledge), var(--shadow-lift);
+}
+button:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.14);
+  filter: brightness(0.97);
 }
 button:disabled {
   opacity: 0.5;
+  filter: saturate(0.6);
   cursor: not-allowed;
 }
 
 .btn-primary {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: var(--accent-bright);
-  font-weight: 600;
+  background-color: var(--primary);
+  color: var(--on-primary);
+  border-color: var(--border);
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-bright);
+  background-color: color-mix(in srgb, var(--primary) 82%, white);
 }
 .btn-danger {
-  color: var(--danger-text);
-  background: var(--danger-soft);
-  border-color: var(--danger);
+  color: var(--text-invert);
+  background-color: var(--danger);
+  border-color: var(--border);
+}
+.btn-danger:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--danger) 85%, white);
 }
 .btn-ghost {
-  background: transparent;
+  background-color: transparent;
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+.btn-ghost:hover:not(:disabled) {
+  background-color: var(--surface-2);
+  border-color: var(--border-subtle);
+  color: var(--text);
+  transform: none;
+  box-shadow: none;
 }
 .btn-active {
-  border-color: var(--accent);
-  color: var(--accent-bright);
+  background-color: var(--accent);
+  border-color: var(--border);
+  color: var(--on-accent);
+}
+.btn-active:hover:not(:disabled) {
+  background-color: var(--accent);
+  color: var(--on-accent);
 }
 
+/* Fields are carved wells: sunken parchment with a faint grain and an inset
+   shadow. Placeholders are italic ghosts. */
 input,
 select,
 textarea {
   font: inherit;
   color: var(--text);
-  background: var(--input-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  background-color: var(--surface-2);
+  background-image: var(--tex-grain);
+  background-size: 280px;
+  border: 1.5px solid var(--border-subtle);
+  border-radius: var(--r-wob-sm);
+  box-shadow: var(--shadow-well);
   padding: 0.26rem 0.45rem;
   width: 100%;
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+  font-style: italic;
 }
 input:focus,
 select:focus,
 textarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: var(--shadow-well), 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+/* Non-boxy input types keep their native look (plus the sky accent). */
+input[type="range"],
+input[type="checkbox"],
+input[type="radio"],
+input[type="color"],
+input[type="file"] {
+  background: none;
+  border: none;
+  box-shadow: none;
+  accent-color: var(--accent);
+  width: auto;
+}
+input[type="range"] {
+  width: 100%;
 }
 textarea {
   resize: vertical;
@@ -108,6 +211,8 @@ textarea {
 label {
   display: block;
   font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   color: var(--text-muted);
   margin-bottom: 0.12rem;
 }
@@ -142,7 +247,7 @@ textarea,
   position: fixed;
   inset: 0;
   z-index: 0;
-  background: #0c0b09;
+  background: var(--map-bg);
   cursor: grab;
 }
 .map-root:active {
@@ -158,10 +263,12 @@ textarea,
   width: max-content;
   max-width: 16rem;
   padding: 0.4rem;
-  background: rgba(10, 12, 16, 0.95);
-  border: 1px solid #e9c176;
-  border-radius: var(--radius);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-sm);
+  box-shadow: var(--shadow-pop);
 }
 .map-pin-editor__field {
   width: 12rem;
@@ -200,15 +307,14 @@ textarea,
 .map-light-config--dock-open {
   right: calc(var(--dock-rail-w) + var(--dock-panel-w) + 12px);
 }
-/* Glass backing so the panel's text stays legible over busy map art without losing the
-   floating/see-through feel. */
+/* Parchment backing so the panel's text stays legible over busy map art. */
 .map-light-config .panel {
-  background: rgba(20, 19, 16, 0.55);
-  backdrop-filter: var(--blur);
-  -webkit-backdrop-filter: var(--blur);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  box-shadow: var(--elev-2);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-md);
+  box-shadow: var(--shadow-panel);
   overflow: hidden;
 }
 /* Reserved inline-validation slot under the Bright/Dim inputs — always occupies its line so
@@ -225,7 +331,7 @@ textarea,
 .map-darkness-slider {
   flex: 1;
   min-width: 90px;
-  accent-color: #ffd166;
+  accent-color: var(--primary);
 }
 
 /* Phase 6.6b: light tint blend-mode picker in the lighting toolbar. */
@@ -243,9 +349,10 @@ textarea,
   gap: 0.6rem;
   cursor: pointer;
   padding: 0.5rem 0.6rem;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
+  border: 2px dashed var(--border-subtle);
+  border-radius: var(--r-wob-sm);
   background: var(--surface-2);
+  box-shadow: var(--shadow-well);
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .map-upload:hover {
@@ -315,13 +422,18 @@ textarea,
   padding: 2px 8px;
   font-size: 0.62rem;
   border-radius: 6px;
-  color: var(--text);
-  background: rgba(10, 12, 16, 0.72);
+  color: var(--text-invert);
+  background: rgba(30, 24, 18, 0.72);
+  background-image: none;
   border: 1px solid var(--border);
+  box-shadow: none;
   cursor: pointer;
 }
-.sheet-portrait-change:hover {
-  background: rgba(10, 12, 16, 0.92);
+.sheet-portrait-change:hover:not(:disabled) {
+  background: rgba(30, 24, 18, 0.92);
+  color: var(--text-invert);
+  transform: none;
+  box-shadow: none;
 }
 .croppable-zoom {
   position: absolute;
@@ -353,11 +465,12 @@ textarea,
   display: flex;
   gap: 0.35rem;
   padding: 0.3rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
-  backdrop-filter: var(--blur);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-md);
+  box-shadow: var(--shadow-panel);
   max-height: calc(100vh - 2rem);
 }
 .cluster--col {
@@ -367,7 +480,6 @@ textarea,
   background: none;
   border: none;
   box-shadow: none;
-  backdrop-filter: none;
   padding: 0;
 }
 
@@ -418,24 +530,26 @@ textarea,
 /* --- Small UI atoms ------------------------------------------------------- */
 .brand {
   font-family: var(--font-display);
+  font-weight: 800;
   font-size: 1.05rem;
-  color: var(--accent-bright);
+  color: var(--text);
   padding-right: 0.4rem;
   white-space: nowrap;
 }
 .chip {
   font-size: 0.72rem;
   color: var(--text-muted);
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  border: 1.5px solid var(--border-subtle);
   border-radius: 999px;
   padding: 0.15rem 0.55rem;
   white-space: nowrap;
 }
 .chip b {
   color: var(--text);
-  font-weight: 600;
+  font-weight: 700;
 }
+/* Coin buttons: wobble-pill circles with an inner cream ring, like inked coins. */
 .icon-btn {
   width: 1.9rem;
   height: 1.9rem;
@@ -443,11 +557,22 @@ textarea,
   place-items: center;
   font-size: 1rem;
   padding: 0;
+  border-radius: var(--r-wob-pill);
+  box-shadow: inset 0 0 0 2px rgba(246, 240, 223, 0.55), var(--shadow-ledge);
+}
+.icon-btn:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 2px rgba(246, 240, 223, 0.55), var(--shadow-ledge), var(--shadow-lift);
+}
+/* Ghost icon buttons (window controls, row actions) skip the coin ring. */
+.icon-btn.btn-ghost,
+.icon-btn.btn-ghost:hover:not(:disabled) {
+  box-shadow: none;
 }
 .divider {
-  width: 1px;
+  width: 2px;
   align-self: stretch;
   background: var(--border-subtle);
+  border-radius: 2px;
 }
 
 /* Online-player presence icons (top center) */
@@ -456,12 +581,12 @@ textarea,
   width: 2.1rem;
   height: 2.1rem;
   border-radius: 50%;
-  border: 2px solid var(--accent);
+  border: 2px solid var(--border);
   background: var(--surface-2);
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-ledge);
 }
 .player-chip img {
   width: 100%;
@@ -490,9 +615,11 @@ textarea,
   font-size: 0.65rem;
   line-height: 1;
   border-radius: 50%;
-  border: none;
+  border: 1.5px solid var(--border);
   background: var(--danger);
-  color: #fff;
+  background-image: none;
+  box-shadow: none;
+  color: var(--text-invert);
   display: grid;
   place-items: center;
 }
@@ -510,13 +637,18 @@ textarea,
   justify-content: space-between;
   gap: 0.4rem;
   padding: 0.4rem 0.55rem;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--surface-inset);
+  border-bottom: 2px solid var(--border);
+  background-color: var(--surface-slate);
+  background-image: var(--tex-grain);
+  background-size: 280px;
+  color: var(--text-invert);
 }
 .panel-title {
   font-family: var(--font-display);
+  font-weight: 700;
   font-size: 0.95rem;
-  color: var(--accent-bright);
+  letter-spacing: 0.03em;
+  color: var(--text-invert);
 }
 .panel-body {
   padding: 0.5rem;
@@ -549,18 +681,22 @@ textarea,
   place-items: center;
   padding: 1rem;
   overflow: auto;
-  background: radial-gradient(circle at 50% 30%, #2a2a30, #131315 70%);
+  background-color: var(--bg);
+  background-image: var(--tex-grain);
+  background-size: 280px;
 }
 .lobby-card {
   width: min(880px, 100%);
-  background: var(--surface-solid);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-lg);
+  box-shadow: var(--shadow-pop);
   padding: 1.1rem;
 }
 .lobby-card h1 {
-  color: var(--accent-bright);
+  color: var(--text);
   text-align: center;
   margin-bottom: 0.2rem;
 }
@@ -628,14 +764,17 @@ textarea,
   display: grid;
   place-items: center;
   padding: 1.5rem;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--backdrop);
+  backdrop-filter: blur(3px);
 }
 .modal {
   width: min(460px, 100%);
-  background: var(--surface-solid);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-lg);
+  box-shadow: var(--shadow-pop);
   padding: 0.9rem;
 }
 
@@ -722,19 +861,24 @@ textarea,
   padding: 2px 8px;
   font-size: 0.62rem;
   border-radius: 6px;
-  color: var(--text);
-  background: rgba(10, 12, 16, 0.72);
+  color: var(--text-invert);
+  background: rgba(30, 24, 18, 0.72);
+  background-image: none;
   border: 1px solid var(--border);
+  box-shadow: none;
   cursor: pointer;
 }
-.sheet-portrait-crop:hover {
-  background: rgba(10, 12, 16, 0.92);
+.sheet-portrait-crop:hover:not(:disabled) {
+  background: rgba(30, 24, 18, 0.92);
+  color: var(--text-invert);
+  transform: none;
+  box-shadow: none;
 }
 
 /* --- Character sheet ------------------------------------------------------ */
 .sheet-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
+  border: 2px solid var(--border-subtle);
+  border-radius: var(--r-wob-sm);
   overflow: hidden;
 }
 .sheet-card-head {
@@ -750,12 +894,19 @@ textarea,
   background: none;
   border: none;
   border-radius: 0;
+  box-shadow: none;
   padding: var(--space-1) var(--space-2);
-  font-family: var(--font-display);
-  font-size: 0.82rem;
-  letter-spacing: 0.06em;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+.sheet-card-toggle:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  background: none;
 }
 .sheet-card-toggle:hover:not(:disabled) {
   color: var(--text);
@@ -852,19 +1003,25 @@ textarea,
 }
 .ability {
   text-align: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
+  background: var(--surface-2);
+  background-image: var(--tex-grain);
+  background-size: 280px;
+  border: 1.5px solid var(--border-subtle);
+  border-radius: var(--r-wob-sm);
+  box-shadow: var(--shadow-well);
   padding: 0.25rem 0.2rem;
 }
 .ability .abbr {
   font-size: 0.7rem;
+  font-weight: 700;
   color: var(--text-muted);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
 }
 .ability .mod {
-  font-family: var(--font-display);
-  font-size: 1.1rem;
-  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--text);
 }
 .ability input {
   text-align: center;
@@ -883,20 +1040,34 @@ textarea,
   font-size: 0.85rem;
 }
 .stat-row .total {
-  font-family: var(--font-display);
-  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text);
   text-align: right;
 }
 .stat-row input {
   width: 100%;
 }
+/* Section titles are torn tan plaque strips (ragged clip-path edges). */
 .section-title {
-  font-family: var(--font-display);
-  font-size: 0.8rem;
-  letter-spacing: 0.08em;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text);
   margin: 0.25rem 0 0.1rem;
+  padding: 0.28rem 0.7rem 0.3rem;
+  width: max-content;
+  max-width: 100%;
+  background-color: var(--surface-plaque);
+  background-image: var(--tex-grain);
+  background-size: 280px;
+  clip-path: polygon(
+    0% 14%, 6% 6%, 15% 12%, 25% 4%, 36% 10%, 47% 3%, 58% 9%, 69% 4%, 79% 10%,
+    89% 5%, 96% 10%, 100% 16%, 100% 86%, 94% 94%, 84% 88%, 73% 95%, 62% 89%,
+    51% 96%, 40% 90%, 29% 96%, 19% 90%, 9% 95%, 3% 89%, 0% 92%
+  );
 }
 
 /* --- Log (rolls / events / chat) ------------------------------------------- */
@@ -928,7 +1099,7 @@ textarea,
   overflow-wrap: anywhere;
 }
 .log-whisper {
-  color: var(--accent-bright);
+  color: var(--accent);
 }
 .chip-btn {
   font-size: 0.75rem;
@@ -944,25 +1115,29 @@ textarea,
 }
 button.total.roll-btn {
   background: none;
-  border: 1px solid transparent;
+  border: 1.5px solid transparent;
+  box-shadow: none;
   padding: 0.1rem 0.35rem;
-  font-family: var(--font-display);
-  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  color: var(--accent);
   min-width: 2.2rem;
   text-align: right;
 }
 button.total.roll-btn:hover,
 button.mod.roll-btn:hover {
   border-color: var(--accent);
-  background: var(--surface-inset);
+  background: var(--accent-soft);
+  transform: none;
+  box-shadow: none;
 }
 button.mod.roll-btn {
   background: none;
-  border: 1px solid transparent;
+  border: 1.5px solid transparent;
+  box-shadow: none;
   padding: 0 0.3rem;
-  font-family: var(--font-display);
-  font-size: 1.1rem;
-  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  color: var(--accent);
 }
 
 /* --- Dice ----------------------------------------------------------------- */
@@ -992,11 +1167,14 @@ button.mod.roll-btn {
 }
 .roll .expr {
   color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
 }
 .roll .total {
-  font-family: var(--font-display);
-  color: var(--accent-bright);
-  font-size: 1rem;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text);
+  font-size: 0.95rem;
 }
 
 /* --- Party (DM slot management) ------------------------------------------ */
@@ -1021,7 +1199,8 @@ button.mod.roll-btn {
 /* --- Initiative tracker ---------------------------------------------------- */
 .init-round {
   font-family: var(--font-display);
-  color: var(--accent-bright);
+  font-weight: 700;
+  color: var(--text);
   font-size: 0.9rem;
 }
 .init-row {
@@ -1029,16 +1208,17 @@ button.mod.roll-btn {
   align-items: center;
   gap: 0.35rem;
   padding: 0.15rem 0.25rem;
-  border-radius: var(--radius);
-  border: 1px solid transparent;
+  border-radius: var(--r-wob-sm);
+  border: 2px solid transparent;
 }
+/* The active turn is the one gold moment in the tracker. */
 .init-row--current {
-  border-color: #e9c176;
-  background: rgba(233, 193, 118, 0.08);
+  border-color: var(--primary-strong);
+  background: var(--primary-soft);
 }
 .init-marker {
   width: 0.8rem;
-  color: #e9c176;
+  color: var(--primary-strong);
   font-size: 0.7rem;
   flex-shrink: 0;
 }
@@ -1065,8 +1245,9 @@ button.mod.roll-btn {
   flex-shrink: 0;
   width: 3.4rem;
   text-align: right;
-  font-family: var(--font-display);
-  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text);
 }
 .init-value input {
   text-align: center;
@@ -1109,11 +1290,15 @@ button.mod.roll-btn {
   transform: translateX(-50%);
   z-index: 200;
   pointer-events: auto;
-  background: var(--danger-soft);
-  border: 1px solid var(--danger);
-  color: #ffd9d9;
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--danger);
+  color: var(--danger-text);
+  font-weight: 700;
   padding: 0.5rem 1rem;
-  border-radius: var(--radius);
+  border-radius: var(--r-wob-sm);
+  box-shadow: var(--shadow-panel);
   max-width: 90vw;
 }
 .status-joined {
@@ -1140,25 +1325,30 @@ button.mod.roll-btn {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--elev-3);
-  backdrop-filter: var(--blur);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-md);
+  box-shadow: var(--shadow-pop);
   overflow: hidden;
   /* Above the side rail so the rail's overlap (and the active button's tab) hides
      BEHIND the sheet panel — the button reads as docked into it. */
   position: relative;
   z-index: 1;
 }
+/* Window headers are painted slate bands — cream ink on the night-sky strip. */
 .window-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--surface-inset);
+  border-bottom: 2px solid var(--border);
+  background-color: var(--surface-slate);
+  background-image: var(--tex-grain);
+  background-size: 280px;
+  color: var(--text-invert);
   cursor: grab;
   user-select: none;
   touch-action: none;
@@ -1169,8 +1359,31 @@ button.mod.roll-btn {
 }
 .window-title {
   font-family: var(--font-display);
+  font-weight: 700;
   font-size: 0.95rem;
-  color: var(--accent-bright);
+  letter-spacing: 0.03em;
+  color: var(--text-invert);
+}
+/* Controls on a slate band: small translucent-cream squares (qe-window style). */
+.window-header .icon-btn,
+.panel-header .icon-btn,
+.dock-panel-head .icon-btn {
+  color: var(--text-invert);
+  background: rgba(246, 240, 223, 0.16);
+  background-image: none;
+  border: 1.5px solid rgba(246, 240, 223, 0.4);
+  border-radius: 6px;
+  box-shadow: none;
+}
+.window-header .icon-btn:hover:not(:disabled),
+.panel-header .icon-btn:hover:not(:disabled),
+.dock-panel-head .icon-btn:hover:not(:disabled) {
+  background: rgba(246, 240, 223, 0.3);
+  background-image: none;
+  color: var(--text-invert);
+  border-color: rgba(246, 240, 223, 0.4);
+  transform: none;
+  box-shadow: none;
 }
 .window-body {
   min-height: 0;
@@ -1316,6 +1529,7 @@ button.mod.roll-btn {
   pointer-events: auto;
   flex-shrink: 0;
 }
+/* Rail tabs are inked coins: wobble-pill circles with an inner cream ring. */
 .dock-tab {
   width: 2.2rem;
   height: 2.2rem;
@@ -1323,16 +1537,24 @@ button.mod.roll-btn {
   place-items: center;
   padding: 0;
   font-size: 1rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--elev-1);
-  backdrop-filter: var(--blur);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-pill);
+  box-shadow: inset 0 0 0 2px rgba(246, 240, 223, 0.55), var(--shadow-ledge);
 }
+.dock-tab:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 2px rgba(246, 240, 223, 0.55), var(--shadow-ledge), var(--shadow-lift);
+}
+/* Selection is sky, per the system: active coin fills sky with cream ink. */
 .dock-tab--active {
-  background: var(--surface-2);
-  border-color: var(--accent);
-  color: var(--accent-bright);
+  background-color: var(--accent);
+  border-color: var(--border);
+  color: var(--on-accent);
+}
+.dock-tab--active:hover:not(:disabled) {
+  background-color: var(--accent-bright);
 }
 .dock-tab--popped {
   opacity: 0.45;
@@ -1342,8 +1564,9 @@ button.mod.roll-btn {
 }
 .dock-sep {
   width: 60%;
-  height: 1px;
-  background: var(--border);
+  height: 2px;
+  background: var(--border-subtle);
+  border-radius: 2px;
   margin: 0.1rem 0;
   flex-shrink: 0;
 }
@@ -1352,10 +1575,11 @@ button.mod.roll-btn {
   min-height: 0;
   overflow: hidden;
   pointer-events: auto;
-  background: var(--surface);
-  border-left: 1px solid var(--border-subtle);
-  backdrop-filter: var(--blur);
-  box-shadow: var(--elev-2);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border-left: 2px solid var(--border);
+  box-shadow: var(--shadow-panel);
   transition: width 0.18s ease, opacity 0.18s ease;
 }
 .dock-panel--closed {
@@ -1378,8 +1602,15 @@ button.mod.roll-btn {
   justify-content: space-between;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 2px solid var(--border);
+  background-color: var(--surface-slate);
+  background-image: var(--tex-grain);
+  background-size: 280px;
+  color: var(--text-invert);
   flex-shrink: 0;
+}
+.dock-panel-head .window-title {
+  color: var(--text-invert);
 }
 .dock-panel-body {
   flex: 1;
@@ -1414,11 +1645,12 @@ button.mod.roll-btn {
   right: calc(var(--dock-rail-w) + var(--dock-panel-w));
 }
 .log-toast {
-  background: var(--surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  box-shadow: var(--elev-1);
-  backdrop-filter: var(--blur);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-sm);
+  box-shadow: var(--shadow-panel);
   padding: 0.3rem 0.55rem;
   font-size: 0.82rem;
   overflow-wrap: anywhere;
@@ -1430,7 +1662,7 @@ button.mod.roll-btn {
   font-style: italic;
 }
 .log-toast--whisper {
-  color: var(--accent-bright);
+  color: var(--accent);
 }
 @keyframes toast-in {
   from {
@@ -1476,7 +1708,7 @@ button.mod.roll-btn {
 }
 .dir-selcount {
   font-weight: 600;
-  color: var(--accent-bright);
+  color: var(--accent);
   padding-left: 0.15rem;
 }
 .dir-selbar button {
@@ -1501,10 +1733,14 @@ button.mod.roll-btn {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The first create button is the panel's one gold action. */
 .dir-create:first-child {
-  background: var(--surface-2);
-  border-color: var(--accent);
-  color: var(--accent-bright);
+  background-color: var(--primary);
+  border-color: var(--border);
+  color: var(--on-primary);
+}
+.dir-create:first-child:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--primary) 82%, white);
 }
 .dir-create-ico {
   font-size: 0.95rem;
@@ -1540,7 +1776,7 @@ button.mod.roll-btn {
 }
 .dir-icon-btn--on {
   border-color: var(--accent);
-  color: var(--accent-bright);
+  color: var(--accent);
 }
 .dir-list {
   display: flex;
@@ -1581,10 +1817,12 @@ button.mod.roll-btn {
   position: fixed;
   z-index: 1000;
   pointer-events: none;
-  background: var(--surface-solid);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius);
-  box-shadow: var(--elev-2);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--accent);
+  border-radius: var(--r-wob-sm);
+  box-shadow: var(--shadow-pop);
   padding: 0.2rem 0.6rem;
   font-size: 0.85rem;
   max-width: 240px;
@@ -1628,7 +1866,7 @@ body.pointer-dragging * {
 }
 .dir-badge {
   font-size: 0.65rem;
-  color: var(--accent-bright);
+  color: var(--accent);
   border: 1px solid var(--accent);
   border-radius: 999px;
   padding: 0 0.35rem;
@@ -1664,9 +1902,15 @@ body.pointer-dragging * {
 .dir-folder-toggle {
   background: none;
   border: none;
+  box-shadow: none;
   padding: 0 0.15rem;
   flex-shrink: 0;
   font-size: 0.8rem;
+}
+.dir-folder-toggle:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  background: none;
 }
 .dir-folder-ico {
   flex-shrink: 0;
@@ -1675,7 +1919,9 @@ body.pointer-dragging * {
   flex: 1;
   min-width: 0;
   background: transparent;
+  background-image: none;
   border-color: transparent;
+  box-shadow: none;
   padding: 0.1rem 0.25rem;
   font-weight: 700;
   font-family: var(--font-display);
@@ -1683,8 +1929,9 @@ body.pointer-dragging * {
 /* Only the focused (actively-editing) folder name shows the input box, so pressing Enter
    (which blurs) returns it to a clean, un-boxed label even while the cursor hovers it. */
 .dir-folder-name:focus {
-  border-color: var(--border);
-  background: var(--input-bg);
+  border-color: var(--border-subtle);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-well);
 }
 .dir-folder-count {
   flex-shrink: 0;
@@ -1782,11 +2029,12 @@ body.pointer-dragging * {
   align-items: center;
   gap: 0.25rem;
   padding: 0.3rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--elev-2);
-  backdrop-filter: var(--blur);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-md);
+  box-shadow: var(--shadow-panel);
 }
 /* Options float beside the rail without contributing to the toolbar's height —
    otherwise the translateY(-50%) centering shifts the rail when they open. */
@@ -1865,8 +2113,9 @@ body.pointer-dragging * {
 }
 .map-toolbar-sep {
   width: 70%;
-  height: 1px;
-  background: var(--border);
+  height: 2px;
+  background: var(--border-subtle);
+  border-radius: 2px;
   margin: 0.15rem 0;
 }
 .map-toolbar-hint {
@@ -1882,11 +2131,14 @@ body.pointer-dragging * {
   height: 1.4rem;
   border-radius: 50%;
   border: 2px solid transparent;
+  background-image: none;
+  box-shadow: none;
   padding: 0;
   cursor: pointer;
 }
 .draw-swatch--active {
-  border-color: #fff;
+  border-color: var(--border);
+  box-shadow: 0 0 0 2px var(--accent);
 }
 .draw-width-dot {
   display: inline-block;
@@ -1916,11 +2168,12 @@ body.pointer-dragging * {
   align-items: stretch;
   gap: 0.3rem;
   padding: 0.35rem 0.4rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--elev-2);
-  backdrop-filter: var(--blur);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-md);
+  box-shadow: var(--shadow-panel);
 }
 .dice-tray--open {
   transform: translateY(0);
@@ -1944,15 +2197,16 @@ body.pointer-dragging * {
   align-items: center;
   gap: 0.25rem;
 }
-/* The felt well the physical dice rest in. Positioning context for the tray scene's
-   canvas — the canvas is absolute so its buffer size never widens the tray. */
+/* The felt well the physical dice rest in — a dark table inset framed in ink.
+   Positioning context for the tray scene's canvas — the canvas is absolute so
+   its buffer size never widens the tray. */
 .dice-tray-well {
   position: relative;
   height: 92px;
-  border-radius: calc(var(--radius-lg) - 4px);
+  border-radius: var(--r-wob-sm);
   background:
     radial-gradient(ellipse at 50% 35%, rgba(56, 84, 63, 0.85), rgba(21, 34, 26, 0.95) 78%);
-  border: 1px solid rgba(217, 165, 49, 0.22);
+  border: 2px solid var(--border);
   box-shadow: inset 0 3px 12px rgba(0, 0, 0, 0.65);
   overflow: hidden;
   touch-action: none;
@@ -1962,24 +2216,27 @@ body.pointer-dragging * {
   position: relative;
   min-width: 2.4rem;
   padding: 0.28rem 0.3rem;
+  font-family: var(--font-mono);
   touch-action: none;
   user-select: none;
 }
+/* Selected dice glow gold — picking up dice is the tray's primary action. */
 .die-btn--sel {
-  border-color: rgba(217, 165, 49, 0.75);
-  color: #e8c76a;
-  box-shadow: 0 0 6px rgba(217, 165, 49, 0.35);
+  background-color: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-ledge), 0 0 8px color-mix(in srgb, var(--primary) 45%, transparent);
+}
+.die-btn--sel:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--primary) 82%, white);
 }
 .dice-put-back {
   white-space: nowrap;
-  color: #e8c76a;
-  border-color: rgba(217, 165, 49, 0.45);
+  color: var(--primary-strong);
 }
 .dice-put-back:disabled {
   color: var(--text-muted);
   border-color: var(--border);
   opacity: 0.45;
-  box-shadow: none;
   cursor: default;
 }
 .die-count {
@@ -1989,8 +2246,9 @@ body.pointer-dragging * {
   min-width: 1rem;
   padding: 0 0.2rem;
   border-radius: 999px;
-  background: #d9a531;
-  color: #1a1408;
+  border: 1.5px solid var(--border);
+  background: var(--primary);
+  color: var(--on-primary);
   font-size: 0.66rem;
   font-weight: 700;
   line-height: 1rem;
@@ -2012,11 +2270,12 @@ body.pointer-dragging * {
   pointer-events: auto;
   display: flex;
   padding: 0.3rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
-  backdrop-filter: var(--blur);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-md);
+  box-shadow: var(--shadow-panel);
 }
 /* The switcher buttons; shared by the board pill and the inline page top rows. */
 .page-switcher-group {
@@ -2047,7 +2306,9 @@ body.pointer-dragging * {
   z-index: 30;
   pointer-events: auto;
   display: none;
-  background: var(--bg);
+  background-color: var(--bg);
+  background-image: var(--tex-grain);
+  background-size: 280px;
 }
 .page--active {
   display: flex;
@@ -2147,28 +2408,40 @@ body.pointer-dragging * {
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
+/* Folder-tab chips: plaque tan when idle, bright page + sky ink when open. */
 .chip-tab {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
   padding: 0.3rem 0.6rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  background-color: var(--surface-plaque);
+  background-image: var(--tex-grain);
+  background-size: 280px;
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-sm);
+  box-shadow: var(--shadow-ledge);
   cursor: pointer;
   font: inherit;
+  font-weight: 700;
   color: var(--text);
 }
 .chip-tab:hover {
-  border-color: var(--accent);
+  background-color: color-mix(in srgb, var(--surface-plaque) 85%, white);
 }
 .chip-tab--open {
-  background: var(--surface-2);
-  border-color: var(--accent);
-  color: var(--accent-bright);
+  background-color: var(--surface-page);
+  color: var(--accent);
+  box-shadow: none;
+}
+.chip-tab--open:hover {
+  background-color: var(--surface-page);
 }
 .chip-tab--add {
   border-style: dashed;
+  border-color: var(--border-subtle);
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
   color: var(--text-muted);
 }
 .chip-tab .status-dot {
@@ -2182,7 +2455,7 @@ body.pointer-dragging * {
   background: var(--success);
 }
 .chip-tab-live {
-  color: #e9c176;
+  color: var(--primary-strong);
   font-size: 0.7rem;
 }
 .chip-tab-name {
@@ -2206,8 +2479,10 @@ body.pointer-dragging * {
   padding: 0 0.25rem;
   border: none;
   background: transparent;
+  background-image: none;
+  box-shadow: none;
   line-height: 1.4;
-  font-weight: 600;
+  font-weight: 700;
 }
 .chip-tab-name-input[readonly] {
   cursor: pointer;
@@ -2230,7 +2505,9 @@ body.pointer-dragging * {
   line-height: 1;
   border-radius: 50%;
   background: transparent;
+  background-image: none;
   border-color: transparent;
+  box-shadow: none;
   color: var(--text-muted);
   opacity: 0;
   transition: opacity 0.12s ease;
@@ -2298,17 +2575,18 @@ body.pointer-dragging * {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: #0c0b09;
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-md);
+  box-shadow: var(--shadow-well);
+  background: var(--map-bg);
 }
 .scene-editor-inspector {
   flex: 0 0 300px;
   min-height: 0;
   overflow-y: auto;
   padding: 0.5rem;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
+  border: 2px solid var(--border-subtle);
+  border-radius: var(--r-wob-md);
   background: var(--surface-inset);
 }
 
@@ -2329,10 +2607,12 @@ body.pointer-dragging * {
   transform: translateX(-50%);
   z-index: 300;
   pointer-events: none;
-  background: var(--surface-solid);
-  border: 1px solid var(--border);
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
   color: var(--text-muted);
   padding: 0.5rem 1rem;
   border-radius: 999px;
-  box-shadow: var(--elev-2);
+  box-shadow: var(--shadow-panel);
 }
