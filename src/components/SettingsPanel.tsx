@@ -15,6 +15,7 @@ import {
   type UiThemeOverride,
 } from "../lib/types";
 import type { CampaignManifest } from "../lib/campaignManifest";
+import { useVisualEffectsLite } from "../lib/visualEffects";
 
 const SHAPE_LABEL: Record<TokenShape, string> = {
   circle: "● Circle",
@@ -94,6 +95,7 @@ function ToggleRow({
 /// </summary>
 export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
   const { dice, isDm, state, room } = ctx;
+  const [fxLite, setFxLite] = useVisualEffectsLite();
   const [layoutReset, setLayoutReset] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
@@ -267,10 +269,22 @@ export function SettingsPanel({ ctx }: { ctx: PanelContext }) {
             onToggle={(on) => room.send({ type: "SET_PLAYERS_CAN_DRAW", enabled: on })}
           />
           <ToggleRow
+            label="Optimize uploads"
+            hint="Shrink new image uploads and save them as WebP (portraits/tokens ≤1024px, maps ≤2560px). Much smaller files — faster to load and far easier on storage. Off = keep originals at full size. Applies to new uploads only."
+            on={state.optimizeUploads !== false}
+            onToggle={(on) => room.send({ type: "SET_OPTIMIZE_UPLOADS", enabled: on })}
+          />
+          <ToggleRow
             label="Open Token panel on click"
             hint="When on, single-clicking a token opens its Token editor panel. Off = clicking only selects the token; double-click still opens its sheet. (This device only.)"
             on={ctx.tokenPanelOnClick}
             onToggle={ctx.setTokenPanelOnClick}
+          />
+          <ToggleRow
+            label="Reduce visual effects"
+            hint="Turn off the fancy decorative effects (textured panels, notch frames, modal blur, crystal glow) for a lighter, faster render on slower machines. This device only — doesn't affect other players."
+            on={fxLite}
+            onToggle={setFxLite}
           />
 
           <div className="section-title">Default token shapes</div>

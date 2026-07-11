@@ -1,5 +1,21 @@
 import { readImageFromFile } from "./sceneUtils";
 
+// Client mirror of the DM's synced "Optimize uploads" setting (kept in sync by App from game
+// state). When on, uploads are downscaled to a per-kind cap and re-encoded as WebP before they
+// reach R2 — far smaller files (quicker to decode, and the 10 GB bucket lasts much longer).
+// Defaults on so a join-time campaign-icon upload (before any state exists) is still optimized.
+let optimizeUploads = true;
+export function setOptimizeUploads(enabled: boolean): void {
+  optimizeUploads = enabled;
+}
+// Longest-side caps per asset kind. Maps stay generous so deep zoom keeps detail.
+const CAP_PORTRAIT_TOKEN = 1024;
+const CAP_MAP = 2560;
+const CAP_ICON = 512;
+function uploadOpts(maxSide: number): { maxSide: number } | undefined {
+  return optimizeUploads ? { maxSide } : undefined;
+}
+
 type UploadResponse = {
   ok?: boolean;
   url?: string;
@@ -54,7 +70,7 @@ export async function uploadPortrait(
   slotId: string,
   file: File,
 ): Promise<{ url: string }> {
-  const { dataUrl } = await readImageFromFile(file);
+  const { dataUrl } = await readImageFromFile(file, uploadOpts(CAP_PORTRAIT_TOKEN));
   const path = import.meta.env.DEV ? "/__dev/upload-portrait" : "/api/upload-portrait";
   const payload = await postUpload(path, { roomId, slotId, dataUrl });
   return { url: payload.url! };
@@ -68,14 +84,14 @@ export async function uploadTokenImage(
   tokenId: string,
   file: File,
 ): Promise<{ url: string }> {
-  const { dataUrl } = await readImageFromFile(file);
+  const { dataUrl } = await readImageFromFile(file, uploadOpts(CAP_PORTRAIT_TOKEN));
   const path = import.meta.env.DEV ? "/__dev/upload-token-image" : "/api/upload-token-image";
   const payload = await postUpload(path, { roomId, tokenId, dataUrl });
   return { url: payload.url! };
 }
 
 export async function uploadCampaignIcon(roomId: string, file: File): Promise<{ url: string }> {
-  const { dataUrl } = await readImageFromFile(file);
+  const { dataUrl } = await readImageFromFile(file, uploadOpts(CAP_ICON));
   const path = import.meta.env.DEV ? "/__dev/upload-campaign-icon" : "/api/upload-campaign-icon";
   const payload = await postUpload(path, { roomId, dataUrl });
   return { url: payload.url! };
@@ -135,7 +151,7 @@ export async function uploadMapImage(
   sceneId: string,
   file: File,
 ): Promise<{ url: string; layerId: string; width: number; height: number }> {
-  const { dataUrl, width, height } = await readImageFromFile(file);
+  const { dataUrl, width, height } = await readImageFromFile(file, uploadOpts(CAP_MAP));
   const layerId = `layer-${crypto.randomUUID().slice(0, 8)}`;
   const path = import.meta.env.DEV ? "/__dev/upload-map-image" : "/api/upload-map-image";
   const payload = await postUpload(path, { roomId, sceneId, layerId, dataUrl, width, height });

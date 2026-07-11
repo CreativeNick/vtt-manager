@@ -110,6 +110,11 @@ export function CroppableImage({
         src={src}
         alt={alt}
         draggable={false}
+        // Long actor/NPC lists render one of these per row: lazy + async decode keeps opening a
+        // panel from downloading and decoding every portrait at once (below-fold ones wait until
+        // scrolled into view). The sheet's single visible portrait loads immediately regardless.
+        loading="lazy"
+        decoding="async"
         onError={() => setErrored(true)}
         onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
         style={{

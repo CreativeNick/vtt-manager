@@ -2651,3 +2651,27 @@ delta sync) and the per-scene data layout makes them mechanical.
 - **Sheets beyond 5e** → `SheetRecord.data` isolates the 5e shape; a future template/system change
 swaps the inner `CharacterSheet` + section ids without touching tokens, combat, or redaction.
 
+---
+
+## Future consideration — automatic R2 storage cleanup (not yet implemented)
+
+Cloudflare R2 objects are currently **never garbage-collected**. Replacing a portrait/token/map,
+deleting a token, or removing a scene leaves the old object orphaned in the bucket forever; only a
+manual delete from the Assets page removes anything, and campaign-icons can't be deleted at all
+(`functions/api/delete-asset.ts` restricts keys to `tokens/portraits/maps`). Combined with uploads,
+this means storage grows unbounded relative to what's actually referenced — a real concern against
+the free 10 GB R2 budget. (Phase 3 of `PERFORMANCE_PLAN.md` mitigates the *inflow* by compressing
+new uploads, but does nothing about accumulated orphans.)
+
+**Deferred by explicit choice** during the performance pass — deleting stored files is irreversible,
+so it wasn't automated. Two options to consider later:
+
+1. **Auto-delete on replace/remove.** When an asset is replaced, or its owner (token/scene/sheet) is
+   deleted, delete the now-orphaned R2 object too — guarded so only *truly* unreferenced keys are
+   removed (scan the live state for any other reference first). Directly bounds storage.
+2. **DM-only "find & clean orphans" tool.** A maintenance view that lists unreferenced objects with
+   their sizes and lets the DM delete them manually. Safer (fully in the DM's control) but manual.
+
+Either needs a careful "is this key still referenced anywhere in state?" check to avoid deleting a
+live asset (e.g. the same image shared by two tokens). See `PERFORMANCE_PLAN.md` for context.
+

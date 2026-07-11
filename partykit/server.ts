@@ -1981,6 +1981,15 @@ export default class GameServer implements Party.Server {
         }
         break;
       }
+      case "SET_OPTIMIZE_UPLOADS": {
+        const enabled = Boolean(parsed.enabled);
+        if (this.state.optimizeUploads !== enabled) {
+          this.state.optimizeUploads = enabled;
+          this.logEvent(`Upload optimization ${enabled ? "enabled" : "disabled"} by the DM.`);
+          void this.broadcastState();
+        }
+        break;
+      }
       case "SET_UI_OVERRIDE": {
         // DM-forced theme+accent for every client (null = players choose their own).
         const next = parsed.override === null ? null : normalizeUiOverride(parsed.override);

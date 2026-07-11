@@ -30,7 +30,9 @@ import {
   writeCampaignJson,
 } from "./lib/campaignStore";
 import { useSpaceClick } from "./lib/useSpaceClick";
-import { fitViewportToScene } from "./lib/sceneUtils";
+import { fitViewportToScene, prefetchImage, loadImageForCanvas } from "./lib/sceneUtils";
+import { setOptimizeUploads } from "./lib/uploadAsset";
+import { LoadingScreen } from "./components/LoadingScreen";
 import {
   DEFAULT_ICON_CROP,
   DEFAULT_VIEWPORT,
@@ -455,6 +457,95 @@ export default function App() {
     });
   }, [roomId, dockOpen, dockTab, popped, trayOpen, page, settingsOpen]);
 
+  // Relay the DM's viewport to players as a lightweight VIEWPORT delta, trailing-throttled to
+  // ~30/s. A fast pan/zoom fires far more often, and each echo re-renders every player's board —
+  // unthrottled it floods them. The DM's own view tracks the Konva drag directly (no dependence
+  // on this relay), so local smoothness is unaffected; the trailing timer guarantees players
+  // still land on the final resting viewport. Declared here (before the early returns below) so
+  // its hooks always run — see the Rules of Hooks.
+  const latestViewportRef = useRef<Viewport | null>(null);
+  const viewportBroadcastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleViewportBroadcast = useCallback(
+    (next: Viewport) => {
+      latestViewportRef.current = next;
+      if (viewportBroadcastTimerRef.current != null) return;
+      viewportBroadcastTimerRef.current = setTimeout(() => {
+        viewportBroadcastTimerRef.current = null;
+        if (latestViewportRef.current) dm.updateViewport(latestViewportRef.current);
+      }, 33);
+    },
+    [dm],
+  );
+  useEffect(
+    () => () => {
+      if (viewportBroadcastTimerRef.current != null) clearTimeout(viewportBroadcastTimerRef.current);
+    },
+    [],
+  );
+
+  // Keep the client-side upload optimizer in sync with the DM's synced setting, so every client
+  // (DM and players) compresses new uploads the same way. Default on when state is absent.
+  useEffect(() => {
+    setOptimizeUploads(state?.optimizeUploads !== false);
+  }, [state?.optimizeUploads]);
+
+  // Asset warming (Phase 2): the decode-once shared cache lets us proactively warm likely-next
+  // assets so scene switches and portraits never decode cold. Active-scene assets + party
+  // portraits go first; everything else (other scenes' maps, remaining sheets/items) is deferred
+  // to idle so it never competes with the visible board. All calls are de-duped by the cache.
+  useEffect(() => {
+    if (!state) return;
+    const activeSceneId = state.activeSceneId;
+    const activeScene = state.scenes.find((s) => s.id === activeSceneId);
+    prefetchImage(activeScene?.mapUrl);
+    for (const t of state.tokens) if (t.sceneId === activeSceneId) prefetchImage(t.imageUrl);
+    for (const p of state.connectedPlayers) prefetchImage(state.sheets[p.playerId]?.data.iconUrl);
+
+    const warmRest = () => {
+      for (const s of state.scenes) if (s.id !== activeSceneId) prefetchImage(s.mapUrl);
+      for (const id of Object.keys(state.sheets)) prefetchImage(state.sheets[id]?.data.iconUrl);
+      for (const id of Object.keys(state.items)) prefetchImage(state.items[id]?.iconUrl);
+    };
+    const useIdle = typeof window.requestIdleCallback === "function";
+    const handle = useIdle
+      ? window.requestIdleCallback(warmRest, { timeout: 3000 })
+      : window.setTimeout(warmRest, 500);
+    return () => {
+      if (useIdle) window.cancelIdleCallback(handle);
+      else window.clearTimeout(handle);
+    };
+  }, [state]);
+
+  // First-connect loading gate (Phase 2): once joined, hold a brief branded loading screen until
+  // the active map + party portraits are decoded — so the board appears complete instead of
+  // popping in — but never past a hard cap. Empty campaigns (no assets) fall through instantly.
+  // Sets `booted` once and never resets, so reconnects are never re-gated.
+  const [booted, setBooted] = useState(false);
+  useEffect(() => {
+    if (booted) return;
+    if (!state || (status !== "joined" && status !== "reconnecting")) return;
+    let alive = true;
+    const activeScene = state.scenes.find((s) => s.id === state.activeSceneId);
+    const critical: string[] = [];
+    if (activeScene?.mapUrl) critical.push(activeScene.mapUrl);
+    for (const p of state.connectedPlayers) {
+      const url = state.sheets[p.playerId]?.data.iconUrl;
+      if (url) critical.push(url);
+    }
+    const finish = () => {
+      if (alive) setBooted(true);
+    };
+    const cap = window.setTimeout(finish, 2500); // never gate longer than this
+    void Promise.all(critical.map((u) => loadImageForCanvas(u).catch(() => {}))).then(() => {
+      window.clearTimeout(cap);
+      finish();
+    });
+    return () => {
+      alive = false;
+      window.clearTimeout(cap);
+    };
+  }, [booted, state, status]);
+
   if (!session) {
     return <JoinScreen onJoin={setSession} nightMode={nightMode} onToggleNight={setNightMode} />;
   }
@@ -469,7 +560,11 @@ export default function App() {
   }
 
   if (!state || (status !== "joined" && status !== "reconnecting")) {
-    return <div className="loading">Connecting to room…</div>;
+    return <LoadingScreen label="Connecting to room…" />;
+  }
+  // Brief, hard-capped gate so the first board render already has its map + party portraits.
+  if (!booted) {
+    return <LoadingScreen label="Preparing the table…" />;
   }
 
   const selectedToken = state.tokens.find((token) => token.id === selectedTokenId) ?? null;
@@ -559,8 +654,7 @@ export default function App() {
   const handleViewportChange = (next: Viewport) => {
     setViewport(next);
     if (isDm) {
-      // Relayed server-side as a lightweight VIEWPORT delta, never a full STATE.
-      dm.updateViewport(next);
+      scheduleViewportBroadcast(next);
     }
   };
 

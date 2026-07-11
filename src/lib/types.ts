@@ -1265,6 +1265,12 @@ export type GameState = {
   /** Whether players may draw shift-drag dotted pointer arrows. On by default. */
   playersCanPoint: boolean;
   /**
+   * Whether new image uploads are downscaled + re-encoded to WebP on the client before they're
+   * stored (portraits/tokens ≤1024px, maps ≤2560px). On by default: much smaller files — faster
+   * to load/decode and far easier on the 10 GB storage budget. Only affects NEW uploads.
+   */
+  optimizeUploads: boolean;
+  /**
    * DM-forced UI theme (Phase 8): when set, every client renders this theme +
    * accent instead of their own device preference. null (default) = players
    * pick their own look in Settings.
@@ -1444,6 +1450,7 @@ export type ClientMessage =
   | { type: "SET_PLAYERS_CAN_DRAW"; enabled: boolean }
   | { type: "SET_UI_OVERRIDE"; override: UiThemeOverride | null }
   | { type: "SET_PLAYERS_CAN_MOVE"; enabled: boolean }
+  | { type: "SET_OPTIMIZE_UPLOADS"; enabled: boolean }
   | { type: "SET_PLAYERS_CAN_POINT"; enabled: boolean }
   /** Replace a scene's whole wall set — bulk ops only (clear all / paste). Granular edits below. */
   | { type: "SET_WALLS"; sceneId: string; walls: Wall[] }
@@ -2736,6 +2743,7 @@ export function normalizeGameState(state: GameState & LegacyGameStateFields): Ga
     // Default-allowed: only an explicit `false` turns these off (undefined ⇒ on).
     playersCanMove: state.playersCanMove !== false,
     playersCanPoint: state.playersCanPoint !== false,
+    optimizeUploads: state.optimizeUploads !== false,
     uiOverride: normalizeUiOverride(state.uiOverride),
     tokenShapeDefaults: normalizeTokenShapeDefaults(state.tokenShapeDefaults),
     defaultTokenSize:
@@ -2791,6 +2799,7 @@ export function createInitialState(roomId: string): GameState {
     playersCanDraw: false,
     playersCanMove: true,
     playersCanPoint: true,
+    optimizeUploads: true,
     uiOverride: null,
     tokenShapeDefaults: { ...DEFAULT_TOKEN_SHAPES },
     defaultTokenSize: DEFAULT_TOKEN_SIZE,

@@ -67,22 +67,69 @@ function loadImageElement(url: string): Promise<HTMLImageElement> {
 }
 
 /// <summary>
-/// Loads an image for Konva without breaking data URLs or same-origin static assets.
+/// Shared URL→image cache so a given asset is fetched and DECODED exactly once, then reused by
+/// every token / panel / scene that shows it. Without this, `useImage` builds a fresh Image() on
+/// every remount (and the element-keyed downscale cache re-runs), so a scene switch or panel
+/// toggle re-decodes multi-MB uploads from scratch. Keyed by URL. data:/blob: URLs are NOT
+/// cached (their keys would be huge and their lifetimes are transient). Bounded by a simple LRU
+/// so a long session can't grow the cache without limit.
+/// </summary>
+const sharedImageCache = new Map<string, Promise<HTMLImageElement>>();
+const SHARED_IMAGE_CACHE_MAX = 160;
+
+function isCacheableImageUrl(url: string): boolean {
+  return !url.startsWith("data:") && !url.startsWith("blob:");
+}
+
+/// <summary>
+/// Loads an image for Konva without breaking data URLs or same-origin static assets, reusing a
+/// shared decode per URL (see `sharedImageCache`).
 /// </summary>
 export function loadImageForCanvas(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
+  const cacheable = isCacheableImageUrl(url);
+  if (cacheable) {
+    const hit = sharedImageCache.get(url);
+    if (hit) {
+      // Refresh LRU recency so hot assets survive eviction.
+      sharedImageCache.delete(url);
+      sharedImageCache.set(url, hit);
+      return hit;
+    }
+  }
+  const promise = new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
-    const isDataOrBlob = url.startsWith("data:") || url.startsWith("blob:");
-    if (!isDataOrBlob && url.startsWith("http")) {
+    if (cacheable && url.startsWith("http")) {
       const resolved = new URL(url, window.location.origin);
       if (resolved.origin !== window.location.origin) {
         img.crossOrigin = "anonymous";
       }
     }
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
+    img.onerror = () => {
+      // A failed load must not poison the cache — drop it so a later attempt can retry.
+      sharedImageCache.delete(url);
+      reject(new Error(`Failed to load image: ${url}`));
+    };
     img.src = url;
   });
+  if (cacheable) {
+    sharedImageCache.set(url, promise);
+    if (sharedImageCache.size > SHARED_IMAGE_CACHE_MAX) {
+      const oldest = sharedImageCache.keys().next().value;
+      if (oldest !== undefined) sharedImageCache.delete(oldest);
+    }
+  }
+  return promise;
+}
+
+/// <summary>
+/// Warms the shared cache for a URL (fire-and-forget) so a likely-next asset — the party's
+/// portraits, the active scene's tokens, other scenes' maps — is already decoded before it's
+/// shown. Safe to call repeatedly; de-duped by `loadImageForCanvas`.
+/// </summary>
+export function prefetchImage(url: string | null | undefined): void {
+  if (!url) return;
+  loadImageForCanvas(url).catch(() => {});
 }
 
 /// <summary>
@@ -191,17 +238,47 @@ function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 /// <summary>
-/// Reads an image file at full quality and returns its data URL and dimensions.
+/// Reads an image file for upload. With no `options`, returns the original bytes unchanged
+/// (full backward compatibility). With `options.maxSide`, downscales to that cap (stepped,
+/// high-quality) and re-encodes as WebP — dramatically smaller files for faster decode and a
+/// lighter storage budget. Falls back to the raw bytes if the encode fails or WebP isn't smaller
+/// (e.g. an already-tiny PNG, or a browser without WebP canvas export).
 /// </summary>
 export async function readImageFromFile(
   file: File,
+  options?: { maxSide?: number; webpQuality?: number },
 ): Promise<{ dataUrl: string; width: number; height: number }> {
-  const dataUrl = await readFileAsDataUrl(file);
-  const dims = await loadImageDimensions(dataUrl).catch(() => ({
-    width: DEFAULT_SCENE_WIDTH,
-    height: DEFAULT_SCENE_HEIGHT,
-  }));
-  return { dataUrl, width: dims.width, height: dims.height };
+  const rawUrl = await readFileAsDataUrl(file);
+  if (!options?.maxSide) {
+    const dims = await loadImageDimensions(rawUrl).catch(() => ({
+      width: DEFAULT_SCENE_WIDTH,
+      height: DEFAULT_SCENE_HEIGHT,
+    }));
+    return { dataUrl: rawUrl, width: dims.width, height: dims.height };
+  }
+  try {
+    const img = await loadImageElement(rawUrl);
+    const scaled = downscaleImage(img, options.maxSide);
+    const w = scaled instanceof HTMLImageElement ? scaled.naturalWidth || scaled.width : scaled.width;
+    const h = scaled instanceof HTMLImageElement ? scaled.naturalHeight || scaled.height : scaled.height;
+    const canvas = drawToCanvas(scaled, w, h);
+    const webpUrl = canvas.toDataURL("image/webp", options.webpQuality ?? 0.85);
+    // toDataURL silently yields PNG if WebP export is unsupported — only accept a real, smaller WebP.
+    if (webpUrl.startsWith("data:image/webp") && webpUrl.length < rawUrl.length) {
+      return { dataUrl: webpUrl, width: w, height: h };
+    }
+    return {
+      dataUrl: rawUrl,
+      width: img.naturalWidth || img.width,
+      height: img.naturalHeight || img.height,
+    };
+  } catch {
+    const dims = await loadImageDimensions(rawUrl).catch(() => ({
+      width: DEFAULT_SCENE_WIDTH,
+      height: DEFAULT_SCENE_HEIGHT,
+    }));
+    return { dataUrl: rawUrl, width: dims.width, height: dims.height };
+  }
 }
 
 /// <summary>

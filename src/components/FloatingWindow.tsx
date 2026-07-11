@@ -136,7 +136,17 @@ export function FloatingWindow({
   const [maximized, setMaximized] = useState(false);
   const [z, setZ] = useState(() => bringToFront(id));
   const rootRef = useRef<HTMLDivElement>(null);
-  const dragOffsetRef = useRef<WindowPos | null>(null);
+  // Everything the pointer-move needs, captured ONCE at grab time — notably the height, so the
+  // per-move clamp never reads offsetHeight (a forced synchronous reflow) mid-drag.
+  const dragRef = useRef<{
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+    baseX: number;
+    baseY: number;
+    w: number;
+    h: number;
+  } | null>(null);
   const resizeRef = useRef<{
     dir: ResizeDir;
     startX: number;
@@ -201,38 +211,67 @@ export function FloatingWindow({
       if (event.button !== 0 || maximized) {
         return;
       }
-      dragOffsetRef.current = { x: event.clientX - geom.x, y: event.clientY - geom.y };
+      dragRef.current = {
+        pointerId: event.pointerId,
+        offsetX: event.clientX - geom.x,
+        offsetY: event.clientY - geom.y,
+        baseX: geom.x,
+        baseY: geom.y,
+        w: geom.w,
+        h: geom.h ?? measuredHeight(),
+      };
       event.currentTarget.setPointerCapture(event.pointerId);
+      // Move on the compositor (transform) instead of left/top, and drop the paint-heavy notch
+      // overlay for the drag — so dragging never repaints the window contents or the 12-layer
+      // edge decoration frame by frame (the low-end-machine stutter).
+      const el = rootRef.current;
+      if (el) {
+        el.style.willChange = "transform";
+        el.classList.add("dragging");
+      }
     },
-    [geom.x, geom.y, maximized],
+    [geom.x, geom.y, geom.w, geom.h, maximized, measuredHeight],
   );
 
-  const onDragMove = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      const offset = dragOffsetRef.current;
-      if (!offset) {
-        return;
-      }
-      setGeom((current) =>
-        clampGeom({ ...current, x: event.clientX - offset.x, y: event.clientY - offset.y }),
-      );
-    },
-    [clampGeom],
-  );
+  const onDragMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) {
+      return;
+    }
+    // Clamp against the captured size (no DOM read), then translate from the grab-time origin.
+    const size = clampSizeToViewport({ w: d.w, h: d.h });
+    const pos = clampToViewport({ x: event.clientX - d.offsetX, y: event.clientY - d.offsetY }, size);
+    const el = rootRef.current;
+    if (el) {
+      el.style.transform = `translate3d(${pos.x - d.baseX}px, ${pos.y - d.baseY}px, 0)`;
+    }
+  }, []);
 
   const endDrag = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragOffsetRef.current) {
+      const d = dragRef.current;
+      if (!d) {
         return;
       }
-      dragOffsetRef.current = null;
+      dragRef.current = null;
       event.currentTarget.releasePointerCapture(event.pointerId);
-      setGeom((current) => {
-        persist(current);
-        return current;
-      });
+      const size = clampSizeToViewport({ w: d.w, h: d.h });
+      const pos = clampToViewport({ x: event.clientX - d.offsetX, y: event.clientY - d.offsetY }, size);
+      const el = rootRef.current;
+      if (el) {
+        // Land on the final spot via left/top and clear the transform + overlay suppression in
+        // the same frame, so there's no jump-back flash before React commits the new geometry.
+        el.style.transform = "";
+        el.style.left = `${pos.x}px`;
+        el.style.top = `${pos.y}px`;
+        el.style.willChange = "";
+        el.classList.remove("dragging");
+      }
+      const next = { x: pos.x, y: pos.y, w: geom.w, h: geom.h };
+      setGeom(next);
+      persist(next);
     },
-    [persist],
+    [geom.w, geom.h, persist],
   );
 
   const startResize = useCallback(
@@ -248,6 +287,8 @@ export function FloatingWindow({
         start: { x: geom.x, y: geom.y, w: geom.w, h: geom.h ?? measuredHeight() },
       };
       event.currentTarget.setPointerCapture(event.pointerId);
+      // Drop the notch overlay while resizing too — it repaints all 12 layers each frame.
+      rootRef.current?.classList.add("resizing");
     },
     [geom, maximized, measuredHeight],
   );
@@ -289,6 +330,7 @@ export function FloatingWindow({
       }
       resizeRef.current = null;
       event.currentTarget.releasePointerCapture(event.pointerId);
+      rootRef.current?.classList.remove("resizing");
       setGeom((current) => {
         persist(current);
         return current;

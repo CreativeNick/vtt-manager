@@ -129,6 +129,71 @@ h3 {
 .window--maximized::after {
   border-radius: var(--radius);
 }
+/* While a window is being dragged (transform-moved) or resized, drop the 12-layer notch
+   overlay: moving/resizing the window otherwise repaints all 12 background layers every frame,
+   the main low-end-machine stutter. Restored the instant the gesture ends — resting look is
+   unchanged. */
+.window.dragging::after,
+.window.resizing::after,
+.dice-tray.dragging::before {
+  display: none;
+}
+/* While a window or the dice tray is being dragged, flatten the GPU-expensive decoration —
+   drop-shadow filters (crystal dice), layered shadows, and tiled textures — so the moving layer
+   is cheap to rasterize + composite. This is the lag low-end and high-DPI machines feel most:
+   compositing a large filtered layer every frame at 2× device pixels is costly, even when the
+   main thread is idle. Restored instantly on release; the resting look is unchanged. */
+.window.dragging,
+.dice-tray.dragging {
+  --paper-layers: none;
+  --crystal-tex: none;
+}
+.window.dragging,
+.window.dragging *,
+.window.dragging *::before,
+.window.dragging *::after,
+.dice-tray.dragging,
+.dice-tray.dragging *,
+.dice-tray.dragging *::before,
+.dice-tray.dragging *::after {
+  filter: none !important;
+  box-shadow: none !important;
+}
+/* Pre-promote the dice tray to its own compositor layer while it's open, so grabbing it to drag
+   never pays a one-frame layer-creation + full re-raster hitch on the first move — the "delay
+   when dragging fast" spike (measured ~36ms → ~8ms). One static layer while the tray is open is
+   negligible, and dragging becomes a pure GPU transform from the very first frame. */
+.dice-tray--open {
+  will-change: transform;
+}
+
+/* ---- Reduce-effects / performance mode (Phase 4) ------------------------------------------
+   Toggled per-browser from Settings ("Reduce visual effects"), applied as data-fx="lite" on the
+   document root. Sheds the expensive decorative PAINT for slower machines by zeroing the source
+   texture/notch vars — so every tiled surface + 12-layer notch frame stops painting — and
+   turning off the modal blur + crystal drop-shadows. Its specificity (0,2,0) beats the theme
+   blocks (:root day / [data-theme="night"], both ≤ (0,1,0)), so it wins in day AND night.
+   Default (attribute absent) = full look, pixel-identical. */
+:root[data-fx="lite"] {
+  --tex-grain: none;
+  --tex-speckle: none;
+  --notch-l: none;
+  --notch-r: none;
+  --notch-t: none;
+  --notch-b: none;
+}
+:root[data-fx="lite"] .btn-crystal {
+  --crystal-tex: none;
+}
+:root[data-fx="lite"] .btn-crystal,
+:root[data-fx="lite"] .btn-crystal::before,
+:root[data-fx="lite"] .btn-crystal::after {
+  filter: none;
+}
+:root[data-fx="lite"] .modal-backdrop {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 /* Static hosts get their position context here (fixed/absolute ones have it). */
 .modal,
 .map-toolbar-rail,
@@ -1523,6 +1588,78 @@ button.mod.roll-btn {
   grid-auto-flow: row;
   align-content: center;
 }
+
+/* Branded first-load gate (Phase 2): a themed spinner + progress sliver shown while the board's
+   critical assets warm, so the table appears whole. Time-capped by the caller — never a long
+   wait. Parchment-themed via existing tokens. */
+.loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  color: var(--text);
+}
+.loading-screen__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1.4rem 2rem;
+}
+.loading-screen__crest {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border);
+  border-top-color: transparent;
+  animation: loading-spin 0.9s linear infinite;
+}
+.loading-screen__label {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+.loading-screen__bar {
+  width: 220px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-plaque);
+  overflow: hidden;
+}
+.loading-screen__bar > span {
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--text);
+  opacity: 0.45;
+  animation: loading-slide 1.1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading-screen__crest {
+    animation: none;
+  }
+  .loading-screen__bar > span {
+    animation: none;
+    width: 100%;
+    opacity: 0.25;
+  }
+}
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes loading-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(330%);
+  }
+}
 .error-banner {
   position: fixed;
   top: 1rem;
@@ -2397,10 +2534,13 @@ body.pointer-dragging * {
 .dice-tray {
   position: fixed;
   /* Position is set inline (left/top, draggable); open/close is a slide + fade so the
-     tray hides wherever it has been dragged. */
-  transform: translateY(18px);
+     tray hides wherever it has been dragged. The slide uses the independent `translate`
+     property (NOT `transform`): dragging writes inline transforms every frame, and a
+     transitioned `transform` would ease each one — the tray would rubber-band behind
+     the cursor. */
+  translate: 0 18px;
   opacity: 0;
-  transition: transform 200ms ease, opacity 200ms ease;
+  transition: translate 200ms ease, opacity 200ms ease;
   z-index: 25; /* above the dock rail so it stays reachable */
   pointer-events: none;
   display: flex;
@@ -2416,7 +2556,7 @@ body.pointer-dragging * {
   box-shadow: var(--shadow-panel);
 }
 .dice-tray--open {
-  transform: translateY(0);
+  translate: 0 0;
   opacity: 1;
   pointer-events: auto;
 }
@@ -2503,7 +2643,7 @@ body.pointer-dragging * {
    gemstone die. Reserved for arcane actions — the d20 and spell slots. Glows
    faintly at night. */
 .btn-crystal {
-  --crystal-tex: url("/textures/opal-b.png");
+  --crystal-tex: url("/textures/opal-b.webp");
   position: relative;
   isolation: isolate;
   color: #fff;

@@ -487,7 +487,7 @@
   background-color: #b7b4c4;
   background-image:
     linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 55%),
-    url("/textures/opal-b.png");
+    url("/textures/opal-b.webp");
   background-size: auto, 90px;
   background-position: center, 35% 60%;
 }

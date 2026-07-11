@@ -1,5 +1,6 @@
 import {
   createContext,
+  memo,
   useCallback,
   useContext,
   useEffect,
@@ -470,7 +471,7 @@ function useGlowFade(target: number): number {
   return value;
 }
 
-function TokenNode({
+const TokenNode = memo(function TokenNode({
   token,
   imageUrl,
   imageCrop,
@@ -506,17 +507,17 @@ function TokenNode({
   /** HP to display under the token, or null to show no bar. */
   hp: HitPoints | null;
   showHpValues: boolean;
-  onSelect?: () => void;
+  onSelect?: (token: GameState["tokens"][number]) => void;
   /** Double-click: open the linked sheet (character or item). */
-  onOpenSheet?: () => void;
-  onMove: (x: number, y: number) => void;
+  onOpenSheet?: (token: GameState["tokens"][number]) => void;
+  onMove: (token: GameState["tokens"][number], x: number, y: number) => void;
   /** Rotate handle (selected + controllable): commit a new facing on pointer-up. */
-  onRotate?: (facing: number) => void;
+  onRotate?: (token: GameState["tokens"][number], facing: number) => void;
   /** Fires true when a real move-drag starts, false when it ends — lets the board hide the
    *  duplicate above-darkness name label for this token while it's being dragged. */
-  onDragActive?: (active: boolean) => void;
+  onDragActive?: (token: GameState["tokens"][number], active: boolean) => void;
   /** Mirrors the node's hover state up to the board (powers the X-to-delete hotkey). */
-  onHover?: (hovered: boolean) => void;
+  onHover?: (token: GameState["tokens"][number], hovered: boolean) => void;
 }) {
   const img = useImage(imageUrl);
   // Render a crisp, size-appropriate copy so large uploads don't look soft in a small token.
@@ -616,7 +617,7 @@ function TokenNode({
       setDragFacing((cur) => {
         if (cur === null) return null;
         const final = degAt(ev.clientX, ev.clientY, ev.shiftKey);
-        onRotate(final);
+        onRotate(token, final);
         // Keep showing the committed angle until the server echoes it back (the reconcile
         // effect clears it). Snapping to null here would flash the OLD token.facing for one
         // frame during the round-trip, then jump forward — the clunky bounce.
@@ -649,19 +650,19 @@ function TokenNode({
       opacity={token.hidden ? 0.4 : dead ? 0.55 : 1}
       onClick={() => {
         if (rotatingRef.current) return; // a rotate gesture, not a select
-        onSelect?.();
+        onSelect?.(token);
       }}
-      onTap={onSelect}
+      onTap={() => onSelect?.(token)}
       onMouseEnter={() => {
         setHovered(true);
-        onHover?.(true);
+        onHover?.(token, true);
       }}
       onMouseLeave={() => {
         setHovered(false);
-        onHover?.(false);
+        onHover?.(token, false);
       }}
-      onDblClick={onOpenSheet}
-      onDblTap={onOpenSheet}
+      onDblClick={() => onOpenSheet?.(token)}
+      onDblTap={() => onOpenSheet?.(token)}
       onDragStart={(e) => {
         // Shift-drag draws a pointer arrow; grabbing the facing arrow rotates instead of moving.
         if (e.evt.shiftKey || rotatingRef.current) {
@@ -670,11 +671,11 @@ function TokenNode({
         }
         // A real move begins: let the board suppress the duplicate above-darkness name label,
         // which is pinned to the (not-yet-updated) React position and would otherwise trail.
-        onDragActive?.(true);
+        onDragActive?.(token, true);
       }}
       onDragEnd={(e) => {
-        onDragActive?.(false);
-        onMove(e.target.x(), e.target.y());
+        onDragActive?.(token, false);
+        onMove(token, e.target.x(), e.target.y());
       }}
     >
       {isCurrentTurn ? (
@@ -803,7 +804,7 @@ function TokenNode({
       <TokenNameLabel token={token} radius={radius} showBar={showBar} showHpValues={showHpValues} />
     </Group>
   );
-}
+});
 
 /**
  * A token's name caption, positioned relative to the token's center (0,0). Rendered inside the
@@ -1633,6 +1634,82 @@ export function MapCanvas({
     return lines;
   }, [scene, previewGridSize, previewOffsetX, previewOffsetY, gridPreviewing]);
 
+  // Tokens on the active scene, memoized so a pan/zoom (which changes only the viewport, not
+  // token state) doesn't hand the memoized vision layers a fresh array reference every frame —
+  // the reference change alone would defeat their `memo` and re-run the layer bodies per frame.
+  const sceneTokens = useMemo(
+    () => state.tokens.filter((token) => token.sceneId === scene?.id),
+    [state.tokens, scene?.id],
+  );
+  // The viewer's vision-enabled tokens reveal the dark. Players use their own tokens; the DM
+  // sees everything unless previewing (then all vision tokens reveal).
+  const viewerVisionTokens = useMemo(
+    () =>
+      sceneTokens.filter(
+        (token) =>
+          token.vision?.enabled && (isDm ? visionPreview : token.ownerPlayerId === yourPlayerId),
+      ),
+    [sceneTokens, isDm, visionPreview, yourPlayerId],
+  );
+  const sceneVisionTokens = useMemo(
+    () => sceneTokens.filter((token) => token.vision?.enabled),
+    [sceneTokens],
+  );
+
+  // Stable dispatchers for the memoized <TokenNode>s. A ref holds the latest (often unstable)
+  // callbacks + derived board data so each dispatcher keeps a constant identity — otherwise
+  // every render would hand tokens fresh closures and defeat their `memo` on pan/zoom.
+  const tokenCbRef = useRef<{
+    onSelectToken?: (id: string | null) => void;
+    onOpenTokenSheet?: (token: GameState["tokens"][number]) => void;
+    onMoveToken: (id: string, x: number, y: number, facing?: number) => void;
+    setTokenDragActive: (id: string, active: boolean) => void;
+    setHoveredTokenId: (updater: (current: string | null) => string | null) => void;
+    isDm: boolean;
+    wallsBlockMovement: boolean;
+    movementSegs: ReturnType<typeof movementSegments>;
+    snapPoint: (x: number, y: number) => { x: number; y: number };
+  }>(null!);
+  const handleTokenSelect = useCallback(
+    (token: GameState["tokens"][number]) => tokenCbRef.current.onSelectToken?.(token.id),
+    [],
+  );
+  const handleTokenOpenSheet = useCallback(
+    (token: GameState["tokens"][number]) => tokenCbRef.current.onOpenTokenSheet?.(token),
+    [],
+  );
+  const handleTokenDragActive = useCallback(
+    (token: GameState["tokens"][number], active: boolean) =>
+      tokenCbRef.current.setTokenDragActive(token.id, active),
+    [],
+  );
+  const handleTokenHover = useCallback(
+    (token: GameState["tokens"][number], hovered: boolean) =>
+      tokenCbRef.current.setHoveredTokenId((current) =>
+        hovered ? token.id : current === token.id ? null : current,
+      ),
+    [],
+  );
+  const handleTokenRotate = useCallback(
+    (token: GameState["tokens"][number], facing: number) =>
+      tokenCbRef.current.onMoveToken(token.id, token.x, token.y, facing),
+    [],
+  );
+  const handleTokenMove = useCallback(
+    (token: GameState["tokens"][number], x: number, y: number) => {
+      const cb = tokenCbRef.current;
+      const snapped = cb.snapPoint(x, y);
+      // Players can't drag a token through a movement-blocking wall; the DM bypasses.
+      // A rejected move sends the OLD position so the server echo snaps the node back.
+      const target =
+        !cb.isDm && cb.wallsBlockMovement
+          ? clampMove({ x: token.x, y: token.y }, snapped, cb.movementSegs)
+          : snapped;
+      cb.onMoveToken(token.id, target.x, target.y);
+    },
+    [],
+  );
+
   if (!scene) {
     return <div className={`map-root${embedded ? " map-root--embedded" : ""}`} ref={rootRef} />;
   }
@@ -1683,6 +1760,20 @@ export function MapCanvas({
       x: Math.floor((x - scene.gridOffsetX) / g) * g + scene.gridOffsetX + g / 2,
       y: Math.floor((y - scene.gridOffsetY) / g) * g + scene.gridOffsetY + g / 2,
     };
+  };
+
+  // Keep the token-dispatcher ref current so the stable dispatchers (defined above the early
+  // return) always act on the latest callbacks + board data without changing identity.
+  tokenCbRef.current = {
+    onSelectToken,
+    onOpenTokenSheet,
+    onMoveToken,
+    setTokenDragActive,
+    setHoveredTokenId,
+    isDm,
+    wallsBlockMovement: scene.wallsBlockMovement !== false,
+    movementSegs,
+    snapPoint,
   };
 
   /** Routes a stage pointer event to the active tool in world coordinates. */
@@ -1825,7 +1916,6 @@ export function MapCanvas({
   const arrowGestureArmed = (e: Konva.KonvaEventObject<PointerEvent>) =>
     canPoint && !toolActive && !placing && e.evt.button === 0 && e.evt.shiftKey;
 
-  const sceneTokens = state.tokens.filter((token) => token.sceneId === scene.id);
   const currentTurnTokenId =
     state.combat?.entries[state.combat.turnIndex]?.tokenId ?? null;
 
@@ -1833,20 +1923,13 @@ export function MapCanvas({
   const ftToPx = scene.gridSize / Math.max(scene.feetPerSquare, 1);
   const wallsActive = activeTool.id === "walls";
   const lightsActive = activeTool.id === "lights";
-  // The viewer's vision-enabled tokens on this scene reveal the dark. Players use their
-  // own tokens; the DM sees everything unless previewing (then all vision tokens reveal).
-  const viewerVisionTokens = sceneTokens.filter(
-    (token) =>
-      token.vision?.enabled &&
-      (isDm ? visionPreview : token.ownerPlayerId === yourPlayerId),
-  );
   // Dynamic lighting off = the scene is dark. Players (and the DM's 👁 preview) get the
   // strict LOS-gated mask; the DM's own view instead gets a dimmed "here's my lighting"
   // overlay so lights are visibly working during setup without needing a token.
+  // (viewerVisionTokens / sceneVisionTokens are memoized above the early return.)
   const dark = !scene.globalIllumination;
   const maskActive = dark && (!isDm || visionPreview);
   const dmLightingActive = dark && isDm && !visionPreview;
-  const sceneVisionTokens = sceneTokens.filter((token) => token.vision?.enabled);
   const hasVisionTokens = sceneVisionTokens.length > 0;
   const editingLight = editingLightId
     ? scene.lights.find((l) => l.id === editingLightId) ?? null
@@ -2117,28 +2200,12 @@ export function MapCanvas({
                 isCurrentTurn={currentTurnTokenId === token.id}
                 hp={hp}
                 showHpValues={token.showHp === "values"}
-                onSelect={() => onSelectToken?.(token.id)}
-                onOpenSheet={() => onOpenTokenSheet?.(token)}
-                onMove={(x, y) => {
-                  const snapped = snapPoint(x, y);
-                  // Players can't drag a token through a movement-blocking wall; the DM bypasses.
-                  // A rejected move sends the OLD position so the server echo snaps the node back.
-                  const target =
-                    !isDm && scene.wallsBlockMovement !== false
-                      ? clampMove({ x: token.x, y: token.y }, snapped, movementSegs)
-                      : snapped;
-                  onMoveToken(token.id, target.x, target.y);
-                }}
-                onRotate={draggable ? (facing) => onMoveToken(token.id, token.x, token.y, facing) : undefined}
-                onDragActive={(active) => setTokenDragActive(token.id, active)}
-                onHover={
-                  isDm
-                    ? (hovered) =>
-                        setHoveredTokenId((current) =>
-                          hovered ? token.id : current === token.id ? null : current,
-                        )
-                    : undefined
-                }
+                onSelect={handleTokenSelect}
+                onOpenSheet={handleTokenOpenSheet}
+                onMove={handleTokenMove}
+                onRotate={draggable ? handleTokenRotate : undefined}
+                onDragActive={handleTokenDragActive}
+                onHover={isDm ? handleTokenHover : undefined}
               />
             );
           })}

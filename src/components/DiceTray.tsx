@@ -160,30 +160,52 @@ export function DiceTray({
     }
     const startX = event.clientX;
     const startY = event.clientY;
+    const baseX = pos.x;
+    const baseY = pos.y;
     const offX = event.clientX - pos.x;
     const offY = event.clientY - pos.y;
     const size = measure();
+    const el = trayRef.current;
     let moved = false;
 
     const onMove = (e: PointerEvent) => {
       if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD) {
         return; // below threshold — still a click
       }
-      moved = true;
+      if (!moved) {
+        moved = true;
+        // Move on the compositor (transform) and drop the paint-heavy notch overlay for the drag,
+        // so dragging never repaints the whole tray + its 12-layer edge frame each frame.
+        if (el) {
+          el.style.willChange = "transform";
+          el.classList.add("dragging");
+        }
+      }
       e.preventDefault();
-      setPos(clampPos({ x: e.clientX - offX, y: e.clientY - offY }, size));
+      const clamped = clampPos({ x: e.clientX - offX, y: e.clientY - offY }, size);
+      if (el) {
+        el.style.transform = `translate3d(${clamped.x - baseX}px, ${clamped.y - baseY}px, 0)`;
+      }
     };
-    const onUp = () => {
+    const onUp = (e: PointerEvent) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       if (moved) {
         // Swallow the click that follows a drag so it doesn't trigger a button.
         suppressClickRef.current = true;
         setTimeout(() => (suppressClickRef.current = false), 60);
-        setPos((current) => {
-          savePos(roomId, current);
-          return current;
-        });
+        const clamped = clampPos({ x: e.clientX - offX, y: e.clientY - offY }, size);
+        if (el) {
+          // Land via left/top and clear the transform + overlay suppression in the same frame so
+          // there's no jump-back flash before React commits the new position.
+          el.style.transform = "";
+          el.style.left = `${clamped.x}px`;
+          el.style.top = `${clamped.y}px`;
+          el.style.willChange = "";
+          el.classList.remove("dragging");
+        }
+        setPos(clamped);
+        savePos(roomId, clamped);
       }
     };
     window.addEventListener("pointermove", onMove);
