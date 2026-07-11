@@ -407,6 +407,11 @@ textarea,
   background: var(--map-bg);
   cursor: grab;
 }
+/* Konva binds pointer events to this container; without touch-action the browser may hijack a
+   pen/touch drag for scrolling and fire pointercancel mid-stroke (fog/draw gestures die). */
+.map-root .konvajs-content {
+  touch-action: none;
+}
 /* Optional backdrop image behind the map: a PRE-blurred small bitmap stretched to
    cover (the blur is baked in — no runtime CSS filter, so no per-frame GPU cost). */
 .map-backdrop {
@@ -2505,8 +2510,8 @@ body.pointer-dragging * {
   left: calc(100% + 0.35rem);
   top: 0;
   align-items: stretch;
-  gap: 0.15rem;
-  width: 12rem;
+  gap: 0.2rem;
+  width: 13.75rem;
 }
 .map-tool-btn {
   width: 2.2rem;
@@ -2543,11 +2548,11 @@ body.pointer-dragging * {
 .map-opt-btn {
   flex: 1 1 0;
   min-width: 0;
-  height: 1.9rem;
+  height: 2.15rem;
   display: grid;
   place-items: center;
-  padding: 0 0.3rem;
-  font-size: 0.74rem;
+  padding: 0 0.4rem;
+  font-size: 0.78rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2556,9 +2561,50 @@ body.pointer-dragging * {
   flex-wrap: wrap;
   gap: 0.2rem;
 }
+/* Toggle-switch variant of an option button (fog on/off): same cell size as its row
+   neighbours, but a sliding track + knob reads as persistent state, not an action. */
+.map-opt-btn.map-opt-switch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+.map-opt-switch .switch-track {
+  flex: 0 0 auto;
+  position: relative;
+  width: 1.9rem;
+  height: 1.05rem;
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-inset);
+  transition: background-color var(--dur-2) var(--ease-out);
+}
+.map-opt-switch .switch-knob {
+  position: absolute;
+  top: 50%;
+  left: 1px;
+  width: 0.72rem;
+  height: 0.72rem;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--surface-page);
+  transition: left var(--dur-2) var(--ease-out);
+}
+.map-opt-switch--on .switch-track {
+  background: var(--accent);
+}
+.map-opt-switch--on .switch-knob {
+  left: calc(100% - 0.72rem - 1px);
+}
+/* Fixed-width label so On ↔ Off doesn't shift the track sideways. */
+.map-opt-switch .switch-label {
+  min-width: 1.6em;
+  text-align: left;
+}
 .map-opt-btn--square {
   flex: 0 0 auto;
-  width: 1.9rem;
+  width: 2.15rem;
   padding: 0;
   font-size: 1rem;
 }

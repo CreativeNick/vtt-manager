@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Backpack } from "lucide-react";
+import { Backpack, Download, Upload } from "lucide-react";
 import {
   DEFAULT_ICON_CROP,
   ITEM_RARITIES,
@@ -9,6 +9,7 @@ import {
   type ItemRecord,
   type ItemType,
 } from "../lib/types";
+import { downloadJson, itemExportPayload, parseItemImport, transferFilename } from "../lib/sheetTransfer";
 import { uploadTokenImage } from "../lib/uploadAsset";
 import { CroppableImage } from "./CroppableImage";
 import { ImageCropModal } from "./ImageCropModal";
@@ -34,7 +35,29 @@ export function ItemSheetPanel({
   const [cropOpen, setCropOpen] = useState(false);
   const [libOpen, setLibOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
   const patch = (fields: Partial<ItemRecord>) => onChange({ ...item, ...fields });
+
+  /** Import replaces the item's own fields but keeps its place in THIS catalog
+   *  (folder + ordering come from the target, not the exported file). */
+  const handleImport = (file: File) => {
+    void file.text().then((text) => {
+      try {
+        const imported = parseItemImport(text, item.id);
+        if (!window.confirm(`Replace "${item.name}" with "${imported.name}"? Every field is overwritten.`)) {
+          return;
+        }
+        const { sortOrder: _dropped, ...fields } = imported;
+        onChange({
+          ...fields,
+          folderId: item.folderId,
+          ...(item.sortOrder !== undefined ? { sortOrder: item.sortOrder } : {}),
+        });
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : "Could not read that file.");
+      }
+    });
+  };
 
   const handleIcon = async (file: File) => {
     setUploading(true);
@@ -92,6 +115,20 @@ export function ItemSheetPanel({
                 Clear
               </button>
             ) : null}
+            <button
+              className="btn-ghost icon-btn"
+              title="Export this item as a JSON file"
+              onClick={() => downloadJson(transferFilename(item.name, "item"), itemExportPayload(item))}
+            >
+              <Download size={14} strokeWidth={2.2} />
+            </button>
+            <button
+              className="btn-ghost icon-btn"
+              title="Import an item from a JSON file — replaces this item"
+              onClick={() => importRef.current?.click()}
+            >
+              <Upload size={14} strokeWidth={2.2} />
+            </button>
             <input
               ref={fileRef}
               type="file"
@@ -100,6 +137,17 @@ export function ItemSheetPanel({
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) void handleIcon(file);
+                e.target.value = "";
+              }}
+            />
+            <input
+              ref={importRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleImport(file);
                 e.target.value = "";
               }}
             />

@@ -22,6 +22,10 @@ export type ToolPointerEvent = {
   /** Pointer position in map/world coordinates (through the stage transform). */
   world: ToolPoint;
   shiftKey: boolean;
+  /** Buttons currently held (PointerEvent.buttons bitmask; bit 0 = left). Lets a tool treat the
+   *  physical button as the source of truth — e.g. the fog/draw brushes resume painting after a
+   *  spurious pointerup killed the stroke while the button never actually lifted. */
+  buttons: number;
 };
 
 /** Everything a tool needs from the canvas shell. */

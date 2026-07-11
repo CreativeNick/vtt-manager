@@ -334,7 +334,9 @@
 }
 .sheet-header-main {
   flex: 1 1 auto;
-  min-width: 0;
+  /* The name/subtitle must never collapse away — in a narrow prep-page card the
+     action buttons wrap onto extra rows instead (see .sheet-header-actions). */
+  min-width: 6.5rem;
 }
 .sheet-name,
 .sheet-name-input {
@@ -360,6 +362,9 @@
   display: flex;
   align-items: center;
   gap: 0.25rem;
+  /* Narrow cards: buttons flow onto extra rows rather than squeezing out the name. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .rest-btn {
   background: var(--surface-2);
@@ -1230,6 +1235,17 @@
 .hp-stepper-value {
   font-family: var(--font-mono);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+/* Directly-editable current/max fields (token editor): compact wells sized for 3 digits. */
+.hp-stepper .hp-num {
+  width: 2.1rem;
+  text-align: center;
+  padding: 0.05rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
 }
 .hp-temp {
   color: var(--accent);

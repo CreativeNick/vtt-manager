@@ -981,7 +981,20 @@ export default function App() {
         ) : null}
 
         {isDm && selectedToken && tokenPanelOnClick ? (
-          <FloatingCluster anchor="bottom-left">
+          <FloatingWindow
+            key={`token-editor:${layoutEpoch}`}
+            id="token-editor"
+            roomId={session.roomId}
+            title={selectedToken.kind === "item" ? "Item token" : "Token"}
+            width={300}
+            height={640}
+            minWidth={264}
+            minHeight={280}
+            // Clear of the left map toolbar (fixed to the left edge, vertically centered);
+            // draggable like every window, and its position is remembered per campaign.
+            defaultPos={(_vw, vh) => ({ x: 72, y: Math.max(12, Math.round(vh / 2) - 320) })}
+            onClose={() => setSelectedTokenId(null)}
+          >
             <TokenEditor
               token={selectedToken}
               state={state}
@@ -990,7 +1003,7 @@ export default function App() {
               openItemSheet={openItemSheet}
               onClose={() => setSelectedTokenId(null)}
             />
-          </FloatingCluster>
+          </FloatingWindow>
         ) : null}
 
         {/* Always mounted so the drawer can slide out (and the tray scene persists). */}

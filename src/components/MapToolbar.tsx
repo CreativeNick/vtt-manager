@@ -451,7 +451,7 @@ export function MapToolbar({
       {activeToolId === "template" ? (
         <div className="map-toolbar-options">
           <Label>Shape</Label>
-          <Row>
+          <Row className="row-wrap">
             {TEMPLATE_KINDS.map((kind) => (
               <OptBtn
                 key={kind}
@@ -480,9 +480,21 @@ export function MapToolbar({
         <div className="map-toolbar-options">
           <Label>Fog</Label>
           <Row>
-            <OptBtn active={fogEnabled} title="Show/hide fog on this scene" onClick={onToggleFog}>
-              {fogEnabled ? "On" : "Off"}
-            </OptBtn>
+            {/* A switch, not a pushbutton: fog on/off is persistent scene state, and the
+                sliding knob reads as state at a glance. Same cell size as the other options. */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={fogEnabled}
+              className={`map-opt-btn map-opt-switch${fogEnabled ? " map-opt-switch--on" : ""}`}
+              title="Show/hide fog on this scene"
+              onClick={onToggleFog}
+            >
+              <span className="switch-track" aria-hidden>
+                <span className="switch-knob" />
+              </span>
+              <span className="switch-label">{fogEnabled ? "On" : "Off"}</span>
+            </button>
             <OptBtn
               active={fogInverted}
               title={
@@ -563,6 +575,7 @@ export function MapToolbar({
       {activeToolId === "calibrate" && isDm ? (
         <div className="map-toolbar-options">
           <Label>Calibrate by</Label>
+          {/* Stacked full-width: "Move + Resize" doesn't fit a 2-up split without ellipsis. */}
           <Row>
             <OptBtn
               active={calibrateMode === "adjust"}
@@ -571,6 +584,8 @@ export function MapToolbar({
             >
               <Move size={13} strokeWidth={2.2} /> Move + Resize
             </OptBtn>
+          </Row>
+          <Row>
             <OptBtn
               active={calibrateMode === "box"}
               title="Drag a fresh box over exactly one map square — sets the grid size and offset from scratch"

@@ -45,6 +45,11 @@ export const drawTool: MapTool = {
   onMove: (event, rt) => {
     const draft = rt.draft as DrawDraft | null;
     if (!draft) {
+      // Button still held with no stroke in progress (the point cap ended it, or a spurious
+      // pointerup did): resume from here so a held drag paints one continuous line.
+      if (event.buttons & 1) {
+        rt.setDraft({ points: [event.world.x, event.world.y] } satisfies DrawDraft);
+      }
       return;
     }
     const pts = draft.points;
@@ -57,8 +62,9 @@ export const drawTool: MapTool = {
     }
     const points = [...pts, event.world.x, event.world.y];
     if (points.length >= MAX_ANNOTATION_POINTS) {
+      // Cap hit mid-stroke: commit and keep drawing from here (same idiom as the fog brush).
       commit(rt, points);
-      rt.setDraft(null);
+      rt.setDraft({ points: [event.world.x, event.world.y] } satisfies DrawDraft);
       return;
     }
     rt.setDraft({ points } satisfies DrawDraft);

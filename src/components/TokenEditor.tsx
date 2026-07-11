@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Backpack, EyeOff, Hand } from "lucide-react";
+import { EyeOff, Hand } from "lucide-react";
 import {
   CONDITIONS,
   DEFAULT_ICON_CROP,
@@ -26,6 +26,7 @@ type TokenEditorProps = {
   dm: ReturnType<typeof useDmActions>;
   openSheet: (sheetId: string) => void;
   openItemSheet: (itemId: string) => void;
+  /** Clear the token selection (closes the hosting window) — used after Delete. */
   onClose: () => void;
 };
 
@@ -174,13 +175,9 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
   const hasImage = Boolean(effectiveImage);
 
   return (
-    <div className="panel" style={{ width: "min(280px, 90vw)" }}>
-      <div className="panel-header">
-        <span className="panel-title">{isItem ? <><Backpack size={14} strokeWidth={2.2} /> Item token</> : "Token"}</span>
-        <button className="btn-ghost icon-btn" onClick={onClose}>
-          ✕
-        </button>
-      </div>
+    // Hosted in a FloatingWindow (App.tsx) that supplies the title bar, close button,
+    // dragging, and sizing — this renders only the scrollable body.
+    <div className="panel">
       <div className="panel-body stack">
         <div className="field">
           <label>Label</label>
@@ -410,6 +407,9 @@ export function TokenEditor({ token, state, dm, openSheet, openItemSheet, onClos
                   hp={state.sheets[token.sheetId]!.data.hp}
                   canEdit
                   onAdjust={(delta) => dm.adjustHp(token.sheetId!, delta)}
+                  onSetHp={(hp) =>
+                    dm.updateSheet(token.sheetId!, { ...state.sheets[token.sheetId!]!.data, hp })
+                  }
                 />
               </div>
             ) : null}

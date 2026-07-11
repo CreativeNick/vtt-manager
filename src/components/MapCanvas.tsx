@@ -1803,7 +1803,7 @@ export function MapCanvas({
       if (!pos) {
         return;
       }
-      handler({ world: pos, shiftKey: Boolean(e.evt.shiftKey) }, runtime);
+      handler({ world: pos, shiftKey: Boolean(e.evt.shiftKey), buttons: e.evt.buttons ?? 0 }, runtime);
     };
 
   const eraseAnnotation = (annotation: Annotation) => {
@@ -2087,7 +2087,10 @@ export function MapCanvas({
           if (toolActive && activeTool.onDblClick) {
             const pos = stageRef.current?.getRelativePointerPosition();
             if (pos) {
-              activeTool.onDblClick({ world: pos, shiftKey: Boolean(e.evt.shiftKey) }, runtime);
+              activeTool.onDblClick(
+                { world: pos, shiftKey: Boolean(e.evt.shiftKey), buttons: e.evt.buttons ?? 0 },
+                runtime,
+              );
             }
           }
         }}
@@ -2107,6 +2110,16 @@ export function MapCanvas({
             return;
           }
           if (toolActive && e.evt.button === 0) {
+            // Capture the pointer for the whole gesture: moves/ups keep routing to the canvas
+            // even when the cursor crosses the dock, toolbar, window edge, or any overlay —
+            // without this, a boundary crossing mid-stroke silently ends (or strands) the drag.
+            if (e.evt.pointerId !== undefined) {
+              try {
+                (e.evt.target as Element | null)?.setPointerCapture?.(e.evt.pointerId);
+              } catch {
+                // Capture is best-effort (the pointer may already be gone) — never break the tool.
+              }
+            }
             toolPointer(activeTool.onDown)(e);
           }
         }}
@@ -2126,8 +2139,10 @@ export function MapCanvas({
           }
           // Only the LEFT button commits a tool gesture — a right-click's pointerup must not
           // finish a wall segment (it should only end the chain via onContextMenu). onDown is
-          // already left-only, so gate onUp to match.
-          if (toolActive && e.evt.button === 0) {
+          // already left-only, so gate onUp to match. And if the left button is still physically
+          // held (buttons bit 0 set), this "up" is spurious — swallowing it keeps a held brush
+          // stroke alive instead of committing and resetting it mid-drag.
+          if (toolActive && e.evt.button === 0 && !((e.evt.buttons ?? 0) & 1)) {
             toolPointer(activeTool.onUp)(e);
           }
         }}

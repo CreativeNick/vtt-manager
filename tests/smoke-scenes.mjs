@@ -156,8 +156,8 @@ try {
   {
     const trimmed = sceneOf(lastState(dm), liveId).fog.reveals[1];
     check(
-      "oversized brush points trimmed to 120",
-      trimmed.kind === "brush" && trimmed.points.length === 120,
+      "oversized brush points trimmed to 240",
+      trimmed.kind === "brush" && trimmed.points.length === 240,
       `len=${trimmed.points?.length}`,
     );
   }

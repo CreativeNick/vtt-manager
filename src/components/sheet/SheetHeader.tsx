@@ -1,10 +1,13 @@
-import { useState } from "react";
-import { Eye, EyeOff, Tent, Utensils } from "lucide-react";
+import { useRef, useState } from "react";
+import { Download, Eye, EyeOff, Tent, Upload, Utensils } from "lucide-react";
 import { NumberInput } from "../NumberInput";
 import type { SheetEdit } from "./context";
 
 /** Per-page reveal control (DM viewing an NPC sheet). */
 export type RevealControl = { revealed: boolean; onToggle: (revealed: boolean) => void } | null;
+
+/** Export/import controls (viewers who may edit the sheet: the owner or the DM). */
+export type SheetTransferControl = { onExport: () => void; onImportFile: (file: File) => void } | null;
 
 /**
  * The persistent sheet header: name + subtitle (PC: "Class Level"; NPC: type line +
@@ -16,15 +19,18 @@ export function SheetHeader({
   sheet,
   onRest,
   reveal,
+  transfer,
 }: {
   sheet: SheetEdit;
   onRest?: (kind: "short" | "long", spendHitDice?: number) => void;
   reveal: RevealControl;
+  transfer?: SheetTransferControl;
 }) {
   const { value, canEdit, kind, update } = sheet;
   const isNpc = kind === "npc";
   const [shortRestOpen, setShortRestOpen] = useState(false);
   const [spendDice, setSpendDice] = useState(0);
+  const importRef = useRef<HTMLInputElement>(null);
 
   const subtitle = isNpc
     ? [value.size, value.creatureType, value.alignment].filter(Boolean).join(" · ") || "NPC"
@@ -117,6 +123,37 @@ export function SheetHeader({
           >
             {reveal.revealed ? <Eye size={13} strokeWidth={2.2} /> : <EyeOff size={13} strokeWidth={2.2} />}
           </button>
+        ) : null}
+        {transfer ? (
+          <>
+            <button
+              type="button"
+              className="rest-btn"
+              title="Export this sheet as a JSON file"
+              onClick={transfer.onExport}
+            >
+              <Download size={14} strokeWidth={2.2} />
+            </button>
+            <button
+              type="button"
+              className="rest-btn"
+              title="Import a sheet from a JSON file — replaces this sheet"
+              onClick={() => importRef.current?.click()}
+            >
+              <Upload size={14} strokeWidth={2.2} />
+            </button>
+            <input
+              ref={importRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) transfer.onImportFile(file);
+                e.target.value = "";
+              }}
+            />
+          </>
         ) : null}
       </div>
 

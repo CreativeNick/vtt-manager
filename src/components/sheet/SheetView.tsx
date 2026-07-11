@@ -3,8 +3,9 @@ import { createPortal } from "react-dom";
 import type { CharacterSheet, CheckSpec, SheetRecord, SheetSectionId } from "../../lib/types";
 import { computeDerived } from "../../lib/rules5e";
 import { useSheetDraft } from "./useSheetDraft";
+import { parseSheetImport, sheetExportPayload, downloadJson, transferFilename } from "../../lib/sheetTransfer";
 import { SheetSidebar } from "./SheetSidebar";
-import { SheetHeader, type RevealControl } from "./SheetHeader";
+import { SheetHeader, type RevealControl, type SheetTransferControl } from "./SheetHeader";
 import { SheetRail, SHEET_PAGES, type SheetPageId } from "./SheetRail";
 import { MainPage } from "./pages/MainPage";
 import { InventoryPage } from "./pages/InventoryPage";
@@ -141,6 +142,30 @@ export function SheetView({
     return { revealed, onToggle: (next) => sections.forEach((s) => onToggleReveal(s, next)) };
   };
 
+  // Export/import (owner or DM). Export snapshots the live draft; import runs the file
+  // through the shared sanitizer, then applies it via `update` so the local draft AND the
+  // server (debounced UPDATE_SHEET, permission-checked there too) replace every field.
+  const transfer: SheetTransferControl = canEdit
+    ? {
+        onExport: () => downloadJson(transferFilename(value.characterName, "sheet"), sheetExportPayload(value)),
+        onImportFile: (file) => {
+          void file.text().then((text) => {
+            try {
+              const imported = parseSheetImport(text);
+              const target = value.characterName || "this sheet";
+              const source = imported.characterName ? `"${imported.characterName}"` : "the imported sheet";
+              if (!window.confirm(`Replace ${target} with ${source}? Every field on this sheet is overwritten.`)) {
+                return;
+              }
+              update(imported);
+            } catch (error) {
+              window.alert(error instanceof Error ? error.message : "Could not read that file.");
+            }
+          });
+        },
+      }
+    : null;
+
   const pageHidden = (page: SheetPageId) => PAGE_SECTIONS[page].some((s) => hiddenFor(s));
 
   const renderPage = () => {
@@ -197,7 +222,7 @@ export function SheetView({
         </button>
 
         <div className="sheet7-main">
-          <SheetHeader sheet={sheet} onRest={onRest} reveal={revealControlFor(PAGE_SECTIONS[activePage])} />
+          <SheetHeader sheet={sheet} onRest={onRest} reveal={revealControlFor(PAGE_SECTIONS[activePage])} transfer={transfer} />
           {overSoftCap ? (
             <div className="sheet-size-warn">This sheet is getting large — trim long descriptions to avoid hitting the save limit.</div>
           ) : null}

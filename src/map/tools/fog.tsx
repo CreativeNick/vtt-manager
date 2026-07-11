@@ -148,6 +148,13 @@ export const fogTool: MapTool = {
 
     if (rt.fogShape === "brush") {
       if (!d || d.shape !== "brush" || d.points.length === 0) {
+        // Left button held but no stroke in progress: something (a spurious pointerup, a missed
+        // onDown) ended the gesture while the DM never let go — resume painting from here so a
+        // held drag is never interrupted.
+        if (event.buttons & 1) {
+          rt.setDraft({ shape: "brush", points: [x, y], live: [x, y] } satisfies BrushDraft);
+          return;
+        }
         // Not painting: keep a hover-only draft so the brush-size ring previews at the cursor.
         rt.setDraft({ shape: "brush", points: [], live: [x, y] } satisfies BrushDraft);
         return;

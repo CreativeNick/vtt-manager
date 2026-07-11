@@ -233,8 +233,10 @@ export const ANNOTATION_FADE_MS = 600;
 /** Live pointer arrows one author may have at once — older ones fade first. */
 export const MAX_POINTER_ARROWS_PER_AUTHOR = 5;
 export const MAX_FOG_REVEALS = 300;
-/** Flat x,y numbers per fog brush stroke (60 samples) — 300×120 ≈ 290KB worst case. */
-export const MAX_FOG_BRUSH_POINTS = 120;
+/** Flat x,y numbers per fog brush stroke (120 samples) — 300×240 ≈ 580KB worst case. A longer
+ *  stroke halves the mid-drag cap commits, and each commit round-trips a full STATE echo that
+ *  re-renders the whole board — the churn that made held brush drags stutter. */
+export const MAX_FOG_BRUSH_POINTS = 240;
 /** Flat x,y numbers per fog selection polygon (lasso/polygon); freehand lassos need more vertices. */
 export const MAX_FOG_POLY_POINTS = 512;
 export const MAX_MEASURE_NUMBERS = 48; // flat x,y numbers → 24 ruler points

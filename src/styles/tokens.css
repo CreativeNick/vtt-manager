@@ -114,14 +114,14 @@
    Accent variations (Quill & Ember "Variations" cards): alternate interactive
    accents that replace the sky family + the slate header band. Gold, terra,
    and sage stay put. Set data-accent="moss|ember|lapis|amethyst|rose|teal" on
-   <html> (no attribute = the default sky). Moss/ember/lapis day values are
-   verbatim from the bundle's variation cards; the extra three follow the same
-   recipe. Night values are derived (brightened accent on stone).
+   <html> (no attribute = the default sky). Accents do NOT re-tint the room:
+   every accent shares the paper --bg wash (the bundle's per-accent tinted
+   washes — pink for the red family — read as "the background is pink").
+   Night values are derived (brightened accent on stone).
    ========================================================================== */
 
 [data-accent="moss"] {
   /* Moss & Loam — forest library */
-  --bg: #e6e7d6;
   --accent: #6f8a48;
   --accent-bright: #93ac66;
   --accent-soft: #dce3c2;
@@ -129,7 +129,6 @@
 }
 [data-accent="ember"] {
   /* Ember & Wine — tavern hearth */
-  --bg: #f0dcd0;
   --accent: #b05f33;
   --accent-bright: #d08153;
   --accent-soft: #f2d9c4;
@@ -137,7 +136,6 @@
 }
 [data-accent="lapis"] {
   /* Tide & Lapis — coastal ruins */
-  --bg: #e3e5ec;
   --accent: #4b69a6;
   --accent-bright: #6d8cc7;
   --accent-soft: #d3dcef;
@@ -145,7 +143,6 @@
 }
 [data-accent="amethyst"] {
   /* Amethyst & Dusk — arcane sanctum */
-  --bg: #e8e2ee;
   --accent: #7a52a6;
   --accent-bright: #9a75c2;
   --accent-soft: #e3d8ef;
@@ -153,7 +150,6 @@
 }
 [data-accent="rose"] {
   /* Rose & Bramble — briar court */
-  --bg: #f0dde5;
   --accent: #b04f78;
   --accent-bright: #cf7098;
   --accent-soft: #f2d5e0;
@@ -161,7 +157,6 @@
 }
 [data-accent="teal"] {
   /* Teal & Reef — sunken temple */
-  --bg: #dcebe8;
   --accent: #2f8a80;
   --accent-bright: #4faaa0;
   --accent-soft: #c9e6e1;
@@ -170,7 +165,6 @@
 [data-accent="crimson"] {
   /* Crimson & Garnet — a truer, cooler red than the terracotta DANGER color, so
      selection/interaction stays distinct from destructive actions. */
-  --bg: #f0dad6;
   --accent: #b83232;
   --accent-bright: #d15c56;
   --accent-soft: #f2d3ce;
@@ -238,7 +232,6 @@
    reads as chalk-lit; slate bands go to the variation's dark stone. (Derived —
    the bundle's variation cards are day-only.) */
 [data-theme="night"][data-accent="moss"] {
-  --bg: #26282e;
   --accent: #a3bc74;
   --accent-bright: #bcd293;
   --accent-soft: #3c452d;
@@ -246,7 +239,6 @@
   --surface-slate: #465542;
 }
 [data-theme="night"][data-accent="ember"] {
-  --bg: #26282e;
   --accent: #d98f63;
   --accent-bright: #e7ac85;
   --accent-soft: #4e3327;
@@ -254,7 +246,6 @@
   --surface-slate: #5c3a40;
 }
 [data-theme="night"][data-accent="lapis"] {
-  --bg: #26282e;
   --accent: #8aa4d8;
   --accent-bright: #a8bee8;
   --accent-soft: #303c57;
@@ -262,7 +253,6 @@
   --surface-slate: #3a4a75;
 }
 [data-theme="night"][data-accent="amethyst"] {
-  --bg: #26282e;
   --accent: #b295d6;
   --accent-bright: #cab2e6;
   --accent-soft: #382e4e;
@@ -270,7 +260,6 @@
   --surface-slate: #493c66;
 }
 [data-theme="night"][data-accent="rose"] {
-  --bg: #26282e;
   --accent: #d98aac;
   --accent-bright: #e7a8c2;
   --accent-soft: #4e2b3a;
@@ -278,7 +267,6 @@
   --surface-slate: #5c3a4a;
 }
 [data-theme="night"][data-accent="teal"] {
-  --bg: #26282e;
   --accent: #63c0b4;
   --accent-bright: #8ad6cc;
   --accent-soft: #26443f;
@@ -286,7 +274,6 @@
   --surface-slate: #35594f;
 }
 [data-theme="night"][data-accent="crimson"] {
-  --bg: #26282e;
   --accent: #dd7168;
   --accent-bright: #ea968f;
   --accent-soft: #4e2c29;
