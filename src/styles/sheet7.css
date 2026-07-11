@@ -152,24 +152,39 @@
   align-self: stretch;
   text-align: center;
 }
-.sheet-portrait--lg {
+/* Doubled class = higher specificity than index.css's base .sheet-portrait (the
+   3.5rem thumbnail), which comes LATER in the cascade (sheet7.css is @imported at
+   the top of index.css) and would otherwise win the tie. The portrait fills the
+   sidebar, FoundryVTT-style. */
+.sheet-portrait.sheet-portrait--lg {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  height: auto;
+  border-radius: var(--r-wob-sm);
+}
+.sheet-portrait-btn.sheet-portrait-btn--lg {
   width: 100%;
   aspect-ratio: 1 / 1;
   height: auto;
 }
-.sheet-portrait-btn--lg {
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  height: auto;
+/* Empty upload target at portrait size: a bigger ＋ glyph. */
+.sheet-portrait--lg.sheet-portrait--empty {
+  font-size: 2.4rem;
+}
+/* Read-only sheet with no portrait: a quiet inset well, not a big black slab. */
+.sheet-vitals > .sheet-portrait--lg {
+  background: var(--surface-inset);
+  border-style: dashed;
 }
 .ac-shield {
   align-self: center;
   position: relative;
+  z-index: 1;
   display: grid;
   place-items: center;
-  width: 3.4rem;
-  height: 3.4rem;
-  margin-top: -1.6rem;
+  width: 3.8rem;
+  height: 3.8rem;
+  margin-top: -1.9rem;
   clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -432,6 +447,47 @@
   padding: 1.5rem;
   text-align: center;
 }
+/* Foundry-style section card: ONE shared idiom for every major page section
+   (Skills, Saves, item/feature/spell tables, traits, bio blocks…). Deliberately
+   display-agnostic — hosts keep their own flex/grid. Background is the bright
+   page token so cards read as raised paper sheets in both themes. */
+.sheet-section {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-wob-sm);
+  background: var(--surface-page);
+  /* The header band's negative margins mirror this padding — change together. */
+  padding: 0.4rem 0.5rem 0.5rem;
+  min-width: 0;
+  overflow: hidden; /* clip the full-bleed header band to the wobble radius */
+}
+/* A direct-child section title becomes a full-bleed header band (matches the
+   .rt-group-head idiom). Scoped under .sheet-section so ScenesPage's use of
+   .sheet-section-head is untouched. */
+.sheet-section > .sheet-section-head,
+.sheet-section > .sheet-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -0.4rem -0.5rem 0.35rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--surface-inset);
+}
+/* Flush variant for row tables: the rt-group-head IS the card header. */
+.sheet-section--flush {
+  padding: 0;
+}
+.sheet-section--flush > .rt-group-head {
+  border-radius: 0;
+}
+.sheet-section--flush > .rt-row-wrap:last-child > .rt-row {
+  border-bottom: none;
+}
+/* Main-page cards wrap bare row stacks; keep the tight row rhythm inside. */
+.main-col > .sheet-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
 .sheet-field {
   display: flex;
   flex-direction: column;
@@ -568,7 +624,8 @@
 .row-table {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  /* Matches the card spacing rhythm (.main-col) now that groups are cards. */
+  gap: 0.6rem;
 }
 .rt-search {
   display: flex;
@@ -745,10 +802,14 @@
 /* --- Main page -------------------------------------------------------------- */
 .ability-row {
   display: grid;
-  /* Two rows of three by default: full ability names ("Constitution") need ~6rem
-     per block, which six-across only affords in a wide sheet (see the ≥850px query). */
-  grid-template-columns: repeat(3, 1fr);
+  /* Always ONE row of six; below the 850px container the label tails hide (bold
+     STR/DEX… leads remain) instead of the grid ever wrapping to two rows. */
+  grid-template-columns: repeat(6, 1fr);
   gap: 0.3rem;
+}
+/* Tail of the ability name ("…ength"); hidden until the sheet is wide enough. */
+.ability-label-rest {
+  display: none;
 }
 .ability-block {
   text-align: center;
@@ -794,7 +855,9 @@
 .main-col {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  /* Space BETWEEN the section cards; the tight row rhythm lives inside them
+     (see .main-col > .sheet-section). */
+  gap: 0.6rem;
 }
 .skill-row {
   display: grid;
@@ -981,14 +1044,11 @@
 }
 
 /* --- Spells ----------------------------------------------------------------- */
+/* Chrome (border/background/padding) comes from the .sheet-section card class. */
 .spellcasting-card {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 0.3rem;
-  padding: 0.4rem;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  background: var(--surface-inset);
 }
 .spellcasting-cell {
   display: flex;
@@ -1097,6 +1157,10 @@
   padding: 0.3rem 0;
   border-bottom: 1px solid var(--border-subtle);
 }
+/* No dangling divider above the section card's bottom edge. */
+.trait-group .trait-row:last-child {
+  border-bottom: none;
+}
 .trait-info {
   flex: 1;
   min-width: 0;
@@ -1178,17 +1242,28 @@
     flex: 1;
     min-width: 0;
   }
+  /* Collapsing the vitals sidebar frees ~200px — full ability names fit already. */
+  .sheet7--sidebar-collapsed .ability-label-rest {
+    display: inline;
+  }
 }
 /* Wide enough that six ability blocks can each fit a full name ("Constitution"). */
 @container (min-width: 850px) {
-  .ability-row {
-    grid-template-columns: repeat(6, 1fr);
+  .ability-label-rest {
+    display: inline;
   }
 }
 @container (max-width: 520px) {
   .sheet7-sidebar {
     flex-basis: 158px;
     width: 158px;
+  }
+  /* Six-across still: tighten the row so 2-digit scores survive a 420px column. */
+  .ability-row {
+    gap: 0.2rem;
+  }
+  .ability-block-score {
+    padding: 0.05rem;
   }
   .encumbrance-stats {
     grid-template-columns: repeat(2, 1fr);
@@ -1455,8 +1530,8 @@
 
 /* Overlay pill on the sheet portrait to open the library picker (mirrors the
    change/crop pills in index.css). Top-right, stacked just under the "Change"
-   pill — the bottom edge holds the hover zoom slider + the AC shield, and the
-   centre holds the empty-state "Add photo" hint, so neither is covered. */
+   pill — the bottom edge holds the AC shield overlap, and the centre holds the
+   empty-state "Add photo" hint, so neither is covered. */
 .sheet-portrait-lib {
   position: absolute;
   top: 30px;

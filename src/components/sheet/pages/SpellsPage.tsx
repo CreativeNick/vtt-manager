@@ -84,7 +84,7 @@ export function SpellsPage({ sheet }: { sheet: SheetEdit }) {
 
   return (
     <div className="sheet-page spells-page">
-      <div className="spellcasting-card">
+      <div className="spellcasting-card sheet-section">
         <div className="spellcasting-cell">
           <span className="sc-label">Ability</span>
           {canEdit ? (
@@ -143,7 +143,7 @@ export function SpellsPage({ sheet }: { sheet: SheetEdit }) {
       </div>
 
       {slotLevels.length > 0 ? (
-        <div className="spell-slots">
+        <div className="spell-slots sheet-section">
           {slotLevels.map((lv) => {
             const max = slotMax(lv);
             // Auto slots: an absent stored entry means "never spent" = full.

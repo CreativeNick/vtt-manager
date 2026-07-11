@@ -49,7 +49,7 @@ export function TraitsPage({ sheet }: { sheet: SheetEdit }) {
 
   return (
     <div className="sheet-page traits-page">
-      <div className="trait-group">
+      <div className="trait-group sheet-section">
         <div className="sheet-section-title">Class</div>
         <div className="trait-row">
           <div className="trait-info">
@@ -65,7 +65,7 @@ export function TraitsPage({ sheet }: { sheet: SheetEdit }) {
       </div>
 
       {TRAIT_GROUPS.map((group) => (
-        <div className="trait-group" key={group.id}>
+        <div className="trait-group sheet-section" key={group.id}>
           <div className="sheet-section-title">{group.title}</div>
           {group.traits.map(renderTrait)}
         </div>

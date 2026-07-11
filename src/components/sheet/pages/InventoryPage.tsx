@@ -63,7 +63,7 @@ export function InventoryPage({ sheet }: { sheet: SheetEdit }) {
 
   return (
     <div className="sheet-page inventory-page">
-      <div className="encumbrance">
+      <div className="encumbrance sheet-section">
         <div className={`encumbrance-bar ${over ? "encumbrance-bar--over" : ""}`}>
           <div
             className="encumbrance-fill"
@@ -114,7 +114,7 @@ export function InventoryPage({ sheet }: { sheet: SheetEdit }) {
         </div>
       </div>
 
-      <div className="currency-row">
+      <div className="currency-row sheet-section">
         {CURRENCY_KEYS.map(({ key, label }) => (
           <div className="currency-cell" key={key}>
             <span className="currency-label">{label}</span>

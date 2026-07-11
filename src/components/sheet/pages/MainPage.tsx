@@ -103,8 +103,9 @@ export function MainPage({ sheet }: { sheet: SheetEdit }) {
 
       <div className="main-columns">
         <div className="main-col">
-          <SectionHeader title="Skills" />
-          {template.skills.map((skill) => {
+          <section className="sheet-section">
+            <SectionHeader title="Skills" />
+            {template.skills.map((skill) => {
             const manual = value.skillMods[skill.id] ?? 0;
             const prof = value.skillProfs[skill.id] ?? 0;
             return (
@@ -137,14 +138,16 @@ export function MainPage({ sheet }: { sheet: SheetEdit }) {
                 <span className="skill-passive" title="Passive">{derived.values[`passive-${skill.id}`] ?? 10}</span>
               </div>
             );
-          })}
+            })}
+          </section>
 
           <ToolsSection sheet={sheet} />
         </div>
 
         <div className="main-col">
-          <SectionHeader title="Saving Throws" />
-          <div className="saves-grid">
+          <section className="sheet-section">
+            <SectionHeader title="Saving Throws" />
+            <div className="saves-grid">
             {template.saves.map((save) => {
               const manual = value.saveMods[save.id] ?? 0;
               const prof = value.saveProfs[save.id] ?? 0;
@@ -171,15 +174,19 @@ export function MainPage({ sheet }: { sheet: SheetEdit }) {
                 </div>
               );
             })}
-          </div>
+            </div>
+          </section>
 
-          <PillList label="Resistances" values={value.resistances} canEdit={canEdit} onChange={(resistances) => update({ resistances })} />
-          <PillList label="Immunities" values={value.immunities} canEdit={canEdit} onChange={(immunities) => update({ immunities })} />
-          <PillList label="Vulnerabilities" values={value.vulnerabilities} canEdit={canEdit} onChange={(vulnerabilities) => update({ vulnerabilities })} />
-          <PillList label="Condition Immunities" values={value.conditionImmunities} canEdit={canEdit} onChange={(conditionImmunities) => update({ conditionImmunities })} />
-          <PillList label="Armor" values={value.armorProfs} canEdit={canEdit} onChange={(armorProfs) => update({ armorProfs })} />
-          <PillList label="Weapons" values={value.weaponProfs} canEdit={canEdit} onChange={(weaponProfs) => update({ weaponProfs })} />
-          <PillList label="Languages" values={value.languages} canEdit={canEdit} onChange={(languages) => update({ languages })} />
+          <section className="sheet-section">
+            <SectionHeader title="Proficiencies & Traits" />
+            <PillList label="Resistances" values={value.resistances} canEdit={canEdit} onChange={(resistances) => update({ resistances })} />
+            <PillList label="Immunities" values={value.immunities} canEdit={canEdit} onChange={(immunities) => update({ immunities })} />
+            <PillList label="Vulnerabilities" values={value.vulnerabilities} canEdit={canEdit} onChange={(vulnerabilities) => update({ vulnerabilities })} />
+            <PillList label="Condition Immunities" values={value.conditionImmunities} canEdit={canEdit} onChange={(conditionImmunities) => update({ conditionImmunities })} />
+            <PillList label="Armor" values={value.armorProfs} canEdit={canEdit} onChange={(armorProfs) => update({ armorProfs })} />
+            <PillList label="Weapons" values={value.weaponProfs} canEdit={canEdit} onChange={(weaponProfs) => update({ weaponProfs })} />
+            <PillList label="Languages" values={value.languages} canEdit={canEdit} onChange={(languages) => update({ languages })} />
+          </section>
         </div>
       </div>
     </div>
@@ -196,10 +203,11 @@ export function AbilityRow({ sheet }: { sheet: SheetEdit }) {
         const mod = abilityModifier(score);
         return (
           <div className="ability-block" key={ability.id}>
-            {/* Full name with the classic 3-letter abbreviation emphasized as its lead. */}
+            {/* Full name with the classic 3-letter abbreviation emphasized as its lead;
+                the tail hides in narrow sheets so the row never wraps (see sheet7.css). */}
             <div className="ability-block-label" title={ability.name}>
               <b>{ability.name.slice(0, 3)}</b>
-              {ability.name.slice(3)}
+              <span className="ability-label-rest">{ability.name.slice(3)}</span>
             </div>
             {onRollCheck ? (
               <button className="ability-block-mod roll-btn" title={`${ability.name} check — ${ROLL_HINT}`} onClick={(e) => onRollCheck({ kind: "ability", abilityId: ability.id }, advFromEvent(e))}>
@@ -250,7 +258,7 @@ function ToolsSection({ sheet }: { sheet: SheetEdit }) {
   const addTool = () =>
     update({ tools: [...value.tools, { id: rowId("tool"), name: "New tool", mod: 0 } as ToolEntry] });
   return (
-    <>
+    <section className="sheet-section">
       <SectionHeader title="Tools" onAdd={canEdit ? addTool : undefined} />
       {value.tools.length === 0 ? <span className="muted rt-empty">No tools.</span> : null}
       {value.tools.map((tool, index) => (
@@ -282,6 +290,6 @@ function ToolsSection({ sheet }: { sheet: SheetEdit }) {
           )}
         </div>
       ))}
-    </>
+    </section>
   );
 }

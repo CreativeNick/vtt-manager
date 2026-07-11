@@ -82,7 +82,7 @@ export function RowTable<T extends { id: string }>({
         const rows = filterRows(group.rows);
         if (rows.length === 0 && !group.onAdd) return null;
         return (
-          <div className="rt-group" key={group.id}>
+          <div className="rt-group sheet-section sheet-section--flush" key={group.id}>
             <div className="rt-group-head">
               <span className="rt-group-title">{group.title}</span>
               <span className="rt-group-cols">{headerCells}</span>

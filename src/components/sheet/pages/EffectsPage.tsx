@@ -60,7 +60,7 @@ export function EffectsPage({ sheet }: { sheet: SheetEdit }) {
         )}
       />
 
-      <div className="conditions-section">
+      <div className="conditions-section sheet-section">
         <div className="sheet-section-head">
           <span className="sheet-section-title">Conditions</span>
           {!canToggleConditions ? (

@@ -615,7 +615,7 @@ textarea,
   height: 100%;
 }
 
-/* --- Croppable image (character portrait + item icon): cover fit, drag to pan, zoom --- */
+/* --- Croppable image (character portrait + item icon): cover fit, drag to pan --- */
 .sheet-portrait-wrap {
   position: relative;
 }
@@ -639,22 +639,6 @@ textarea,
   transform: none;
   box-shadow: none;
 }
-.croppable-zoom {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 6px;
-  width: auto;
-  margin: 0;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  cursor: pointer;
-  accent-color: var(--accent);
-}
-.croppable:hover .croppable-zoom {
-  opacity: 0.92;
-}
-
 /* --- Floating overlay + clusters ----------------------------------------- */
 .overlay {
   position: fixed;

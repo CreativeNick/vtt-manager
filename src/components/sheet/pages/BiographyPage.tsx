@@ -29,7 +29,7 @@ export function BiographyPage({ sheet }: { sheet: SheetEdit }) {
   const { value, canEdit, update } = sheet;
   return (
     <div className="sheet-page bio-page">
-      <div className="bio-details">
+      <div className="bio-details sheet-section">
         <Field label="Alignment" value={value.alignment} disabled={!canEdit} onChange={(alignment) => update({ alignment })} />
         <Field label="Faith" value={value.faith} disabled={!canEdit} onChange={(faith) => update({ faith })} />
         <Field label="Gender" value={value.gender} disabled={!canEdit} onChange={(gender) => update({ gender })} />
@@ -42,18 +42,18 @@ export function BiographyPage({ sheet }: { sheet: SheetEdit }) {
       </div>
 
       <div className="bio-columns">
-        <div className="bio-col">
+        <div className="bio-col sheet-section">
           <TextBlock label="Ideals" value={value.ideals} disabled={!canEdit} onChange={(ideals) => update({ ideals })} />
           <TextBlock label="Bonds" value={value.bonds} disabled={!canEdit} onChange={(bonds) => update({ bonds })} />
           <TextBlock label="Flaws" value={value.flaws} disabled={!canEdit} onChange={(flaws) => update({ flaws })} />
         </div>
-        <div className="bio-col">
+        <div className="bio-col sheet-section">
           <TextBlock label="Personality Traits" value={value.personality} disabled={!canEdit} onChange={(personality) => update({ personality })} />
           <TextBlock label="Appearance" value={value.appearance} disabled={!canEdit} onChange={(appearance) => update({ appearance })} />
         </div>
       </div>
 
-      <div className="bio-block">
+      <div className="bio-block sheet-section">
         <label>Biography</label>
         <textarea
           className="bio-full"

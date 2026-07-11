@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { MAX_ICON_ZOOM, type IconCrop } from "../lib/types";
+import { type IconCrop } from "../lib/types";
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 /// <summary>
 /// Shows an image fitted into a frame without stretching (it always covers the frame),
 /// positioned by a focal point (crop.x / crop.y, 0..1) and scaled by crop.zoom. When
-/// `editable`, drag the image to reposition it and use the zoom slider — both flow through
-/// `onChange`. Read-only just renders the cropped view. Reused for character portraits and
-/// item images.
+/// `editable`, drag the image to reposition it (zoom lives in the host's crop modal) —
+/// changes flow through `onChange`. Read-only just renders the cropped view. Reused for
+/// character portraits and item images.
 /// </summary>
 export function CroppableImage({
   src,
@@ -132,19 +132,6 @@ export function CroppableImage({
           cursor: editable ? (dragging ? "grabbing" : "grab") : "default",
         }}
       />
-      {editable && onChange ? (
-        <input
-          className="croppable-zoom"
-          type="range"
-          min={1}
-          max={MAX_ICON_ZOOM}
-          step={0.02}
-          value={crop.zoom}
-          title="Zoom"
-          onPointerDown={(e) => e.stopPropagation()}
-          onChange={(e) => onChange({ ...crop, zoom: Number(e.target.value) })}
-        />
-      ) : null}
     </div>
   );
 }
