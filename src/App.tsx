@@ -980,7 +980,7 @@ export default function App() {
           </FloatingWindow>
         ) : null}
 
-        {isDm && selectedToken && tokenPanelOnClick ? (
+        {onBoard && isDm && selectedToken && tokenPanelOnClick ? (
           <FloatingWindow
             key={`token-editor:${layoutEpoch}`}
             id="token-editor"

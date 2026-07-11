@@ -196,7 +196,11 @@ export function AbilityRow({ sheet }: { sheet: SheetEdit }) {
         const mod = abilityModifier(score);
         return (
           <div className="ability-block" key={ability.id}>
-            <div className="ability-block-abbr">{ability.abbr}</div>
+            {/* Full name with the classic 3-letter abbreviation emphasized as its lead. */}
+            <div className="ability-block-label" title={ability.name}>
+              <b>{ability.name.slice(0, 3)}</b>
+              {ability.name.slice(3)}
+            </div>
             {onRollCheck ? (
               <button className="ability-block-mod roll-btn" title={`${ability.name} check — ${ROLL_HINT}`} onClick={(e) => onRollCheck({ kind: "ability", abilityId: ability.id }, advFromEvent(e))}>
                 {formatModifier(mod)}

@@ -14,13 +14,18 @@
 }
 /* Layout wrapper for the sidebar + content — deliberately seamless (no border/strip) so
    the area behind the floating page-rail buttons is the SAME background as the sheet, not
-   a distinct panel. It just reserves a right gutter so content doesn't run under the rail. */
+   a distinct panel. It just reserves a right gutter so content doesn't run under the rail.
+   Opaque + above the inline rail (see `.sheet7 > .sheet7-rail`) so the active button's
+   connection tab tucks BEHIND the sheet instead of painting over the header. */
 .sheet7-panel {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: stretch;
   margin-right: 44px;
+  position: relative;
+  z-index: 1;
+  background: var(--surface-solid);
 }
 .sheet7-sidebar {
   flex: 0 0 190px;
@@ -79,6 +84,13 @@
   /* Vertical space between the square buttons. */
   gap: 12px;
   z-index: 3;
+}
+/* Inline (prep-page column) rail: layer it UNDER the opaque `.sheet7-panel` so the
+   active button's extra "tab" width hides behind the sheet — same docked look as the
+   window case, where `.window-siderail` owns this. The buttons themselves live in the
+   44px gutter the panel reserves, so they stay fully visible and clickable. */
+.sheet7 > .sheet7-rail {
+  z-index: 0;
 }
 /* Portaled into the window's side rail: let `.window-siderail` own the positioning. */
 .window-siderail .sheet7-rail {
@@ -333,9 +345,11 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 .sheet-header-main {
-  flex: 1 1 auto;
-  /* The name/subtitle must never collapse away — in a narrow prep-page card the
-     action buttons wrap onto extra rows instead (see .sheet-header-actions). */
+  /* Basis = min-width (not auto): the name input's intrinsic ~20ch size must not
+     push the action buttons onto extra rows; the name grows into free space instead.
+     The name/subtitle still never collapses below 6.5rem — beyond that the action
+     buttons wrap onto extra rows (see .sheet-header-actions). */
+  flex: 1 1 6.5rem;
   min-width: 6.5rem;
 }
 .sheet-name,
@@ -731,7 +745,9 @@
 /* --- Main page -------------------------------------------------------------- */
 .ability-row {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  /* Two rows of three by default: full ability names ("Constitution") need ~6rem
+     per block, which six-across only affords in a wide sheet (see the ≥850px query). */
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.3rem;
 }
 .ability-block {
@@ -739,11 +755,21 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
   padding: 0.2rem;
+  min-width: 0;
 }
-.ability-block-abbr {
+.ability-block-label {
   font-size: 0.62rem;
   color: var(--text-muted);
   letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The classic 3-letter abbreviation leads the full name and stands out from it. */
+.ability-block-label b {
+  font-weight: 700;
+  color: var(--text);
 }
 .ability-block-mod {
   font-family: var(--font-display);
@@ -806,7 +832,9 @@
 }
 .saves-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* A save row (dot + full name + total + misc box) needs ~11rem; auto-fill drops
+     to a single column instead of letting two cramped ones overlap. */
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
   gap: 0.2rem 0.6rem;
 }
 .save-row {
@@ -818,6 +846,10 @@
 }
 .save-name {
   min-width: 0;
+  /* Last-resort guard: truncate rather than paint over the roll button. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .save-total {
   font-family: var(--font-display);
@@ -1147,13 +1179,16 @@
     min-width: 0;
   }
 }
+/* Wide enough that six ability blocks can each fit a full name ("Constitution"). */
+@container (min-width: 850px) {
+  .ability-row {
+    grid-template-columns: repeat(6, 1fr);
+  }
+}
 @container (max-width: 520px) {
   .sheet7-sidebar {
     flex-basis: 158px;
     width: 158px;
-  }
-  .ability-row {
-    grid-template-columns: repeat(3, 1fr);
   }
   .encumbrance-stats {
     grid-template-columns: repeat(2, 1fr);

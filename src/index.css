@@ -79,11 +79,9 @@ h3 {
 .dice-tray::before,
 .map-toolbar-rail::before,
 .map-toolbar-options::before,
-.page-switcher::before,
 .short-rest-pop::before,
 .lobby-card::before,
 .map-pin-editor::before,
-.log-toast::before,
 .error-banner::before,
 .map-light-config .panel::before,
 .window::after {
@@ -2952,9 +2950,12 @@ body.pointer-dragging * {
   padding-bottom: 0.4rem;
 }
 .sheet-col {
-  flex: 0 0 400px;
-  width: 400px;
+  /* Actor pages set --sheet-col-w (shared drag-to-resize width, persisted);
+     the Items page keeps the plain 400px fallback. */
+  flex: 0 0 var(--sheet-col-w, 400px);
+  width: var(--sheet-col-w, 400px);
   max-height: 100%;
+  position: relative;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
@@ -2962,8 +2963,8 @@ body.pointer-dragging * {
   background: var(--surface);
   box-shadow: var(--elev-1);
   overflow: hidden;
-  /* Own size container so the sheet inside stays single-column at 400px
-     (the 2-column reflow is only for wide floating windows). */
+  /* Own size container so the sheet inside reflows to the column width exactly
+     like a floating window at that size (2-column pages once it's wide enough). */
   container-type: inline-size;
 }
 .sheet-col-head {
@@ -2979,6 +2980,23 @@ body.pointer-dragging * {
 .sheet-col-body {
   min-height: 0;
   overflow-y: auto;
+}
+/* Right-edge drag handle: resizes the ONE shared column width, so every open
+   sheet follows together (double-click resets). Sits over the sheet's rail
+   gutter (the rail buttons stop 8px from the edge), so it never covers content. */
+.sheet-col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 5;
+  transition: background 0.12s ease;
+}
+.sheet-col-resize:hover {
+  background: var(--accent);
 }
 
 /* --- Chip tab bars (Players page, Scenes editor) ------------------------------
