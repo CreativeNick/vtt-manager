@@ -30,7 +30,7 @@ import {
   writeCampaignJson,
 } from "./lib/campaignStore";
 import { useSpaceClick } from "./lib/useSpaceClick";
-import { fitViewportToScene, prefetchImage, loadImageForCanvas } from "./lib/sceneUtils";
+import { fitViewportToScene, prefetchImage } from "./lib/sceneUtils";
 import { setOptimizeUploads } from "./lib/uploadAsset";
 import { LoadingScreen } from "./components/LoadingScreen";
 import {
@@ -516,36 +516,6 @@ export default function App() {
     };
   }, [state]);
 
-  // First-connect loading gate (Phase 2): once joined, hold a brief branded loading screen until
-  // the active map + party portraits are decoded — so the board appears complete instead of
-  // popping in — but never past a hard cap. Empty campaigns (no assets) fall through instantly.
-  // Sets `booted` once and never resets, so reconnects are never re-gated.
-  const [booted, setBooted] = useState(false);
-  useEffect(() => {
-    if (booted) return;
-    if (!state || (status !== "joined" && status !== "reconnecting")) return;
-    let alive = true;
-    const activeScene = state.scenes.find((s) => s.id === state.activeSceneId);
-    const critical: string[] = [];
-    if (activeScene?.mapUrl) critical.push(activeScene.mapUrl);
-    for (const p of state.connectedPlayers) {
-      const url = state.sheets[p.playerId]?.data.iconUrl;
-      if (url) critical.push(url);
-    }
-    const finish = () => {
-      if (alive) setBooted(true);
-    };
-    const cap = window.setTimeout(finish, 2500); // never gate longer than this
-    void Promise.all(critical.map((u) => loadImageForCanvas(u).catch(() => {}))).then(() => {
-      window.clearTimeout(cap);
-      finish();
-    });
-    return () => {
-      alive = false;
-      window.clearTimeout(cap);
-    };
-  }, [booted, state, status]);
-
   if (!session) {
     return <JoinScreen onJoin={setSession} nightMode={nightMode} onToggleNight={setNightMode} />;
   }
@@ -559,12 +529,11 @@ export default function App() {
     );
   }
 
+  // Skeleton / progressive load: once the room state is here, render the board immediately and
+  // let assets fill in over their placeholders (portrait/map shimmers + token colored shapes).
+  // Only the connect phase (no state yet) shows a full screen — there's nothing to render then.
   if (!state || (status !== "joined" && status !== "reconnecting")) {
     return <LoadingScreen label="Connecting to room…" />;
-  }
-  // Brief, hard-capped gate so the first board render already has its map + party portraits.
-  if (!booted) {
-    return <LoadingScreen label="Preparing the table…" />;
   }
 
   const selectedToken = state.tokens.find((token) => token.id === selectedTokenId) ?? null;

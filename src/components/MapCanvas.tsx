@@ -2022,6 +2022,20 @@ export function MapCanvas({
       {backdropUrl ? (
         <div className="map-backdrop" style={{ backgroundImage: `url("${backdropUrl}")` }} aria-hidden />
       ) : null}
+      {/* Skeleton shimmer over the scene rect while the map image decodes (progressive load).
+          Positioned in screen coords from the viewport; removed the instant the map is ready. */}
+      {scene.mapUrl && !mapImg ? (
+        <div
+          className="skeleton-shimmer map-loading-shimmer"
+          aria-hidden
+          style={{
+            left: Math.round(viewport.x),
+            top: Math.round(viewport.y),
+            width: Math.round(scene.width * viewport.scale),
+            height: Math.round(scene.height * viewport.scale),
+          }}
+        />
+      ) : null}
       <Stage
         ref={stageRef}
         width={stageW}

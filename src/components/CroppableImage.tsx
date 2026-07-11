@@ -106,6 +106,9 @@ export function CroppableImage({
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
     >
+      {/* Skeleton shimmer while the portrait is still decoding (progressive first-load), removed
+          once it's measured/ready. The <img> is transparent until then, so the shimmer shows. */}
+      {src && !ready ? <div className="skeleton-shimmer" aria-hidden /> : null}
       <img
         src={src}
         alt={alt}

@@ -9,9 +9,18 @@ architecture reference — **historical**, describes the codebase before Phases 
 overrides, trait/condition-aware rolls, real rests/casting/death saves — see its
 "as built" note).
 
-## STATUS (2026-07-10) — read this first in a fresh session
+## STATUS (2026-07-11) — read this first in a fresh session
 
-**Latest (2026-07-10): Phase 8 rounds 1–3 shipped — "Quill & Ember" revamp + board
+**Latest (2026-07-11): dice-tray drag lag fixed (Phase 8 fallout).** Dragging the tray
+had felt delayed since the round-2 divots. Two stacked causes — per-frame React
+`left`/`top` drags repainting the 12-layer divot overlay, then the transform-drag fix
+colliding with the tray's `transition: transform` open/close slide (every drag frame
+eased 200ms → rubber-banding). Fixed by moving the slide to the independent `translate`
+property so `transform` is never transitioned; full diagnosis, fix, and the
+"never transition `transform` on transform-dragged chrome" rule are in Phase 8's
+round-4 as-built note. Verified headless-Chrome (0px drag error, slide intact).
+
+**Prior (2026-07-10): Phase 8 rounds 1–3 shipped — "Quill & Ember" revamp + board
 backdrop + destructive-action safety.** Round 3: the board's tabletop is now a very dark
 color auto-derived from the map's average (DM-overridable per scene via an Auto|Custom
 picker with preset swatches, or a pre-blurred backdrop image with an efficient baked
@@ -2490,6 +2499,37 @@ scoped placeholder).
 > confirm dialog shown, confirmed delete → undo from the NPCs-page toolbar restored
 > the NPC; zero console errors. Also fixed en route: `input[type="color"]` swatches
 > had collapsed to a sliver since round 1.
+>
+> **As built — round 4: dice-tray drag lag fix (2026-07-11):** the user reported
+> significant delay/lag when dragging the dice tray, suspecting the round-2 divots.
+> Diagnosis found **two stacked causes**: (1) as committed, the tray drag pushed every
+> pointermove through React state (`setPos` → `left`/`top`), forcing layout + a full
+> repaint of the tray each frame — and the round-2 divot overlay (12 background-image
+> layers with heavy `clamp()`/`max()` calc positions) plus paper textures, `--shadow-panel`,
+> and the crystal d20 made each of those repaints expensive enough to feel. So the divots
+> were the *trigger* but not the mechanism. (2) The in-flight perf fix (imperative
+> `transform: translate3d()` per frame + a `.dragging` class that sheds the notch
+> overlay/filters/shadows during the gesture — the same recipe as `PERFORMANCE_PLAN.md`
+> Phase 1e for windows) collided with the tray's own open/close slide:
+> `.dice-tray` carried `transition: transform 200ms ease`, and CSS transitions apply to
+> **inline** style writes too — so every per-frame drag transform was eased over 200ms
+> and the tray rubber-banded behind the cursor (plus a jump-then-settle flash on
+> release). This is exactly why only the tray lagged and floating windows didn't:
+> `.window` has no transform transition. **Fix (4 lines, `index.css`):** the open/close
+> slide now uses the independent CSS `translate` property (`translate: 0 18px` closed →
+> `0 0` open) and the transition list follows (`translate 200ms ease, opacity 200ms
+> ease`); `transform` is no longer transitioned, so drag writes apply instantly.
+> `translate` and `transform` compose (translate applies first), and the open-state
+> translate is zero, so the drag math is untouched; the closed tray is
+> `pointer-events: none`, so a drag can never fight the slide. **Verified** headless-
+> Chrome E2E: rapid drags track the cursor with 0.0px error (the eased version trails
+> 15–300px), zero post-release drift over 240ms, the open/close slide+fade still
+> animates both directions, drag works after a toggle, zero console errors; tsc green.
+> **Rule going forward:** chrome that gets imperatively transform-dragged (windows,
+> tray) must never carry `transform` in a `transition` — animate its state changes via
+> the independent `translate`/`opacity` properties instead. Deferred as unnecessary:
+> baking the divots into a single SVG tile per edge (the overlay no longer repaints
+> during gestures, so the 12 layers only ever paint at rest).
 >
 > **Still open in Phase 8 (next rounds):** (a) **motion language** micro-animations (the
 > token sheet already carries the durations/easings + the bundle has keyframe specs);

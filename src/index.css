@@ -1660,6 +1660,49 @@ button.mod.roll-btn {
     transform: translateX(330%);
   }
 }
+
+/* Skeleton placeholder shimmer (Phase 2 revision): a soft highlight sweeping over a muted base,
+   shown where an image is still decoding so the progressive first-load reads as intentional
+   rather than broken. Theme-aware via `--surface-plaque`; the caller positions it (usually
+   `position: absolute; inset: 0`) inside the frame and removes it once the image is ready. */
+.skeleton-shimmer {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--surface-plaque);
+  overflow: hidden;
+  pointer-events: none;
+}
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.28) 50%,
+    transparent 80%
+  );
+  transform: translateX(-100%);
+  animation: skeleton-sweep 1.3s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer::after {
+    animation: none;
+  }
+}
+@keyframes skeleton-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+/* Map-image skeleton: positioned over the scene rect (inline left/top/width/height in screen
+   coords) rather than filling its parent, and lifted above the Konva canvas. */
+.map-loading-shimmer {
+  inset: auto;
+  z-index: 2;
+  border-radius: 0;
+}
 .error-banner {
   position: fixed;
   top: 1rem;
