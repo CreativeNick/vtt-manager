@@ -488,6 +488,7 @@ export default class GameServer implements Party.Server {
     channel: string,
     frame: ServerMessage,
     clear: boolean,
+    shouldReceive?: (meta: ClientMeta) => boolean,
   ) {
     const key = `${senderId}:${channel}`;
     const send = (message: ServerMessage) => {
@@ -496,7 +497,10 @@ export default class GameServer implements Party.Server {
         if (connection.id === senderId) {
           continue;
         }
-        if (this.clients.get(connection.id)?.joined) {
+        // Re-evaluated per flush so a coalesced/pending frame re-checks visibility (e.g. a token
+        // that flipped `hidden` mid-drag must stop reaching players immediately).
+        const meta = this.clients.get(connection.id);
+        if (meta?.joined && (!shouldReceive || shouldReceive(meta))) {
           connection.send(encoded);
         }
       }
@@ -1461,6 +1465,46 @@ export default class GameServer implements Party.Server {
           shape,
         },
         shape === null,
+      );
+      return;
+    }
+
+    if (parsed.type === "TOKEN_DRAG") {
+      const token = this.state.tokens.find((t) => t.id === parsed.tokenId);
+      if (!token) {
+        return;
+      }
+      // The sender must be allowed to move this token — mirror the MOVE_TOKEN checks. A player
+      // who lacks rights is dropped silently (no ERROR spam at ~25Hz); the authoritative,
+      // wall-clamped MOVE_TOKEN on drag-end remains the real guard. These frames are cosmetic.
+      if (
+        meta.role !== "dm" &&
+        (!this.state.playersCanMove || !meta.playerId || token.ownerPlayerId !== meta.playerId)
+      ) {
+        return;
+      }
+      let pos: { x: number; y: number } | null = null;
+      if (parsed.pos) {
+        if (!Number.isFinite(parsed.pos.x) || !Number.isFinite(parsed.pos.y)) {
+          return;
+        }
+        pos = { x: parsed.pos.x, y: parsed.pos.y };
+      }
+      const tokenId = token.id;
+      this.relayTransient(
+        sender.id,
+        "tokendrag",
+        { type: "TOKEN_DRAG", clientId: sender.id, tokenId, pos },
+        pos === null,
+        (receiver) => {
+          if (receiver.role === "dm") {
+            return true;
+          }
+          // Players never learn about hidden or non-active-scene tokens (mirrors redactStateFor —
+          // a hidden token isn't even present in their state, so a leaked position would be a bug).
+          const t = this.state.tokens.find((x) => x.id === tokenId);
+          return !!t && !t.hidden && t.sceneId === this.state.activeSceneId;
+        },
       );
       return;
     }
