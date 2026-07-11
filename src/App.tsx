@@ -39,6 +39,7 @@ import {
   TOKEN_ENEMY_COLOR,
   TOKEN_ITEM_COLOR,
   type GameState,
+  type HitPoints,
   type IconCrop,
   type Viewport,
 } from "./lib/types";
@@ -110,6 +111,20 @@ function ChipAvatar({
     <CroppableImage className="chip-avatar" src={src} crop={crop ?? DEFAULT_ICON_CROP} alt={name} fallback={initial} />
   ) : (
     initial
+  );
+}
+
+/** The tiny HP bar under an avatar chip: fill green → gold → terracotta as health drops. */
+function ChipHpBar({ hp }: { hp: HitPoints }) {
+  const ratio = hp.max > 0 ? Math.max(0, Math.min(1, hp.current / hp.max)) : 0;
+  const tone = ratio > 0.5 ? "high" : ratio > 0.25 ? "mid" : "low";
+  return (
+    <div className={`chip-hp chip-hp--${tone}`}>
+      <div className="chip-hp-fill" style={{ width: `${ratio * 100}%` }} />
+      <span className="chip-hp-text">
+        {hp.current}/{hp.max}
+      </span>
+    </div>
   );
 }
 
@@ -708,6 +723,25 @@ export default function App() {
     },
   ];
 
+  /** HP to show under an avatar chip, or null when this viewer may not see it. The DM sees
+   *  everything; players always see PC HP (party transparency). NPC HP shows only when the
+   *  sheet's combat block is revealed or the DM turned on a token's HP display — the same
+   *  rule the server's redaction applies, so whenever we show numbers they're real. */
+  const chipHp = (sheetId: string): HitPoints | null => {
+    const record = state.sheets[sheetId];
+    if (!record || record.data.hp.max <= 0) return null;
+    if (!isDm && record.kind === "npc" && record.redacted && !record.revealed.combat) {
+      const shown = state.tokens.some(
+        (token) =>
+          token.sceneId === state.activeSceneId &&
+          token.sheetId === sheetId &&
+          token.showHp !== "none",
+      );
+      if (!shown) return null;
+    }
+    return record.data.hp;
+  };
+
   // Avatar strip: connected players + NPCs with a token in the active scene.
   const npcChipSheetIds = [
     ...new Set(
@@ -768,6 +802,7 @@ export default function App() {
         >
           {state.connectedPlayers.map((player) => {
             const sheetData = state.sheets[player.playerId]?.data;
+            const hp = chipHp(player.playerId);
             return (
               <div
                 key={player.playerId}
@@ -775,23 +810,27 @@ export default function App() {
                 title={`${player.displayName} — double-click for sheet`}
                 onDoubleClick={() => openSheet(player.playerId)}
               >
-                <ChipAvatar src={sheetData?.iconUrl} crop={sheetData?.iconCrop} name={player.displayName} />
+                <div className="chip-portrait">
+                  <ChipAvatar src={sheetData?.iconUrl} crop={sheetData?.iconCrop} name={player.displayName} />
 
-                {isDm ? (
-                  <button
-                    className="kick"
-                    title={`Kick ${player.displayName}`}
-                    onClick={() => dm.kickPlayer(player.playerId)}
-                  >
-                    <X size={11} strokeWidth={2.6} />
-                  </button>
-                ) : null}
+                  {isDm ? (
+                    <button
+                      className="kick"
+                      title={`Kick ${player.displayName}`}
+                      onClick={() => dm.kickPlayer(player.playerId)}
+                    >
+                      <X size={11} strokeWidth={2.6} />
+                    </button>
+                  ) : null}
+                </div>
+                {hp ? <ChipHpBar hp={hp} /> : null}
               </div>
             );
           })}
           {npcChipSheetIds.map((sheetId) => {
             const record = state.sheets[sheetId]!;
             const name = record.data.characterName || "???";
+            const hp = chipHp(sheetId);
             return (
               <div
                 key={sheetId}
@@ -799,8 +838,10 @@ export default function App() {
                 title={`${name} — double-click for sheet`}
                 onDoubleClick={() => openSheet(sheetId)}
               >
-                <ChipAvatar src={record.data.iconUrl} crop={record.data.iconCrop} name={name} />
-
+                <div className="chip-portrait">
+                  <ChipAvatar src={record.data.iconUrl} crop={record.data.iconCrop} name={name} />
+                </div>
+                {hp ? <ChipHpBar hp={hp} /> : null}
               </div>
             );
           })}

@@ -1288,8 +1288,24 @@ export function MapCanvas({
       (t) => t.vision?.enabled && (isDm ? visionPreview : t.ownerPlayerId === yourPlayerId),
     );
     const ftToPx = sc.gridSize / Math.max(sc.feetPerSquare, 1);
-    const points = doors.map((d) => ({ id: d.id, x: (d.x1 + d.x2) / 2, y: (d.y1 + d.y2) / 2 }));
-    return computeVisiblePointIds(sc, viewers, points, ftToPx, ambientLit ? 0 : 1);
+    // Probe each door's two FACES (midpoint nudged out along the wall normal), never the
+    // midpoint itself: a CLOSED door is a blocking segment, so its midpoint lies exactly ON
+    // the viewer's LOS-polygon boundary and on the clip edge of any light behind it — the
+    // point test fails and the glyph a player just clicked shut would vanish, leaving the
+    // door stuck closed. Seeing either face means seeing the door.
+    const points: Array<{ id: string; x: number; y: number }> = [];
+    for (const d of doors) {
+      const mx = (d.x1 + d.x2) / 2;
+      const my = (d.y1 + d.y2) / 2;
+      const len = Math.hypot(d.x2 - d.x1, d.y2 - d.y1) || 1;
+      const off = Math.min(10, sc.gridSize * 0.2);
+      const nx = (-(d.y2 - d.y1) / len) * off;
+      const ny = ((d.x2 - d.x1) / len) * off;
+      points.push({ id: `${d.id}|a`, x: mx + nx, y: my + ny });
+      points.push({ id: `${d.id}|b`, x: mx - nx, y: my - ny });
+    }
+    const litFaces = computeVisiblePointIds(sc, viewers, points, ftToPx, ambientLit ? 0 : 1);
+    return new Set([...litFaces].map((id) => id.slice(0, -2)));
   }, [state.scenes, state.tokens, sceneId, isDm, yourPlayerId, visionPreview, ambientLit]);
 
   const commitDarkness = useCallback(
@@ -2141,10 +2157,8 @@ export function MapCanvas({
           <LightTintLayer scene={scene} ftToPx={ftToPx} animationsEnabled={lightAnimations} />
         ) : null}
 
-        {/* Grid + annotations: above the light tint, under tokens; annotations erasable
-            (right-click) while the draw or pin tool is active. Pins are NOT drawn here — they
-            get their own layer on top of tokens/walls/lights (see below). */}
-        <Layer listening={activeTool.id === "draw" || activeTool.id === "pin"}>
+        {/* Grid: above the light tint, under tokens. */}
+        <Layer listening={false}>
           {gridLines.map((points, index) => (
             <Line
               key={index}
@@ -2155,21 +2169,6 @@ export function MapCanvas({
               listening={false}
             />
           ))}
-          {scene.annotations.map((annotation) =>
-            // Our own just-committed arrow is hidden until the preview hands off to it; pins
-            // render in the dedicated top layer instead of here.
-            annotation.id === pendingArrowId || annotation.kind === "pin" ? null : annotation.kind === "arrow" ? (
-              // Solid while it exists; a client-local ghost fades it out on removal.
-              <MapAnnotationArrow key={annotation.id} points={annotation.points ?? []} opacity={1} />
-            ) : (
-              <AnnotationNode
-                key={annotation.id}
-                annotation={annotation}
-                now={fadeClock}
-                onErase={() => eraseAnnotation(annotation)}
-              />
-            ),
-          )}
         </Layer>
 
         <Layer listening={activeTool.id === "select"}>
@@ -2250,6 +2249,29 @@ export function MapCanvas({
             animationsEnabled={lightAnimations}
           />
         ) : null}
+
+        {/* Annotations (draw strokes + pointer arrows): ABOVE fog and the darkness mask —
+            they're live communication (someone pointing at the board), not world objects, so
+            lighting/fog must never swallow them. (The server already strips dmOnly ones from
+            player state, so nothing secret can show through.) Erasable (right-click) while the
+            draw or pin tool is active; pins get their own layer further up. */}
+        <Layer listening={activeTool.id === "draw" || activeTool.id === "pin"}>
+          {scene.annotations.map((annotation) =>
+            // Our own just-committed arrow is hidden until the preview hands off to it; pins
+            // render in the dedicated top layer instead of here.
+            annotation.id === pendingArrowId || annotation.kind === "pin" ? null : annotation.kind === "arrow" ? (
+              // Solid while it exists; a client-local ghost fades it out on removal.
+              <MapAnnotationArrow key={annotation.id} points={annotation.points ?? []} opacity={1} />
+            ) : (
+              <AnnotationNode
+                key={annotation.id}
+                annotation={annotation}
+                now={fadeClock}
+                onErase={() => eraseAnnotation(annotation)}
+              />
+            ),
+          )}
+        </Layer>
 
         {/* Token names for revealed tokens, drawn ABOVE the darkness mask so a lit token's name
             is always fully legible (the in-token label underneath, if any, is darkened/hidden by

@@ -776,27 +776,33 @@ textarea,
   border-radius: 2px;
 }
 
-/* Online-player presence icons (top center) */
+/* Online-player presence icons (top center): portrait circle + a mini HP bar beneath. */
 .player-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.chip-portrait {
   position: relative;
-  width: 2.1rem;
-  height: 2.1rem;
+  width: 4.2rem;
+  height: 4.2rem;
   border-radius: 50%;
   border: 2px solid var(--border);
   background: var(--surface-2);
   display: grid;
   place-items: center;
-  flex-shrink: 0;
   box-shadow: var(--shadow-ledge);
 }
-.player-chip img {
+.chip-portrait img {
   width: 100%;
   height: 100%;
   border-radius: 50%;
   object-fit: cover;
 }
 /* The cropped-portrait frame fills the circular chip; CroppableImage pans/zooms inside it. */
-.player-chip .chip-avatar {
+.chip-portrait .chip-avatar {
   width: 100%;
   height: 100%;
   border-radius: 50%;
@@ -804,14 +810,50 @@ textarea,
 .player-initial {
   font-family: var(--font-display);
   color: var(--text);
-  font-size: 1rem;
+  font-size: 1.9rem;
 }
-.player-chip .kick {
+/* Mini HP bar: an inked pill "well" whose fill drains as health drops; numbers on top. */
+.chip-hp {
+  position: relative;
+  width: 4.2rem;
+  height: 1.05rem;
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  box-shadow: var(--shadow-well);
+  overflow: hidden;
+}
+.chip-hp-fill {
   position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 1.15rem;
-  height: 1.15rem;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--success);
+  transition: width var(--dur-2) var(--ease-out);
+}
+.chip-hp--mid .chip-hp-fill {
+  background: var(--primary);
+}
+.chip-hp--low .chip-hp-fill {
+  background: var(--danger);
+}
+.chip-hp-text {
+  position: relative;
+  display: block;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: calc(1.05rem - 3px); /* bar height minus its borders — vertically centered */
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+.chip-portrait .kick {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 1.35rem;
+  height: 1.35rem;
   padding: 0;
   font-size: 0.65rem;
   line-height: 1;
@@ -2415,7 +2457,7 @@ body.pointer-dragging * {
 .avatar-strip--dock-open {
   left: calc((100vw - var(--dock-rail-w) - var(--dock-panel-w)) / 2);
 }
-.npc-chip {
+.npc-chip .chip-portrait {
   border-color: var(--danger);
 }
 

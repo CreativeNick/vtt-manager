@@ -13,7 +13,7 @@
   color-scheme: light;
 
   /* -- Palette --------------------------------------------------------------- */
-  --bg: #f1e4df; /* dusty plaster room wash */
+  --bg: #e8ddc4; /* warm sand room wash — parchment family, between panel and well */
   --surface: rgba(237, 229, 209, 0.96); /* parchment panels */
   --surface-solid: #ede5d1;
   --surface-2: #e3d8be; /* inset wells, hover fills */
