@@ -1,0 +1,1728 @@
+/* ==========================================================================
+   Phase 7 — Tabbed character sheet (structure; final skin in Phase 8)
+   Left vitals sidebar + top header + right page rail. Responsive via container
+   queries on .sheet7 (works in a floating window OR a page column).
+   ========================================================================== */
+.sheet7 {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  min-height: 0;
+  container-type: inline-size;
+  background: var(--surface-solid);
+}
+/* Layout wrapper for the sidebar + content — deliberately seamless (no border/strip) so
+   the area behind the floating page-rail buttons is the SAME background as the sheet, not
+   a distinct panel. It just reserves a right gutter so content doesn't run under the rail.
+   Opaque + above the inline rail (see `.sheet7 > .sheet7-rail`) so the active button's
+   connection tab tucks BEHIND the sheet instead of painting over the header. */
+.sheet7-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  margin-right: 44px;
+  position: relative;
+  z-index: 1;
+  background: var(--surface-solid);
+}
+.sheet7-sidebar {
+  flex: 0 0 190px;
+  width: 190px;
+  min-width: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--surface-inset);
+}
+.sheet7--sidebar-collapsed .sheet7-sidebar {
+  display: none;
+}
+.sheet7-collapse {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 14px;
+  padding: 0.6rem 0;
+  border: 1px solid var(--border-subtle);
+  border-left: none;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.sheet7-collapse:hover {
+  color: var(--text);
+}
+.sheet7-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sheet7-page-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+/* FoundryVTT-style page rail. Two homes:
+   - In a floating WINDOW it's portaled into `.window-siderail` and hangs off the window's
+     right edge over the tabletop (position handled by `.window-siderail`; here it's a plain
+     button stack).
+   - In a prep-page COLUMN (no window to escape) it stays inline, absolutely pinned to the
+     right edge of the sheet.
+   Either way each button is a floating square that overhangs the sheet's right border; the
+   active one matches the sheet background + drops its left rounding so it docks into it. */
+.sheet7-rail {
+  position: absolute;
+  top: 14px;
+  right: 8px;
+  width: 34px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  /* Vertical space between the square buttons. */
+  gap: 12px;
+  z-index: 3;
+}
+/* Inline (prep-page column) rail: layer it UNDER the opaque `.sheet7-panel` so the
+   active button's extra "tab" width hides behind the sheet — same docked look as the
+   window case, where `.window-siderail` owns this. The buttons themselves live in the
+   44px gutter the panel reserves, so they stay fully visible and clickable. */
+.sheet7 > .sheet7-rail {
+  z-index: 0;
+}
+/* Portaled into the window's side rail: let `.window-siderail` own the positioning. */
+.window-siderail .sheet7-rail {
+  position: static;
+  right: auto;
+  top: auto;
+  width: 34px;
+}
+/* With the rail hanging outside, the content fills to the window's right edge so the
+   active button docks onto it (no inside gutter needed). */
+.window:has(> .window-siderail) .sheet7-panel {
+  margin-right: 0;
+}
+.sheet-rail-btn {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: var(--elev-1);
+  transition: transform 0.1s ease, color 0.12s ease, background 0.12s ease;
+}
+.sheet-rail-btn:hover {
+  color: var(--text);
+  transform: translateX(-4px);
+}
+/* The selected button grows a "tab" to the LEFT that tucks behind the sheet panel (the
+   rail sits at a lower layer than the panel — see `.window-siderail` z-index), so it reads
+   as physically docked into the sheet. Buttons are right-aligned, so the extra width all
+   extends left behind the panel; the visible part stays flush against the panel edge.
+   TWEAK: increase `width` for a longer connection tab tucked behind the panel. */
+.sheet-rail-btn--active {
+  width: 52px;
+  /* The extra width tucks LEFT behind the panel; keep the glyph in the visible right part. */
+  justify-items: end;
+  padding-right: 9px;
+  color: var(--accent);
+  background: var(--surface-solid);
+  border-color: var(--border);
+  border-left-color: var(--surface-solid);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  box-shadow: none;
+}
+
+/* --- Sidebar vitals --------------------------------------------------------- */
+.sheet-vitals {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+.reveal-toggle--sidebar {
+  align-self: stretch;
+  text-align: center;
+}
+/* Doubled class = higher specificity than index.css's base .sheet-portrait (the
+   3.5rem thumbnail), which comes LATER in the cascade (sheet7.css is @imported at
+   the top of index.css) and would otherwise win the tie. The portrait fills the
+   sidebar, FoundryVTT-style. */
+.sheet-portrait.sheet-portrait--lg {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  height: auto;
+  border-radius: var(--r-wob-sm);
+}
+.sheet-portrait-btn.sheet-portrait-btn--lg {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  height: auto;
+}
+/* Empty upload target at portrait size: a bigger ＋ glyph. */
+.sheet-portrait--lg.sheet-portrait--empty {
+  font-size: 2.4rem;
+}
+/* Read-only sheet with no portrait: a quiet inset well, not a big black slab. */
+.sheet-vitals > .sheet-portrait--lg {
+  background: var(--surface-inset);
+  border-style: dashed;
+}
+.ac-shield {
+  align-self: center;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 3.8rem;
+  height: 3.8rem;
+  margin-top: -1.9rem;
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.ac-shield-icon {
+  position: absolute;
+  opacity: 0.25;
+  font-size: 1.6rem;
+}
+.ac-shield-value {
+  position: relative;
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  color: var(--accent);
+  width: 2.2rem;
+  text-align: center;
+  background: none;
+  border: none;
+}
+.vitals-badges {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: space-between;
+}
+.stat-badge {
+  flex: 1;
+  text-align: center;
+  padding: 0.2rem 0.1rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.stat-badge-value {
+  font-family: var(--font-display);
+  color: var(--accent);
+  font-size: 0.95rem;
+}
+.stat-badge-label {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+}
+.vitals-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.vitals-label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.vitals-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+.vitals-sub {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+.vitals-row input {
+  width: 3.4rem;
+}
+.vitals-skill {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.vitals-skill .total {
+  color: var(--accent);
+  font-family: var(--font-display);
+}
+
+.bar-meter {
+  position: relative;
+  height: 1.5rem;
+  border-radius: var(--radius);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+.bar-meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--success);
+  opacity: 0.4;
+}
+.bar-meter--over .bar-meter-fill {
+  background: var(--danger);
+}
+.bar-meter-text {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+}
+.bar-meter-text input {
+  width: 2.6rem;
+  text-align: center;
+  padding: 0.05rem 0.1rem;
+}
+.hp-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.death-saves {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+.death-skull {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.death-skull--active,
+.death-skull--open {
+  opacity: 1;
+}
+.death-tracker {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.death-col {
+  display: flex;
+  gap: 0.2rem;
+}
+.death-skull-mid {
+  opacity: 0.4;
+}
+.death-pip {
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: none;
+  cursor: pointer;
+}
+.death-pip--success.death-pip--full {
+  background: var(--success);
+}
+.death-pip--fail.death-pip--full {
+  background: var(--danger);
+}
+.favorites-drop {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem;
+  text-align: center;
+  min-height: 2rem;
+}
+
+/* --- Header ----------------------------------------------------------------- */
+.sheet-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.sheet-header-main {
+  /* Basis = min-width (not auto): the name input's intrinsic ~20ch size must not
+     push the action buttons onto extra rows; the name grows into free space instead.
+     The name/subtitle still never collapses below 6.5rem — beyond that the action
+     buttons wrap onto extra rows (see .sheet-header-actions). */
+  flex: 1 1 6.5rem;
+  min-width: 6.5rem;
+}
+.sheet-name,
+.sheet-name-input {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  color: var(--text);
+  background: none;
+  border: none;
+  width: 100%;
+  padding: 0;
+}
+.sheet-subtitle {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.sheet-meta {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+.sheet-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  /* Narrow cards: buttons flow onto extra rows rather than squeezing out the name. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.rest-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.2rem 0.4rem;
+  cursor: pointer;
+}
+.rest-btn:hover {
+  border-color: var(--accent);
+}
+.level-ring {
+  flex: 0 0 auto;
+  width: 2.8rem;
+  height: 2.8rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--surface-inset);
+}
+.level-ring-value {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  color: var(--accent);
+}
+.level-ring-input {
+  width: 2rem;
+  text-align: center;
+  background: none;
+  border: none;
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  color: var(--accent);
+}
+.sheet-size-warn {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.72rem;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* --- Shared page atoms ------------------------------------------------------ */
+.sheet-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.sheet-page--hidden {
+  padding: 1.5rem;
+  text-align: center;
+}
+/* Foundry-style section card: ONE shared idiom for every major page section
+   (Skills, Saves, item/feature/spell tables, traits, bio blocks…). Deliberately
+   display-agnostic — hosts keep their own flex/grid. Background is the bright
+   page token so cards read as raised paper sheets in both themes. */
+.sheet-section {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-wob-sm);
+  background: var(--surface-page);
+  /* The header band's negative margins mirror this padding — change together. */
+  padding: 0.4rem 0.5rem 0.5rem;
+  min-width: 0;
+  overflow: hidden; /* clip the full-bleed header band to the wobble radius */
+}
+/* A direct-child section title becomes a full-bleed header band (matches the
+   .rt-group-head idiom). Scoped under .sheet-section so ScenesPage's use of
+   .sheet-section-head is untouched. */
+.sheet-section > .sheet-section-head,
+.sheet-section > .sheet-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -0.4rem -0.5rem 0.35rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--surface-inset);
+}
+/* Flush variant for row tables: the rt-group-head IS the card header. */
+.sheet-section--flush {
+  padding: 0;
+}
+.sheet-section--flush > .rt-group-head {
+  border-radius: 0;
+}
+.sheet-section--flush > .rt-row-wrap:last-child > .rt-row {
+  border-bottom: none;
+}
+/* Main-page cards wrap bare row stacks; keep the tight row rhythm inside. */
+.main-col > .sheet-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.sheet-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.sheet-field label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.sheet-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.3rem;
+}
+.sheet-section-title {
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.sheet-add-btn {
+  font-size: 0.72rem;
+}
+.prof-dot {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.prof-dot--prof {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.prof-dot--expertise {
+  background: var(--accent-bright);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--surface-solid);
+}
+.uses-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+.uses-cell input {
+  width: 2.2rem;
+  text-align: center;
+  padding: 0.05rem;
+}
+.slot-pips {
+  display: inline-flex;
+  gap: 0.2rem;
+}
+.slot-pip {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: none;
+  box-shadow: none;
+  cursor: pointer;
+}
+/* Full spell slots are crystal — tiny opal gems (the arcane accent). Staggered
+   texture crops so neighboring pips don't look stamped from the same die. */
+.slot-pip--full {
+  background-color: #b7b4c4;
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 55%),
+    url("/textures/opal-b.webp");
+  background-size: auto, 90px;
+  background-position: center, 35% 60%;
+}
+.slot-pip--full:nth-child(2n) {
+  background-position: center, 70% 25%;
+}
+.slot-pip--full:nth-child(3n) {
+  background-position: center, 15% 80%;
+}
+[data-theme="night"] .slot-pip--full {
+  box-shadow: 0 0 6px color-mix(in srgb, #d6d2f2 45%, transparent);
+}
+.pill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.25rem;
+}
+.pill-list-label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.pill-list-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+}
+.pill-x {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.7rem;
+}
+.pill-x:hover {
+  color: var(--danger);
+}
+.pill-add {
+  width: 5rem;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.3rem;
+}
+
+/* --- RowTable --------------------------------------------------------------- */
+.row-table {
+  display: flex;
+  flex-direction: column;
+  /* Matches the card spacing rhythm (.main-col) now that groups are cards. */
+  gap: 0.6rem;
+}
+.rt-search {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.4rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+.rt-search input {
+  flex: 1;
+  background: none;
+  border: none;
+}
+.rt-search-icon {
+  opacity: 0.5;
+  font-size: 0.8rem;
+}
+.rt-empty {
+  padding: 0.4rem;
+  font-size: 0.8rem;
+}
+.rt-group {
+  display: flex;
+  flex-direction: column;
+}
+.rt-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.4rem;
+  background: var(--surface-inset);
+  border-radius: var(--radius);
+}
+.rt-group-title {
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.rt-group-cols {
+  display: flex;
+  gap: 0.4rem;
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.rt-add {
+  font-size: 0.9rem;
+  padding: 0 0.3rem;
+}
+.rt-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.rt-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rt-cells {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+.rt-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  flex-shrink: 0;
+}
+.rt-expand {
+  padding: 0.4rem 0.6rem;
+  background: var(--surface-inset);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.rt-expand-note {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.78rem;
+}
+.inv-name {
+  display: flex;
+  flex-direction: column;
+}
+.inv-name-input {
+  background: none;
+  border: none;
+  padding: 0;
+  font-weight: 600;
+}
+.inv-name-text {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.inv-subtitle {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+.inv-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 2.4rem;
+  font-size: 0.8rem;
+}
+.inv-cell--sm {
+  min-width: 2rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.inv-num {
+  width: 2.6rem;
+  text-align: center;
+  padding: 0.05rem;
+}
+.inv-qty {
+  gap: 0.15rem;
+}
+.qty-step {
+  width: 1.1rem;
+  height: 1.1rem;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.inv-equip {
+  gap: 0.15rem;
+}
+.equip-toggle,
+.attune-toggle,
+.prepared-toggle,
+.effect-toggle {
+  width: 1.4rem;
+  height: 1.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.5;
+}
+.equip-toggle--on,
+.attune-toggle--on,
+.prepared-toggle--on,
+.effect-toggle--on {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.inv-expand-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+  margin-bottom: 0.3rem;
+}
+.inv-expand-grid label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+.inv-expand textarea,
+.bio-block textarea {
+  width: 100%;
+}
+
+/* --- Main page -------------------------------------------------------------- */
+.ability-row {
+  display: grid;
+  /* Always ONE row of six; below the 850px container the label tails hide (bold
+     STR/DEX… leads remain) instead of the grid ever wrapping to two rows. */
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.3rem;
+}
+/* Tail of the ability name ("…ength"); hidden until the sheet is wide enough. */
+.ability-label-rest {
+  display: none;
+}
+.ability-block {
+  text-align: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  padding: 0.2rem;
+  min-width: 0;
+}
+.ability-block-label {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The classic 3-letter abbreviation leads the full name and stands out from it. */
+.ability-block-label b {
+  font-weight: 700;
+  color: var(--text);
+}
+.ability-block-mod {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  width: 100%;
+}
+.ability-block-score {
+  text-align: center;
+  padding: 0.1rem;
+  margin-top: 0.1rem;
+  width: 100%;
+}
+.main-columns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.main-col {
+  display: flex;
+  flex-direction: column;
+  /* Space BETWEEN the section cards; the tight row rhythm lives inside them
+     (see .main-col > .sheet-section). */
+  gap: 0.6rem;
+}
+.skill-row {
+  display: grid;
+  grid-template-columns: 1rem 1.6rem 1fr auto auto 1.6rem;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.05rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 0.8rem;
+}
+.skill-abbr {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}
+.skill-name {
+  min-width: 0;
+}
+.skill-mod-input {
+  width: 2.4rem;
+  text-align: center;
+  padding: 0.05rem;
+}
+.skill-total {
+  font-family: var(--font-display);
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: right;
+}
+.skill-passive {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+.saves-grid {
+  display: grid;
+  /* A save row (dot + full name + total + misc box) needs ~11rem; auto-fill drops
+     to a single column instead of letting two cramped ones overlap. */
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.2rem 0.6rem;
+}
+.save-row {
+  display: grid;
+  grid-template-columns: 1rem 1fr auto auto;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+}
+.save-name {
+  min-width: 0;
+  /* Last-resort guard: truncate rather than paint over the roll button. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.save-total {
+  font-family: var(--font-display);
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.save-mod-input {
+  width: 2.4rem;
+  text-align: center;
+  padding: 0.05rem;
+}
+.npc-stat-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.npc-saves-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.npc-save-chip {
+  display: inline-flex;
+  gap: 0.2rem;
+  align-items: center;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+.npc-save-chip .total {
+  color: var(--accent);
+  font-family: var(--font-display);
+}
+.class-chip {
+  align-self: flex-start;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-inset);
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+}
+
+/* --- Inventory -------------------------------------------------------------- */
+.encumbrance {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.encumbrance-bar {
+  position: relative;
+  height: 1.4rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-inset);
+  overflow: hidden;
+}
+.encumbrance-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  opacity: 0.3;
+}
+.encumbrance-bar--over .encumbrance-fill {
+  background: var(--danger);
+  opacity: 0.4;
+}
+.encumbrance-text {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-size: 0.78rem;
+}
+.encumbrance-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.3rem;
+}
+.enc-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.2rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+.enc-stat-label {
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.enc-stat-value {
+  font-size: 0.85rem;
+}
+.enc-attune-max {
+  width: 2rem;
+  text-align: center;
+  padding: 0;
+}
+.currency-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.3rem;
+}
+.currency-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.2rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+.currency-cell input {
+  width: 3rem;
+  text-align: center;
+  padding: 0.05rem;
+}
+.currency-label {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+}
+
+/* --- Spells ----------------------------------------------------------------- */
+/* Chrome (border/background/padding) comes from the .sheet-section card class. */
+.spellcasting-card {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.3rem;
+}
+.spellcasting-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+}
+.sc-label {
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.sc-value {
+  font-family: var(--font-display);
+  color: var(--accent);
+  font-size: 1rem;
+  text-align: center;
+  width: 3rem;
+  background: none;
+  border: none;
+}
+.spell-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.spell-slot-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+}
+.spell-slot-lv {
+  min-width: 2.6rem;
+  color: var(--text-muted);
+}
+.spell-slot-max {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+.spell-slot-max input {
+  width: 2rem;
+  text-align: center;
+  padding: 0;
+}
+.spell-add-bar {
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* --- Effects & conditions --------------------------------------------------- */
+.conditions-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.conditions-hint {
+  font-size: 0.72rem;
+}
+.conditions-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.3rem;
+}
+.condition-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.condition-cell:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.condition-cell--on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.condition-emoji {
+  opacity: 0.5;
+}
+.condition-cell--on .condition-emoji {
+  opacity: 1;
+}
+
+/* --- Traits ----------------------------------------------------------------- */
+.trait-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.trait-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+/* No dangling divider above the section card's bottom edge. */
+.trait-group .trait-row:last-child {
+  border-bottom: none;
+}
+.trait-info {
+  flex: 1;
+  min-width: 0;
+}
+.trait-name {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+.trait-desc {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+.trait-lock {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  opacity: 0.5;
+}
+.trait-lock--on {
+  opacity: 1;
+}
+.trait-num {
+  width: 3.5rem;
+  text-align: center;
+}
+.trait-class {
+  width: 8rem;
+}
+
+/* --- Biography -------------------------------------------------------------- */
+.bio-details {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.3rem 0.5rem;
+}
+.bio-columns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.bio-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.bio-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.bio-block label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.bio-full {
+  min-height: 8rem;
+}
+
+/* --- Responsive (container queries on .sheet7) ------------------------------ */
+@container (min-width: 680px) {
+  .sheet7-sidebar {
+    flex-basis: 200px;
+    width: 200px;
+  }
+  .main-columns {
+    flex-direction: row;
+  }
+  .main-columns .main-col {
+    flex: 1;
+    min-width: 0;
+  }
+  .bio-columns {
+    flex-direction: row;
+  }
+  .bio-columns .bio-col {
+    flex: 1;
+    min-width: 0;
+  }
+  /* Collapsing the vitals sidebar frees ~200px — full ability names fit already. */
+  .sheet7--sidebar-collapsed .ability-label-rest {
+    display: inline;
+  }
+}
+/* Wide enough that six ability blocks can each fit a full name ("Constitution"). */
+@container (min-width: 850px) {
+  .ability-label-rest {
+    display: inline;
+  }
+}
+@container (max-width: 520px) {
+  .sheet7-sidebar {
+    flex-basis: 158px;
+    width: 158px;
+  }
+  /* Six-across still: tighten the row so 2-digit scores survive a 420px column. */
+  .ability-row {
+    gap: 0.2rem;
+  }
+  .ability-block-score {
+    padding: 0.05rem;
+  }
+  .encumbrance-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .conditions-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .bio-details {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* --- Log roll-breakdown chips (Phase 7d) ------------------------------------ */
+.roll-parts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem;
+  margin-top: 0.15rem;
+}
+.roll-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.7rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+}
+.roll-chip-label {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+}
+.roll-chip-value {
+  font-family: var(--font-mono);
+}
+.roll-chip--die {
+  background: var(--primary-soft);
+  border-color: var(--primary-strong);
+}
+.roll-chip--ability {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.roll-chip--prof {
+  background: var(--success-soft);
+  border-color: var(--success);
+}
+.roll-chip--item {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+.roll-chip--flat {
+  background: var(--surface-2);
+}
+.roll-chip--adv {
+  background: none;
+  border-style: dashed;
+  color: var(--text-muted);
+}
+.roll-chip--crit {
+  background: var(--danger);
+  border-color: var(--danger-strong);
+  color: var(--text-invert);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+/* --- Quick-HP stepper (Phase 7e) -------------------------------------------- */
+.hp-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+}
+.hp-stepper-value {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+/* Directly-editable current/max fields (token editor): compact wells sized for 3 digits. */
+.hp-stepper .hp-num {
+  width: 2.1rem;
+  text-align: center;
+  padding: 0.05rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.hp-temp {
+  color: var(--accent);
+  margin-left: 0.15rem;
+}
+.hp-step {
+  width: 1.2rem;
+  height: 1.2rem;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.hp-step--dmg:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.hp-step--heal:hover {
+  border-color: var(--success);
+  color: var(--success);
+}
+.hp-amount {
+  width: 2.2rem;
+  text-align: center;
+  padding: 0.05rem;
+}
+.hp-stepper--compact .hp-amount {
+  width: 1.8rem;
+}
+.init-row .hp-stepper {
+  margin-left: auto;
+}
+
+/* --- Scenes-page: stage actors (Phase 7i) ---------------------------------- */
+.stage-actors {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 0.4rem;
+}
+.stage-actor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+.stage-actor-row {
+  text-align: left;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.4rem;
+}
+
+/* --- Assets page (Phase 7j) ------------------------------------------------- */
+.assets-page-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.75rem;
+}
+.assets-hint,
+.assets-error {
+  margin: 0 0 0.6rem;
+  font-size: 0.82rem;
+}
+.assets-error {
+  color: var(--danger);
+  background: var(--danger-soft);
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius);
+}
+.assets-group {
+  margin-bottom: 1rem;
+}
+.assets-group-title {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0 0 0.4rem;
+}
+.assets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.6rem;
+}
+.asset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.asset-thumb {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  background: var(--surface-inset);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.asset-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.asset-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+.asset-usage--used {
+  color: var(--accent);
+}
+.asset-actions {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: space-between;
+}
+.asset-actions .btn-ghost {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.4rem;
+}
+.asset-del:hover {
+  color: var(--danger);
+}
+
+/* ---- "Choose from library" image picker (reuse an uploaded asset) --------- */
+.asset-picker {
+  width: min(680px, 96vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  max-height: 80vh;
+}
+.asset-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.asset-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 0.5rem;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0.15rem;
+}
+.asset-picker-item {
+  aspect-ratio: 1;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+}
+.asset-picker-item:hover {
+  border-color: var(--accent);
+}
+.asset-picker-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Overlay pill on the sheet portrait to open the library picker (mirrors the
+   change/crop pills in index.css). Top-right, stacked just under the "Change"
+   pill — the bottom edge holds the AC shield overlap, and the centre holds the
+   empty-state "Add photo" hint, so neither is covered. */
+.sheet-portrait-lib {
+  position: absolute;
+  top: 30px;
+  right: 6px;
+  z-index: 1;
+  padding: 2px 8px;
+  font-size: 0.62rem;
+  border-radius: 6px;
+  color: var(--text-invert);
+  background: rgba(30, 24, 18, 0.72);
+  background-image: none;
+  border: 1px solid var(--border);
+  box-shadow: none;
+  cursor: pointer;
+}
+.sheet-portrait-lib:hover:not(:disabled) {
+  background: rgba(30, 24, 18, 0.92);
+  color: var(--text-invert);
+  transform: none;
+  box-shadow: none;
+}
+/* Empty state has no "Change" pill above it, so sit in the top corner itself. */
+.sheet-portrait-lib--empty {
+  top: 6px;
+}
+
+/* ---- Rules engine: overrides + derived stats (AUTOMATION_PLAN Round A) ---- */
+
+/* Wraps a derived total (roll button or read-only) plus its override marker. */
+.stat-total-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  justify-content: flex-end;
+}
+.derived-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+.derived-num input {
+  width: 2.6rem;
+  text-align: center;
+  padding: 0.05rem;
+}
+
+/* Gold dot on an overridden stat; click = reset to auto. */
+.ovr-marker {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.5rem;
+  line-height: 1;
+}
+.ovr-marker:hover {
+  color: var(--danger);
+}
+
+/* Inline override editor swapped in for a skill/save total (right-click). */
+.ovr-edit {
+  width: 2.6rem;
+  text-align: right;
+  padding: 0.05rem;
+}
+
+/* Misc-bonus cell wrapper (input + optional double-count warning). */
+.misc-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+/* Possible proficiency double-count (pre-automation sheets); click clears Misc. */
+.dc-warn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 0.66rem;
+  line-height: 1;
+}
+
+/* Derived badge values (Init/Prof) keep the badge's display font. */
+.stat-badge-input {
+  width: 2.4rem;
+  text-align: center;
+  padding: 0.05rem;
+  font-family: var(--font-display);
+  color: var(--accent);
+  background: none;
+  border: 1px solid transparent;
+}
+.stat-badge-input:hover,
+.stat-badge-input:focus {
+  border-color: var(--border-subtle);
+}
+
+/* ---- Tier 3: rests, cast/use buttons, death-save roll, damage apply ---------- */
+
+.short-rest-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.short-rest-pop {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 13rem;
+  padding: 0.55rem 0.65rem;
+  background-color: var(--surface-solid);
+  background-image: var(--paper-layers);
+  background-size: var(--paper-sizes);
+  border: 2px solid var(--border);
+  border-radius: var(--r-wob-sm);
+  box-shadow: var(--shadow-pop);
+  font-size: 0.78rem;
+}
+.short-rest-pop label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.short-rest-pop input {
+  width: 2.8rem;
+  text-align: center;
+}
+.short-rest-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.3rem;
+}
+
+.death-roll-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0 0.15rem;
+}
+.death-roll-btn:hover {
+  border-color: var(--border-subtle);
+  background: var(--surface-2);
+}
+
+/* Spend buttons (feature uses / item charges) and the spell Cast button. */
+.use-btn,
+.cast-btn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.66rem;
+  line-height: 1;
+  padding: 0.15rem 0.3rem;
+  color: var(--accent);
+}
+.use-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.use-btn:hover:not(:disabled),
+.cast-btn:hover {
+  background: var(--surface-2);
+}
+
+/* DM damage-apply row under a damage roll entry. */
+.dmg-apply {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.2rem;
+  flex-wrap: wrap;
+  font-size: 0.74rem;
+}
+.dmg-apply select,
+.dmg-apply .dmg-type {
+  font-size: 0.74rem;
+  padding: 0.1rem 0.25rem;
+  max-width: 9rem;
+}
+.dmg-apply .dmg-type {
+  width: 6.5rem;
+}
+.dmg-apply .btn-ghost {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.4rem;
+}

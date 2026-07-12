@@ -1,57 +1,53 @@
-export const ANNOTATION_DURATION_MS = 10_000;
+import { ANNOTATION_FADE_MS, EPHEMERAL_ANNOTATION_TTL_MS, MAX_ANNOTATION_POINTS } from "./types";
+
+/// <summary>
+/// Pure geometry + fade helpers for the shift-drag "pointer arrow" (recovered from the
+/// pre-revamp v1 annotation system, git e23a632). The committed polyline is sampled
+/// sparsely for the network; a denser draft drives the smooth local preview. Ephemeral
+/// annotations fade over the last 30% of their lifetime, matching the server TTL.
+/// </summary>
+
+/** Lifetime of an ephemeral annotation — kept in lockstep with the server TTL. */
+export const ANNOTATION_DURATION_MS = EPHEMERAL_ANNOTATION_TTL_MS;
+/** Shortest path (world px) that commits as an arrow — shorter drags are ignored. */
 export const ANNOTATION_MIN_LENGTH = 24;
+/** Min spacing between committed (networked) samples. */
 export const ANNOTATION_SAMPLE_DISTANCE = 48;
+/** Min spacing for the dense local preview samples. */
 export const ANNOTATION_DRAFT_SAMPLE_DISTANCE = 10;
-export const ANNOTATION_MAX_POINTS = 120;
-export const MAX_ACTIVE_ANNOTATIONS_PER_PLAYER = 4;
 
-export type MapAnnotation = {
-  id: string;
-  sceneId: string;
-  playerId: string;
-  playerName: string;
-  color: string;
-  /** Flat polyline [x1, y1, x2, y2, ...] in world coordinates. */
-  points: number[];
-  createdAt: number;
-};
-
-/// <summary>
-/// Returns true when a flat point array is valid for a shared annotation.
-/// </summary>
-export function isValidAnnotationPoints(points: unknown): points is number[] {
-  return (
-    Array.isArray(points) &&
-    points.length >= 4 &&
-    points.length % 2 === 0 &&
-    points.every((value) => Number.isFinite(value))
-  );
-}
-
-/// <summary>
-/// Total length of a flat annotation polyline.
-/// </summary>
+/// <summary>Total length of a flat [x,y,...] polyline.</summary>
 export function annotationPathLength(points: number[]): number {
   let length = 0;
-  for (let index = 2; index < points.length; index += 2) {
-    length += Math.hypot(
-      points[index] - points[index - 2],
-      points[index + 1] - points[index - 1],
-    );
+  for (let i = 2; i < points.length; i += 2) {
+    length += Math.hypot(points[i] - points[i - 2], points[i + 1] - points[i - 1]);
   }
   return length;
 }
 
-/// <summary>
-/// Returns true when an annotation polyline has reached the configured point cap.
-/// </summary>
+/// <summary>Whether a polyline has reached the shared point cap.</summary>
 export function isAnnotationAtMaxPoints(points: number[]): boolean {
-  return points.length >= ANNOTATION_MAX_POINTS;
+  return points.length >= MAX_ANNOTATION_POINTS;
 }
 
-/// <summary>
-/// Appends a world point when it is far enough from the previous sample.
-/// </summary>
+/// <summary>Trims a polyline to the shared point cap.</summary>
+export function trimAnnotationPoints(points: number[]): number[] {
+  return points.length <= MAX_ANNOTATION_POINTS ? points : points.slice(0, MAX_ANNOTATION_POINTS);
+}
+
+function appendSample(points: number[], x: number, y: number, minDistance: number): number[] {
+  if (points.length < 2) {
+    return [x, y];
+  }
+  const lastX = points[points.length - 2];
+  const lastY = points[points.length - 1];
+  if (Math.hypot(x - lastX, y - lastY) < minDistance) {
+    return points;
+  }
+  return [...points, x, y];
+}
+
+/// <summary>Appends a sparse (networked) sample when far enough from the last one.</summary>
 export function appendAnnotationSample(
   points: number[],
   x: number,
@@ -61,57 +57,21 @@ export function appendAnnotationSample(
   if (isAnnotationAtMaxPoints(points)) {
     return points;
   }
-  if (points.length < 2) {
-    return [x, y];
-  }
-  const lastX = points[points.length - 2];
-  const lastY = points[points.length - 1];
-  if (Math.hypot(x - lastX, y - lastY) < minDistance) {
-    return points;
-  }
-  return [...points, x, y];
+  return appendSample(points, x, y, minDistance);
 }
 
-/// <summary>
-/// Appends a dense draft sample without applying the server point cap.
-/// </summary>
-function appendDraftSample(
-  points: number[],
-  x: number,
-  y: number,
-  minDistance: number,
-): number[] {
-  if (points.length < 2) {
-    return [x, y];
-  }
-  const lastX = points[points.length - 2];
-  const lastY = points[points.length - 1];
-  if (Math.hypot(x - lastX, y - lastY) < minDistance) {
-    return points;
-  }
-  return [...points, x, y];
-}
-
-/// <summary>
-/// Appends a dense local preview sample without the server point cap.
-/// </summary>
+/// <summary>Appends a dense local-preview sample (no server cap).</summary>
 export function appendDraftAnnotationSample(
   points: number[],
   x: number,
   y: number,
   minDistance = ANNOTATION_DRAFT_SAMPLE_DISTANCE,
 ): number[] {
-  return appendDraftSample(points, x, y, minDistance);
+  return appendSample(points, x, y, minDistance);
 }
 
-/// <summary>
-/// Appends the live cursor to a draft preview so the stroke follows the pointer smoothly.
-/// </summary>
-export function withAnnotationCursorTip(
-  points: number[],
-  cursorX: number,
-  cursorY: number,
-): number[] {
+/// <summary>Appends the live cursor tip so the draft stroke follows the pointer.</summary>
+function withCursorTip(points: number[], cursorX: number, cursorY: number): number[] {
   if (points.length < 2) {
     return [cursorX, cursorY];
   }
@@ -123,9 +83,7 @@ export function withAnnotationCursorTip(
   return [...points, cursorX, cursorY];
 }
 
-/// <summary>
-/// Builds the local-only annotation preview path while drawing.
-/// </summary>
+/// <summary>Builds the local-only preview path while drawing (dense base + live tip).</summary>
 export function buildAnnotationDraftPreview(
   sparsePoints: number[],
   draftPoints: number[],
@@ -140,73 +98,21 @@ export function buildAnnotationDraftPreview(
   if (base.length < 2) {
     return [cursorX, cursorY];
   }
-  return withAnnotationCursorTip(base, cursorX, cursorY);
+  return withCursorTip(base, cursorX, cursorY);
 }
 
 /// <summary>
-/// Trims an annotation polyline to the configured max point count.
-/// </summary>
-export function trimAnnotationPoints(points: number[]): number[] {
-  if (points.length <= 4) {
-    return points;
-  }
-  if (points.length <= ANNOTATION_MAX_POINTS) {
-    return points;
-  }
-  return points.slice(0, ANNOTATION_MAX_POINTS);
-}
-
-/// <summary>
-/// Coerces persisted annotation timestamps into a finite epoch milliseconds value.
-/// </summary>
-export function normalizeAnnotationCreatedAt(createdAt: unknown): number {
-  if (typeof createdAt === "number" && Number.isFinite(createdAt)) {
-    return createdAt;
-  }
-  if (typeof createdAt === "string") {
-    const parsed = Number(createdAt);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return Date.now();
-}
-
-/// <summary>
-/// Returns true when an annotation has exceeded its visible lifetime.
-/// </summary>
-export function isAnnotationExpired(createdAt: number, now = Date.now()): boolean {
-  return now - normalizeAnnotationCreatedAt(createdAt) >= ANNOTATION_DURATION_MS;
-}
-
-/// <summary>
-/// Returns how many milliseconds remain before an annotation should be removed.
-/// </summary>
-export function annotationRemainingMs(createdAt: number, now = Date.now()): number {
-  return Math.max(0, ANNOTATION_DURATION_MS - (now - normalizeAnnotationCreatedAt(createdAt)));
-}
-
-/// <summary>
-/// Normalizes one shared annotation record from persisted or network state.
-/// </summary>
-export function normalizeMapAnnotation(annotation: MapAnnotation): MapAnnotation {
-  return {
-    ...annotation,
-    createdAt: normalizeAnnotationCreatedAt(annotation.createdAt),
-  };
-}
-
-/// <summary>
-/// Returns opacity for an annotation based on age (1 → 0 over ANNOTATION_DURATION_MS).
+/// Opacity for an ephemeral annotation by age: full until the last ANNOTATION_FADE_MS of
+/// its lifetime, then a quick linear fade to 0 (1 → 0 over ANNOTATION_FADE_MS).
 /// </summary>
 export function annotationOpacity(createdAt: number, now = Date.now()): number {
-  const age = now - normalizeAnnotationCreatedAt(createdAt);
+  const age = now - createdAt;
   if (age >= ANNOTATION_DURATION_MS) {
     return 0;
   }
-  if (age < ANNOTATION_DURATION_MS * 0.7) {
+  const fadeStart = ANNOTATION_DURATION_MS - ANNOTATION_FADE_MS;
+  if (age < fadeStart) {
     return 1;
   }
-  const fadeWindow = ANNOTATION_DURATION_MS * 0.3;
-  return 1 - (age - ANNOTATION_DURATION_MS * 0.7) / fadeWindow;
+  return 1 - (age - fadeStart) / ANNOTATION_FADE_MS;
 }

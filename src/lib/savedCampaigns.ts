@@ -1,3 +1,5 @@
+import { clearCampaignAll } from "./campaignStore";
+
 export type SavedCampaign = {
   roomId: string;
   name: string;
@@ -94,6 +96,8 @@ export function upsertSavedCampaign(
 export function removeSavedCampaign(roomId: string): SavedCampaign[] {
   const merged = loadSavedCampaigns().filter((item) => item.roomId !== roomId);
   saveSavedCampaigns(merged);
+  // Forget this campaign's per-campaign UI prefs (layout + toggles) so they don't linger.
+  clearCampaignAll(roomId);
   return merged;
 }
 

@@ -1,10 +1,8 @@
-import type { MapLayer, Scene, Viewport } from "./types";
-import { DEFAULT_SCENE_BACKGROUND, DEFAULT_VIEWPORT } from "./types";
+import type { Scene, Viewport } from "./types";
+import { normalizeScene } from "./types";
 
 const DEFAULT_SCENE_WIDTH = 800;
 const DEFAULT_SCENE_HEIGHT = 600;
-const CANVAS_PADDING = 80;
-const MAX_WS_IMAGE_BYTES = 280_000;
 
 export const STANDARD_GRID_ROWS = 20;
 export const VIEWPORT_GRID_ROWS = 15;
@@ -29,114 +27,31 @@ export function clampViewport(viewport: Viewport): Viewport {
 }
 
 /// <summary>
-/// Fills in scene center coordinates when missing from persisted data.
+/// Quantizes the live viewport scale for image-cache sizing: the smallest power of √2 that is
+/// ≥ scale (clamped to the zoom limits). Caches sized to this bucket are always drawn with a
+/// downscale ratio in [1, √2) — comfortably inside the single-pass range the browser's cubic
+/// filter handles cleanly — while re-rendering only when the zoom crosses a √2 step, not on
+/// every wheel tick.
 /// </summary>
-export function withSceneCenter(scene: Scene): Scene {
-  const width = scene.width || DEFAULT_SCENE_WIDTH;
-  const height = scene.height || DEFAULT_SCENE_HEIGHT;
-  return {
-    ...scene,
-    centerX: scene.centerX ?? Math.round(width / 2),
-    centerY: scene.centerY ?? Math.round(height / 2),
-    playerPanLimit: scene.playerPanLimit ?? 0,
-  };
+export function imageScaleBucket(scale: number): number {
+  const s = clampViewportScale(Number.isFinite(scale) && scale > 0 ? scale : 1);
+  // Powers of √2: 2^(ceil(log2(s) · 2) / 2). `ceil` never undershoots (→ upscale blur).
+  return Math.pow(2, Math.ceil(Math.log2(s) * 2) / 2);
 }
 
 /// <summary>
-/// Ensures a scene uses the multi-layer format, migrating legacy single-mapUrl scenes.
+/// Snaps a world-space font size so the glyphs rasterize at an INTEGER device-pixel size at the
+/// current zoom. Canvas text has no hinting or pixel-grid snapping — at fractional effective
+/// sizes (fontSize × scale × dpr, which is fractional at almost every zoom step) the grayscale
+/// anti-aliasing smears every stem across two pixel rows and the text reads as blurry. Rounding
+/// the effective size to whole device pixels (≤ ±3% visual change) removes most of that smear.
 /// </summary>
-export function normalizeScene(
-  scene: Scene & { fogEnabled?: boolean; defaultViewport?: Viewport; backgroundColor?: string },
-): Scene {
-  const withDefaults = withSceneCenter({
-    ...scene,
-    fogEnabled: scene.fogEnabled ?? Boolean(scene.fogDataUrl),
-    defaultViewport: scene.defaultViewport ?? { ...DEFAULT_VIEWPORT },
-    backgroundColor: scene.backgroundColor ?? DEFAULT_SCENE_BACKGROUND,
-  });
-
-  if (withDefaults.layers.length > 0) {
-    return recalcSceneBounds(withDefaults);
+export function snapFontSize(worldPx: number, viewScale: number, pixelRatio: number): number {
+  const density = viewScale * pixelRatio;
+  if (!Number.isFinite(density) || density <= 0 || !Number.isFinite(worldPx) || worldPx <= 0) {
+    return worldPx;
   }
-
-  const legacyMapUrl = (scene as Scene & { mapUrl?: string }).mapUrl;
-  if (legacyMapUrl) {
-    return recalcSceneBounds({
-      ...withDefaults,
-      layers: [
-        {
-          id: `${scene.id}-layer-1`,
-          url: legacyMapUrl,
-          x: 0,
-          y: 0,
-          width: scene.width || DEFAULT_SCENE_WIDTH,
-          height: scene.height || DEFAULT_SCENE_HEIGHT,
-          label: "Map",
-        },
-      ],
-      width: scene.width || DEFAULT_SCENE_WIDTH,
-      height: scene.height || DEFAULT_SCENE_HEIGHT,
-    });
-  }
-
-  return recalcSceneBounds({
-    ...withDefaults,
-    width: scene.width || DEFAULT_SCENE_WIDTH,
-    height: scene.height || DEFAULT_SCENE_HEIGHT,
-  });
-}
-
-/// <summary>
-/// Expands scene width and height to fit all placed map layers plus padding.
-/// </summary>
-export function recalcSceneBounds(scene: Scene): Scene {
-  if (scene.layers.length === 0) {
-    return {
-      ...scene,
-      width: scene.width || DEFAULT_SCENE_WIDTH,
-      height: scene.height || DEFAULT_SCENE_HEIGHT,
-    };
-  }
-
-  let maxX = 0;
-  let maxY = 0;
-  for (const layer of scene.layers) {
-    maxX = Math.max(maxX, layer.x + layer.width);
-    maxY = Math.max(maxY, layer.y + layer.height);
-  }
-
-  return {
-    ...scene,
-    width: Math.max(maxX + CANVAS_PADDING, DEFAULT_SCENE_WIDTH),
-    height: Math.max(maxY + CANVAS_PADDING, DEFAULT_SCENE_HEIGHT),
-  };
-}
-
-/// <summary>
-/// Creates a new map layer positioned after existing scene content.
-/// </summary>
-export function createMapLayer(
-  url: string,
-  width: number,
-  height: number,
-  scene: Scene,
-  label?: string,
-  layerId?: string,
-): MapLayer {
-  const anchorX =
-    scene.layers.length > 0
-      ? Math.max(...scene.layers.map((layer) => layer.x + layer.width))
-      : 0;
-
-  return {
-    id: layerId ?? `layer-${crypto.randomUUID().slice(0, 8)}`,
-    url,
-    x: anchorX,
-    y: 0,
-    width,
-    height,
-    label: label ?? `Image ${scene.layers.length + 1}`,
-  };
+  return Math.max(1, Math.round(worldPx * density)) / density;
 }
 
 /// <summary>
@@ -152,22 +67,149 @@ function loadImageElement(url: string): Promise<HTMLImageElement> {
 }
 
 /// <summary>
-/// Loads an image for Konva without breaking data URLs or same-origin static assets.
+/// Shared URL→image cache so a given asset is fetched and DECODED exactly once, then reused by
+/// every token / panel / scene that shows it. Without this, `useImage` builds a fresh Image() on
+/// every remount (and the element-keyed downscale cache re-runs), so a scene switch or panel
+/// toggle re-decodes multi-MB uploads from scratch. Keyed by URL. data:/blob: URLs are NOT
+/// cached (their keys would be huge and their lifetimes are transient). Bounded by a simple LRU
+/// so a long session can't grow the cache without limit.
+/// </summary>
+const sharedImageCache = new Map<string, Promise<HTMLImageElement>>();
+const SHARED_IMAGE_CACHE_MAX = 160;
+
+function isCacheableImageUrl(url: string): boolean {
+  return !url.startsWith("data:") && !url.startsWith("blob:");
+}
+
+/// <summary>
+/// Loads an image for Konva without breaking data URLs or same-origin static assets, reusing a
+/// shared decode per URL (see `sharedImageCache`).
 /// </summary>
 export function loadImageForCanvas(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
+  const cacheable = isCacheableImageUrl(url);
+  if (cacheable) {
+    const hit = sharedImageCache.get(url);
+    if (hit) {
+      // Refresh LRU recency so hot assets survive eviction.
+      sharedImageCache.delete(url);
+      sharedImageCache.set(url, hit);
+      return hit;
+    }
+  }
+  const promise = new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
-    const isDataOrBlob = url.startsWith("data:") || url.startsWith("blob:");
-    if (!isDataOrBlob && url.startsWith("http")) {
+    if (cacheable && url.startsWith("http")) {
       const resolved = new URL(url, window.location.origin);
       if (resolved.origin !== window.location.origin) {
         img.crossOrigin = "anonymous";
       }
     }
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
+    img.onerror = () => {
+      // A failed load must not poison the cache — drop it so a later attempt can retry.
+      sharedImageCache.delete(url);
+      reject(new Error(`Failed to load image: ${url}`));
+    };
     img.src = url;
   });
+  if (cacheable) {
+    sharedImageCache.set(url, promise);
+    if (sharedImageCache.size > SHARED_IMAGE_CACHE_MAX) {
+      const oldest = sharedImageCache.keys().next().value;
+      if (oldest !== undefined) sharedImageCache.delete(oldest);
+    }
+  }
+  return promise;
+}
+
+/// <summary>
+/// Warms the shared cache for a URL (fire-and-forget) so a likely-next asset — the party's
+/// portraits, the active scene's tokens, other scenes' maps — is already decoded before it's
+/// shown. Safe to call repeatedly; de-duped by `loadImageForCanvas`.
+/// </summary>
+export function prefetchImage(url: string | null | undefined): void {
+  if (!url) return;
+  loadImageForCanvas(url).catch(() => {});
+}
+
+/// <summary>
+/// Returns a copy of an image downscaled so its longest side is at most `maxSide`,
+/// resampled in halving steps with high-quality smoothing. Browsers downsample a large
+/// image into a tiny canvas region in one low-quality pass, which makes token portraits
+/// look soft/low-res; pre-shrinking with stepped, high-quality smoothing keeps them crisp.
+/// Images already within `maxSide` are returned untouched (no needless re-encode).
+/// </summary>
+export function downscaleImage(
+  source: HTMLImageElement,
+  maxSide: number,
+): HTMLImageElement | HTMLCanvasElement {
+  const longest = Math.max(source.width, source.height);
+  if (!(longest > maxSide) || !Number.isFinite(maxSide) || maxSide <= 0) {
+    return source;
+  }
+  const scale = maxSide / longest;
+  const targetW = Math.max(1, Math.round(source.width * scale));
+  const targetH = Math.max(1, Math.round(source.height * scale));
+
+  let current: HTMLImageElement | HTMLCanvasElement = source;
+  let w = source.width;
+  let h = source.height;
+  // Halve repeatedly until one more halving would undershoot the target, then do the
+  // final exact step. Each pass loses little detail, unlike a single big minification.
+  while (w > targetW * 2 && h > targetH * 2) {
+    w = Math.max(targetW, Math.round(w / 2));
+    h = Math.max(targetH, Math.round(h / 2));
+    current = drawToCanvas(current, w, h);
+  }
+  return drawToCanvas(current, targetW, targetH);
+}
+
+/**
+ * Per-source memo of `downscaleImage` results keyed by requested `maxSide`. Cache sizing is
+ * zoom-bucketed (see `imageScaleBucket`), so zooming re-requests the same handful of quantized
+ * sizes per image — memoizing them makes bucket crossings free after the first visit. Sizes
+ * halve geometrically, so all entries together stay under ~2× the largest copy's memory; the
+ * WeakMap releases everything when the source image is dropped.
+ */
+const downscaleCache = new WeakMap<HTMLImageElement, Map<number, HTMLImageElement | HTMLCanvasElement>>();
+
+/// <summary>
+/// `downscaleImage` with per-(source, maxSide) memoization — use for repeated calls with
+/// zoom-bucketed sizes (token portraits, the map background).
+/// </summary>
+export function downscaleImageCached(
+  source: HTMLImageElement,
+  maxSide: number,
+): HTMLImageElement | HTMLCanvasElement {
+  let sizes = downscaleCache.get(source);
+  if (!sizes) {
+    sizes = new Map();
+    downscaleCache.set(source, sizes);
+  }
+  const hit = sizes.get(maxSide);
+  if (hit) {
+    return hit;
+  }
+  const result = downscaleImage(source, maxSide);
+  sizes.set(maxSide, result);
+  return result;
+}
+
+function drawToCanvas(
+  source: HTMLImageElement | HTMLCanvasElement,
+  width: number,
+  height: number,
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(source, 0, 0, width, height);
+  }
+  return canvas;
 }
 
 /// <summary>
@@ -196,161 +238,47 @@ function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 /// <summary>
-/// Reads an image file at full quality and returns its data URL and dimensions.
+/// Reads an image file for upload. With no `options`, returns the original bytes unchanged
+/// (full backward compatibility). With `options.maxSide`, downscales to that cap (stepped,
+/// high-quality) and re-encodes as WebP — dramatically smaller files for faster decode and a
+/// lighter storage budget. Falls back to the raw bytes if the encode fails or WebP isn't smaller
+/// (e.g. an already-tiny PNG, or a browser without WebP canvas export).
 /// </summary>
 export async function readImageFromFile(
   file: File,
+  options?: { maxSide?: number; webpQuality?: number },
 ): Promise<{ dataUrl: string; width: number; height: number }> {
-  const dataUrl = await readFileAsDataUrl(file);
-  const dims = await loadImageDimensions(dataUrl).catch(() => ({
-    width: DEFAULT_SCENE_WIDTH,
-    height: DEFAULT_SCENE_HEIGHT,
-  }));
-  return { dataUrl, width: dims.width, height: dims.height };
-}
-
-/// <summary>
-/// Renders an image to a data URL, shrinking only until it fits WebSocket payload limits.
-/// </summary>
-function compressImageToDataUrl(
-  img: HTMLImageElement,
-  width: number,
-  height: number,
-  preferPng: boolean,
-): { dataUrl: string; width: number; height: number } {
-  let targetWidth = width;
-  let targetHeight = height;
-  let quality = 0.82;
-
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    const canvas = document.createElement("canvas");
-    canvas.width = targetWidth;
-    canvas.height = targetHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      throw new Error("Canvas not available");
-    }
-    ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
-
-    const dataUrl = preferPng
-      ? canvas.toDataURL("image/png")
-      : canvas.toDataURL("image/jpeg", quality);
-
-    if (dataUrl.length <= MAX_WS_IMAGE_BYTES) {
-      return { dataUrl, width: targetWidth, height: targetHeight };
-    }
-
-    if (!preferPng && quality > 0.45) {
-      quality -= 0.1;
-      continue;
-    }
-
-    targetWidth = Math.round(targetWidth * 0.85);
-    targetHeight = Math.round(targetHeight * 0.85);
-    quality = 0.82;
+  const rawUrl = await readFileAsDataUrl(file);
+  if (!options?.maxSide) {
+    const dims = await loadImageDimensions(rawUrl).catch(() => ({
+      width: DEFAULT_SCENE_WIDTH,
+      height: DEFAULT_SCENE_HEIGHT,
+    }));
+    return { dataUrl: rawUrl, width: dims.width, height: dims.height };
   }
-
-  throw new Error("Image is too large. Try a smaller file or use localhost dev mode.");
-}
-
-/// <summary>
-/// Prepares an uploaded image for WebSocket sync, compressing only when the file is too large.
-/// </summary>
-export async function prepareImageFromFile(
-  file: File,
-): Promise<{ dataUrl: string; width: number; height: number }> {
-  const original = await readImageFromFile(file);
-
-  if (original.dataUrl.length <= MAX_WS_IMAGE_BYTES) {
-    return original;
-  }
-
-  if (file.type === "image/svg+xml") {
-    throw new Error("SVG is too large. Simplify the file, export as PNG, or use localhost dev mode.");
-  }
-
-  const objectUrl = URL.createObjectURL(file);
   try {
-    const img = await loadImageElement(objectUrl);
-    const preferPng = file.type === "image/png";
-    return compressImageToDataUrl(img, original.width, original.height, preferPng);
-  } finally {
-    URL.revokeObjectURL(objectUrl);
+    const img = await loadImageElement(rawUrl);
+    const scaled = downscaleImage(img, options.maxSide);
+    const w = scaled instanceof HTMLImageElement ? scaled.naturalWidth || scaled.width : scaled.width;
+    const h = scaled instanceof HTMLImageElement ? scaled.naturalHeight || scaled.height : scaled.height;
+    const canvas = drawToCanvas(scaled, w, h);
+    const webpUrl = canvas.toDataURL("image/webp", options.webpQuality ?? 0.85);
+    // toDataURL silently yields PNG if WebP export is unsupported — only accept a real, smaller WebP.
+    if (webpUrl.startsWith("data:image/webp") && webpUrl.length < rawUrl.length) {
+      return { dataUrl: webpUrl, width: w, height: h };
+    }
+    return {
+      dataUrl: rawUrl,
+      width: img.naturalWidth || img.width,
+      height: img.naturalHeight || img.height,
+    };
+  } catch {
+    const dims = await loadImageDimensions(rawUrl).catch(() => ({
+      width: DEFAULT_SCENE_WIDTH,
+      height: DEFAULT_SCENE_HEIGHT,
+    }));
+    return { dataUrl: rawUrl, width: dims.width, height: dims.height };
   }
-}
-
-/// <summary>
-/// Adds a new image layer to a scene and recalculates bounds.
-/// </summary>
-export function addImageLayerToScene(
-  scene: Scene,
-  url: string,
-  width: number,
-  height: number,
-  label?: string,
-  layerId?: string,
-): Scene {
-  const layer = createMapLayer(url, width, height, scene, label, layerId);
-  const nextLayers = [...scene.layers, layer];
-  const tallestLayer = Math.max(...nextLayers.map((item) => item.height));
-  return recalcSceneBounds({
-    ...scene,
-    layers: nextLayers,
-    gridSize: gridSizeForMapHeight(tallestLayer),
-  });
-}
-
-/// <summary>
-/// Updates a layer position and recalculates scene bounds.
-/// </summary>
-export function moveMapLayer(scene: Scene, layerId: string, x: number, y: number): Scene {
-  return recalcSceneBounds({
-    ...scene,
-    layers: scene.layers.map((layer) =>
-      layer.id === layerId ? { ...layer, x, y } : layer,
-    ),
-  });
-}
-
-/// <summary>
-/// Updates a layer size and recalculates scene bounds.
-/// </summary>
-export function resizeMapLayer(
-  scene: Scene,
-  layerId: string,
-  width: number,
-  height: number,
-): Scene {
-  const nextWidth = Math.max(10, Math.round(width));
-  const nextHeight = Math.max(10, Math.round(height));
-
-  return recalcSceneBounds({
-    ...scene,
-    layers: scene.layers.map((layer) =>
-      layer.id === layerId ? { ...layer, width: nextWidth, height: nextHeight } : layer,
-    ),
-  });
-}
-
-/// <summary>
-/// Removes a map layer from the scene.
-/// </summary>
-export function removeMapLayer(scene: Scene, layerId: string): Scene {
-  return recalcSceneBounds({
-    ...scene,
-    layers: scene.layers.filter((layer) => layer.id !== layerId),
-  });
-}
-
-/// <summary>
-/// Updates the scene reference center without moving map layers or tokens.
-/// </summary>
-export function moveSceneCenter(scene: Scene, centerX: number, centerY: number): Scene {
-  return {
-    ...scene,
-    centerX,
-    centerY,
-  };
 }
 
 /// <summary>
@@ -361,25 +289,16 @@ export function scenesEqual(a: Scene, b: Scene): boolean {
 }
 
 /// <summary>
-/// Creates an empty scene with default dimensions.
+/// Creates an empty scene with default dimensions and no map image.
 /// </summary>
 export function createEmptyScene(name: string): Scene {
-  return {
+  return normalizeScene({
     id: `scene-${crypto.randomUUID().slice(0, 8)}`,
-    name,
-    layers: [],
+    name: name.trim() || "Scene",
+    mapUrl: null,
     width: DEFAULT_SCENE_WIDTH,
     height: DEFAULT_SCENE_HEIGHT,
-    centerX: Math.round(DEFAULT_SCENE_WIDTH / 2),
-    centerY: Math.round(DEFAULT_SCENE_HEIGHT / 2),
-    playerPanLimit: 0,
-    gridSize: 50,
-    showGrid: true,
-    fogEnabled: false,
-    fogDataUrl: null,
-    defaultViewport: { ...DEFAULT_VIEWPORT },
-    backgroundColor: DEFAULT_SCENE_BACKGROUND,
-  };
+  });
 }
 
 /// <summary>
@@ -397,10 +316,16 @@ export function tokenDiameterForGridSize(gridSize: number): number {
 }
 
 /// <summary>
-/// Token radius in world pixels (half of one grid cell diameter).
+/// Token radius in world pixels for a token spanning `sizeCells` grid cells (diameter).
+/// A size-1 (Medium) token is ~0.9 of a cell so it sits inside its square without overlapping.
 /// </summary>
+export function tokenRadius(gridSize: number, sizeCells = 1): number {
+  return (gridSize / 2) * Math.max(sizeCells, 0.1) * 0.9;
+}
+
+/** Default (size-1) token radius. */
 export function tokenRadiusForGridSize(gridSize: number): number {
-  return gridSize / 4;
+  return tokenRadius(gridSize, 1);
 }
 
 /// <summary>
@@ -411,69 +336,22 @@ export function isDefaultViewport(viewport: Viewport): boolean {
 }
 
 /// <summary>
-/// Computes a viewport with VIEWPORT_GRID_ROWS on screen, centered on the scene reference point.
-/// </summary>
-export function viewportForNormalizedScene(
-  scene: Scene,
-  canvasWidth: number,
-  canvasHeight: number,
-): Viewport {
-  const resolved = withSceneCenter(scene);
-  const padding = 48;
-  const gridSize = resolved.gridSize > 0 ? resolved.gridSize : 50;
-  const normalizedScale =
-    (canvasHeight - padding * 2) / (VIEWPORT_GRID_ROWS * gridSize);
-  const scale = Math.min(normalizedScale, MAX_VIEWPORT_SCALE);
-  const clampedScale = clampViewportScale(scale);
-  return {
-    scale: clampedScale,
-    x: canvasWidth / 2 - resolved.centerX * clampedScale,
-    y: canvasHeight / 2 - resolved.centerY * clampedScale,
-  };
-}
-
-/// <summary>
-/// Computes a viewport that fits the entire scene inside the canvas with padding.
+/// Computes a viewport that fits the scene inside the canvas, centered on the map.
 /// </summary>
 export function fitViewportToScene(
   scene: Scene,
   canvasWidth: number,
   canvasHeight: number,
 ): Viewport {
-  return viewportForNormalizedScene(scene, canvasWidth, canvasHeight);
-}
-
-/// <summary>
-/// Clamps a player viewport so the screen center stays within playerPanLimit grid units of scene center.
-/// </summary>
-export function clampPlayerViewport(
-  viewport: Viewport,
-  scene: Scene,
-  canvasWidth: number,
-  canvasHeight: number,
-): Viewport {
-  const resolved = withSceneCenter(scene);
-  const limitCells = resolved.playerPanLimit;
-  if (limitCells <= 0) {
-    return viewport;
-  }
-
-  const gridSize = resolved.gridSize > 0 ? resolved.gridSize : 50;
-  const maxOffset = limitCells * gridSize;
-  const worldCenterX = (canvasWidth / 2 - viewport.x) / viewport.scale;
-  const worldCenterY = (canvasHeight / 2 - viewport.y) / viewport.scale;
-  const clampedWorldX = Math.max(
-    resolved.centerX - maxOffset,
-    Math.min(resolved.centerX + maxOffset, worldCenterX),
-  );
-  const clampedWorldY = Math.max(
-    resolved.centerY - maxOffset,
-    Math.min(resolved.centerY + maxOffset, worldCenterY),
-  );
-
+  const width = scene.width || DEFAULT_SCENE_WIDTH;
+  const height = scene.height || DEFAULT_SCENE_HEIGHT;
+  const padding = 48;
+  const gridSize = scene.gridSize > 0 ? scene.gridSize : 50;
+  const normalizedScale = (canvasHeight - padding * 2) / (VIEWPORT_GRID_ROWS * gridSize);
+  const scale = clampViewportScale(Math.min(normalizedScale, MAX_VIEWPORT_SCALE));
   return {
-    scale: viewport.scale,
-    x: canvasWidth / 2 - clampedWorldX * viewport.scale,
-    y: canvasHeight / 2 - clampedWorldY * viewport.scale,
+    scale,
+    x: canvasWidth / 2 - (width / 2) * scale,
+    y: canvasHeight / 2 - (height / 2) * scale,
   };
 }

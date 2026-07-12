@@ -1,0 +1,282 @@
+/* ============================================================================
+   Design tokens — the single re-theming surface.
+   Components consume ONLY these variables; a new skin (or a user CSS theme
+   later) is just a new set of values for these properties.
+
+   Current skin: "Quill & Ember" — a cozy hand-drawn fantasy system (parchment,
+   2px drawn ink outlines, wobble radii, craft shadows). Day is the default;
+   night ("chalk on carved stone") is scoped under [data-theme="night"] on
+   <html>. Ported from the Blue Turtle UI V2 handoff bundle.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* -- Palette --------------------------------------------------------------- */
+  --bg: #e8ddc4; /* warm sand room wash — parchment family, between panel and well */
+  --surface: rgba(237, 229, 209, 0.96); /* parchment panels */
+  --surface-solid: #ede5d1;
+  --surface-2: #e3d8be; /* inset wells, hover fills */
+  --surface-inset: rgba(74, 59, 47, 0.1);
+  --input-bg: rgba(74, 59, 47, 0.07);
+  --border: #4a3b2f; /* drawn ink outlines */
+  --border-subtle: rgba(74, 59, 47, 0.35);
+  --text: #40332a; /* warm ink */
+  --text-muted: #6a5947;
+  --accent: #4f8cbf; /* sky — selection & interaction */
+  --accent-bright: #74b2e0;
+  --on-accent: #f6f0df;
+  --danger: #c05b49; /* terracotta — destructive, close, damage */
+  --danger-strong: #9c4534;
+  --danger-soft: rgba(192, 91, 73, 0.16);
+  --danger-text: #7c3728;
+  --success: #6e8148; /* sage — healing, complete */
+
+  /* Quill & Ember extensions ------------------------------------------------- */
+  --text-faint: #98866b; /* placeholders, ghost text */
+  --text-invert: #f6f0df; /* cream text on wood/slate/ink — both modes */
+  --surface-page: #f4eedf; /* brightest page (hover fills) */
+  --surface-plaque: #b7a585; /* torn tan strip headers */
+  --surface-plaque-2: #a28e6c;
+  --surface-wood: #8a6e52; /* frames, ribbons */
+  --surface-wood-2: #66503a; /* deep wood, stepper plates */
+  --surface-slate: #56688a; /* painted night-sky band (window headers) */
+  --map-bg: #1e1a15; /* tabletop fallback while the scene backdrop loads — always dark */
+  --primary: #e2b458; /* gold — the one main action per view */
+  --primary-strong: #c2913c;
+  --primary-soft: #f1dfae;
+  --on-primary: #3a2e1d; /* dark ink on gold/sky chips — both modes */
+  --accent-soft: #c7dff1;
+  --success-soft: #dde2c6;
+  --backdrop: rgba(52, 38, 28, 0.42);
+
+  /* -- Typography -------------------------------------------------------------
+     display = narrative headers, body = UI text, mono = stats/data. */
+  --font-display: "Alegreya", Georgia, "Times New Roman", serif;
+  --font-body: "PT Sans", "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "PT Mono", Consolas, monospace;
+
+  /* -- Spacing (4px unit) ------------------------------------------------------ */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+
+  /* -- Shape -------------------------------------------------------------------
+     Wobble radii are the hand-drawn signature: four unequal corner pairs so
+     nothing is machine-perfect. Prefer them over the fixed radii where the
+     element is big enough to show it. */
+  --radius: 8px;
+  --radius-lg: 14px;
+  --r-wob-sm: 8px 10px 7px 11px / 10px 7px 11px 8px;
+  --r-wob-md: 14px 11px 15px 10px / 11px 15px 10px 14px;
+  --r-wob-lg: 22px 17px 24px 15px / 17px 23px 15px 22px;
+  --r-wob-pill: 49% 51% 48% 52% / 52% 48% 53% 47%;
+
+  /* -- Elevation (map → cluster → window → modal): warm graphite, not black --- */
+  --elev-1: 0 2px 8px rgba(74, 59, 47, 0.18);
+  --elev-2: 0 8px 26px rgba(74, 59, 47, 0.22);
+  --elev-3: 0 16px 44px rgba(58, 44, 32, 0.3);
+  --shadow: var(--elev-2);
+  --blur: blur(6px);
+
+  /* Craft shadows: panels sit on the table, pressables rest on a "ledge",
+     fields are carved "wells". */
+  --shadow-panel: 0 2px 0 rgba(74, 59, 47, 0.05), 0 10px 26px rgba(74, 59, 47, 0.16);
+  --shadow-pop: 0 4px 0 rgba(74, 59, 47, 0.05), 0 20px 44px rgba(58, 44, 32, 0.3);
+  --shadow-ledge: inset 0 -3px 0 rgba(74, 59, 47, 0.16);
+  --shadow-well: inset 0 2px 5px rgba(74, 59, 47, 0.16);
+  --shadow-lift: 0 6px 14px rgba(74, 59, 47, 0.22);
+
+  /* -- Paper textures (tileable PNGs in public/textures/) --------------------- */
+  --tex-grain: url("/textures/paper-grain.png");
+  --tex-speckle: url("/textures/ink-speckles.png");
+
+  /* -- Motion: press onto the ledge, panels drift up like turned pages -------- */
+  --dur-1: 120ms; /* hover / press */
+  --dur-2: 220ms; /* toggles, fills */
+  --dur-3: 340ms; /* panels, dialogs */
+  --ease-out: cubic-bezier(0.22, 0.9, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.42, 0.44, 1);
+
+  /* -- Edge divots ("notches"): tiny kinks where the drawn outline deflects
+     inward to a point and returns, like a pen skip. Each nick is a small inline
+     SVG (fill patch matching --surface-solid + redrawn kinked stroke matching
+     --border) so the point stays crisp; day/night variants swap here. -- */
+  --notch-l: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='8'%3E%3Crect width='2.4' height='8' fill='%23EDE5D1'/%3E%3Cpolyline points='1,0 1,1.5 3.6,4 1,6.5 1,8' fill='none' stroke='%234A3B2F' stroke-width='2'/%3E%3C/svg%3E");
+  --notch-r: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='8'%3E%3Crect x='2.6' width='2.4' height='8' fill='%23EDE5D1'/%3E%3Cpolyline points='4,0 4,1.5 1.4,4 4,6.5 4,8' fill='none' stroke='%234A3B2F' stroke-width='2'/%3E%3C/svg%3E");
+  --notch-t: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Crect width='8' height='2.4' fill='%23EDE5D1'/%3E%3Cpolyline points='0,1 1.5,1 4,3.6 6.5,1 8,1' fill='none' stroke='%234A3B2F' stroke-width='2'/%3E%3C/svg%3E");
+  --notch-b: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Crect y='2.6' width='8' height='2.4' fill='%23EDE5D1'/%3E%3Cpolyline points='0,4 1.5,4 4,1.4 6.5,4 8,4' fill='none' stroke='%234A3B2F' stroke-width='2'/%3E%3C/svg%3E");
+}
+
+/* ============================================================================
+   Accent variations (Quill & Ember "Variations" cards): alternate interactive
+   accents that replace the sky family + the slate header band. Gold, terra,
+   and sage stay put. Set data-accent="moss|ember|lapis|amethyst|rose|teal" on
+   <html> (no attribute = the default sky). Accents do NOT re-tint the room:
+   every accent shares the paper --bg wash (the bundle's per-accent tinted
+   washes — pink for the red family — read as "the background is pink").
+   Night values are derived (brightened accent on stone).
+   ========================================================================== */
+
+[data-accent="moss"] {
+  /* Moss & Loam — forest library */
+  --accent: #6f8a48;
+  --accent-bright: #93ac66;
+  --accent-soft: #dce3c2;
+  --surface-slate: #5c7155;
+}
+[data-accent="ember"] {
+  /* Ember & Wine — tavern hearth */
+  --accent: #b05f33;
+  --accent-bright: #d08153;
+  --accent-soft: #f2d9c4;
+  --surface-slate: #7a4a52;
+}
+[data-accent="lapis"] {
+  /* Tide & Lapis — coastal ruins */
+  --accent: #4b69a6;
+  --accent-bright: #6d8cc7;
+  --accent-soft: #d3dcef;
+  --surface-slate: #46598c;
+}
+[data-accent="amethyst"] {
+  /* Amethyst & Dusk — arcane sanctum */
+  --accent: #7a52a6;
+  --accent-bright: #9a75c2;
+  --accent-soft: #e3d8ef;
+  --surface-slate: #5d4a7a;
+}
+[data-accent="rose"] {
+  /* Rose & Bramble — briar court */
+  --accent: #b04f78;
+  --accent-bright: #cf7098;
+  --accent-soft: #f2d5e0;
+  --surface-slate: #7a4a5e;
+}
+[data-accent="teal"] {
+  /* Teal & Reef — sunken temple */
+  --accent: #2f8a80;
+  --accent-bright: #4faaa0;
+  --accent-soft: #c9e6e1;
+  --surface-slate: #3f6b64;
+}
+[data-accent="crimson"] {
+  /* Crimson & Garnet — a truer, cooler red than the terracotta DANGER color, so
+     selection/interaction stays distinct from destructive actions. */
+  --accent: #b83232;
+  --accent-bright: #d15c56;
+  --accent-soft: #f2d3ce;
+  --surface-slate: #7a3c3c;
+}
+
+/* Night = stone. Day is ink on paper; night is chalk on carved rock: cool
+   slab grays, blue-gray plaques, basalt frames, near-black incised lines. */
+[data-theme="night"] {
+  color-scheme: dark;
+
+  --bg: #26282e; /* dark stone hall */
+  --surface: rgba(75, 79, 87, 0.97); /* stone slab */
+  --surface-solid: #4b4f57;
+  --surface-2: #40444b; /* carved wells */
+  --surface-inset: rgba(0, 0, 0, 0.3);
+  --input-bg: rgba(0, 0, 0, 0.24);
+  --border: #15161a;
+  --border-subtle: rgba(10, 11, 14, 0.55);
+  --text: #eae7de; /* chalk */
+  --text-muted: #c2c0b6;
+  --accent: #7fb3e2;
+  --accent-bright: #9fc8ec;
+  --on-accent: #1b2b3c;
+  --danger: #cd6a55;
+  --danger-strong: #e08d77;
+  --danger-soft: rgba(205, 106, 85, 0.2);
+  --danger-text: #f2c4b6;
+  --success: #9cb070;
+
+  --text-faint: #92918a;
+  --text-invert: #f6f0df;
+  --surface-page: #5b5f67; /* polished slab face */
+  --surface-plaque: #5a6170; /* blue-gray stone strip */
+  --surface-plaque-2: #4c525f;
+  --surface-wood: #3a3d44; /* basalt frames */
+  --surface-wood-2: #2b2e34;
+  --surface-slate: #3c4c6e;
+  --map-bg: #1f2126;
+  --primary: #e7bc5f;
+  --primary-strong: #f2d186;
+  --primary-soft: #544b31;
+  --on-primary: #3a2e1d;
+  --accent-soft: #31435c;
+  --success-soft: #3d4432;
+  --backdrop: rgba(8, 9, 13, 0.6);
+
+  --elev-1: 0 2px 8px rgba(6, 4, 10, 0.45);
+  --elev-2: 0 8px 26px rgba(6, 4, 10, 0.55);
+  --elev-3: 0 16px 44px rgba(6, 4, 10, 0.65);
+
+  --shadow-panel: 0 2px 0 rgba(0, 0, 0, 0.12), 0 12px 28px rgba(8, 5, 12, 0.5);
+  --shadow-pop: 0 4px 0 rgba(0, 0, 0, 0.12), 0 22px 48px rgba(6, 4, 10, 0.65);
+  --shadow-ledge: inset 0 -3px 0 rgba(0, 0, 0, 0.3);
+  --shadow-well: inset 0 2px 5px rgba(0, 0, 0, 0.35);
+  --shadow-lift: 0 6px 14px rgba(6, 4, 10, 0.5);
+
+  --notch-l: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='8'%3E%3Crect width='2.4' height='8' fill='%234B4F57'/%3E%3Cpolyline points='1,0 1,1.5 3.6,4 1,6.5 1,8' fill='none' stroke='%2315161A' stroke-width='2'/%3E%3C/svg%3E");
+  --notch-r: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='8'%3E%3Crect x='2.6' width='2.4' height='8' fill='%234B4F57'/%3E%3Cpolyline points='4,0 4,1.5 1.4,4 4,6.5 4,8' fill='none' stroke='%2315161A' stroke-width='2'/%3E%3C/svg%3E");
+  --notch-t: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Crect width='8' height='2.4' fill='%234B4F57'/%3E%3Cpolyline points='0,1 1.5,1 4,3.6 6.5,1 8,1' fill='none' stroke='%2315161A' stroke-width='2'/%3E%3C/svg%3E");
+  --notch-b: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Crect y='2.6' width='8' height='2.4' fill='%234B4F57'/%3E%3Cpolyline points='0,4 1.5,4 4,1.4 6.5,4 8,4' fill='none' stroke='%2315161A' stroke-width='2'/%3E%3C/svg%3E");
+}
+
+/* Accent variations at night: keep the stone walls, brighten the accent so it
+   reads as chalk-lit; slate bands go to the variation's dark stone. (Derived —
+   the bundle's variation cards are day-only.) */
+[data-theme="night"][data-accent="moss"] {
+  --accent: #a3bc74;
+  --accent-bright: #bcd293;
+  --accent-soft: #3c452d;
+  --on-accent: #1f2a12;
+  --surface-slate: #465542;
+}
+[data-theme="night"][data-accent="ember"] {
+  --accent: #d98f63;
+  --accent-bright: #e7ac85;
+  --accent-soft: #4e3327;
+  --on-accent: #38200f;
+  --surface-slate: #5c3a40;
+}
+[data-theme="night"][data-accent="lapis"] {
+  --accent: #8aa4d8;
+  --accent-bright: #a8bee8;
+  --accent-soft: #303c57;
+  --on-accent: #16233f;
+  --surface-slate: #3a4a75;
+}
+[data-theme="night"][data-accent="amethyst"] {
+  --accent: #b295d6;
+  --accent-bright: #cab2e6;
+  --accent-soft: #382e4e;
+  --on-accent: #241638;
+  --surface-slate: #493c66;
+}
+[data-theme="night"][data-accent="rose"] {
+  --accent: #d98aac;
+  --accent-bright: #e7a8c2;
+  --accent-soft: #4e2b3a;
+  --on-accent: #38182a;
+  --surface-slate: #5c3a4a;
+}
+[data-theme="night"][data-accent="teal"] {
+  --accent: #63c0b4;
+  --accent-bright: #8ad6cc;
+  --accent-soft: #26443f;
+  --on-accent: #10302b;
+  --surface-slate: #35594f;
+}
+[data-theme="night"][data-accent="crimson"] {
+  --accent: #dd7168;
+  --accent-bright: #ea968f;
+  --accent-soft: #4e2c29;
+  --on-accent: #3a1613;
+  --surface-slate: #5c3838;
+}

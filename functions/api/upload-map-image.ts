@@ -1,4 +1,4 @@
-import { handleImageUpload } from "../_shared/imageUpload";
+import { handleImageUpload, roomKeyPrefix } from "../_shared/imageUpload";
 
 /// <summary>
 /// Accepts map layer image uploads and stores them in R2 for production deployments.
@@ -13,7 +13,7 @@ export const onRequestPost: PagesFunction = async (context) =>
       if (!body.layerId || typeof body.layerId !== "string") {
         throw new Error("Missing layer id.");
       }
-      return `maps/${body.sceneId}-${body.layerId}.${ext}`;
+      return `maps/${roomKeyPrefix(body)}${body.sceneId}-${body.layerId}.${ext}`;
     },
     buildUrl: (key) => `/${key}`,
     extraFields: (body) => ({

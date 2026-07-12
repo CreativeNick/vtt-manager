@@ -1,4 +1,4 @@
-import { handleImageUpload } from "../_shared/imageUpload";
+import { handleImageUpload, roomKeyPrefix } from "../_shared/imageUpload";
 
 /// <summary>
 /// Accepts portrait uploads and stores them in R2 for production deployments.
@@ -10,7 +10,7 @@ export const onRequestPost: PagesFunction = async (context) =>
       if (!body.slotId || typeof body.slotId !== "string") {
         throw new Error("Missing slot id.");
       }
-      return `portraits/${body.slotId}.${ext}`;
+      return `portraits/${roomKeyPrefix(body)}${body.slotId}.${ext}`;
     },
     buildUrl: (key) => `/${key}`,
   });

@@ -2,7 +2,7 @@ import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import type { CampaignManifest } from "../src/lib/campaignManifest";
-import { normalizeScene } from "../src/lib/sceneUtils";
+import { normalizeScene } from "../src/lib/types";
 
 const MANIFEST_RELATIVE = join("public", "campaign", "scenes.json");
 

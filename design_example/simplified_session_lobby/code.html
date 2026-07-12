@@ -1,0 +1,311 @@
+<!DOCTYPE html><html class="dark" lang="en"><head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <title>MythicScribe VTT - Session Lobby</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;500;600;700;800&amp;family=Libre+Franklin:wght@300;400;500;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+    <style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .parchment-bg {
+            background-color: #d1c5b4;
+            background-image: url("https://www.transparenttextures.com/patterns/parchment.png");
+        }
+        .obsidian-panel {
+            background: rgba(13, 13, 13, 0.95);
+            border: 1px solid #2a2a2a;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+        }
+        .gold-glow:hover {
+            box-shadow: 0 0 15px #c5a059;
+            transition: all 0.3s ease;
+        }
+        .cinematic-overlay {
+            background: radial-gradient(circle, transparent 20%, rgba(13, 13, 13, 0.8) 100%);
+        }
+        .panel-header-line {
+            display: flex;
+            align-items: center;
+            text-align: center;
+        }
+        .panel-header-line::before,
+        .panel-header-line::after {
+            content: '';
+            flex: 1;
+            border-bottom: 1px solid rgba(233, 193, 118, 0.3);
+        }
+        .panel-header-line:not(:empty)::before {
+            margin-right: 1rem;
+        }
+        .panel-header-line:not(:empty)::after {
+            margin-left: 1rem;
+        }
+    </style>
+    <script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-tertiary-fixed-variant": "#474746",
+                    "surface-bright": "#3a3939",
+                    "primary": "#e9c176",
+                    "surface-container-highest": "#353534",
+                    "primary-fixed": "#ffdea5",
+                    "tertiary-container": "#a7a5a5",
+                    "error": "#ffb4ab",
+                    "outline-variant": "#4e4639",
+                    "surface-container-low": "#1c1b1b",
+                    "on-surface": "#e5e2e1",
+                    "inverse-primary": "#775a19",
+                    "on-secondary-container": "#c3b491",
+                    "secondary": "#d5c5a1",
+                    "on-secondary-fixed-variant": "#50462a",
+                    "outline": "#9a8f80",
+                    "on-secondary": "#392f16",
+                    "tertiary-fixed": "#e5e2e1",
+                    "surface-container-high": "#2a2a2a",
+                    "on-primary-container": "#4e3700",
+                    "inverse-on-surface": "#313030",
+                    "surface-container": "#201f1f",
+                    "on-primary-fixed-variant": "#5d4201",
+                    "surface-dim": "#131313",
+                    "surface": "#131313",
+                    "primary-fixed-dim": "#e9c176",
+                    "secondary-container": "#50462a",
+                    "on-primary": "#412d00",
+                    "on-tertiary-container": "#3b3b3b",
+                    "surface-variant": "#353534",
+                    "primary-container": "#c5a059",
+                    "on-secondary-fixed": "#231b04",
+                    "secondary-fixed-dim": "#d5c5a1",
+                    "tertiary-fixed-dim": "#c8c6c5",
+                    "on-error-container": "#ffdad6",
+                    "on-tertiary-fixed": "#1c1b1b",
+                    "secondary-fixed": "#f2e1bb",
+                    "on-background": "#e5e2e1",
+                    "surface-container-lowest": "#0e0e0e",
+                    "on-tertiary": "#313030",
+                    "on-error": "#690005",
+                    "on-surface-variant": "#d1c5b4",
+                    "error-container": "#93000a",
+                    "tertiary": "#c8c6c5",
+                    "on-primary-fixed": "#261900",
+                    "inverse-surface": "#e5e2e1",
+                    "surface-tint": "#e9c176",
+                    "background": "#131313"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "panel-padding": "20px",
+                    "stack-md": "16px",
+                    "gutter": "16px",
+                    "margin-edge": "24px",
+                    "unit": "4px",
+                    "stack-sm": "8px"
+            },
+            "fontFamily": {
+                    "body-lg": ["Libre Franklin"],
+                    "stats-sm": ["JetBrains Mono"],
+                    "body-md": ["Libre Franklin"],
+                    "headline-md": ["EB Garamond"],
+                    "stats-lg": ["JetBrains Mono"],
+                    "display-lg": ["EB Garamond"],
+                    "headline-lg": ["EB Garamond"],
+                    "label-caps": ["Libre Franklin"]
+            },
+            "fontSize": {
+                    "body-lg": ["18px", {"lineHeight": "28px", "fontWeight": "400"}],
+                    "stats-sm": ["14px", {"lineHeight": "18px", "letterSpacing": "0.05em", "fontWeight": "500"}],
+                    "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "500"}],
+                    "stats-lg": ["20px", {"lineHeight": "24px", "fontWeight": "600"}],
+                    "display-lg": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "600"}],
+                    "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "500"}],
+                    "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700"}]
+            }
+          },
+        },
+      }
+    </script>
+</head>
+<body class="bg-background text-on-surface font-body-md min-h-screen selection:bg-primary/30 overflow-x-hidden">
+<!-- Cinematic Background -->
+<div class="fixed inset-0 z-0">
+<div class="absolute inset-0 bg-cover bg-center" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuB9xrmyv_WX5dZVYqNA11yyLPO4O_NKufFomLeOtS2oArqvmSH-YEhM5P1MTLFuDH0-nDvTGsTbuWqCf5VSwsLnevW8rEssXc9xECSjTCu2cr4YivbcfoIJFGp8XWNrhhl3HHbo9E4MeH0_kIwvf5H8r7QbEp2GRHlVoZWsrIOFD4AalCYYDU02WdlM976_-8h115jXmWKuW5uGo6YDLG42stMpDTZ2uOQSJVKbXTZFOXyEnrRPSXqE3Q')">
+</div>
+<div class="absolute inset-0 cinematic-overlay"></div>
+</div>
+<!-- Main Content Canvas -->
+<main class="relative z-10 min-h-screen flex flex-col items-center justify-center p-8">
+<!-- Central Logo & Title -->
+<div class="mb-12 flex flex-col items-center text-center">
+<div class="relative w-24 h-24 mb-4 flex items-center justify-center">
+<svg class="w-full h-full text-primary drop-shadow-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+<path d="M12 2L3 7v10l9 5 9-5V7l-9-5zM12 2v20M3 7l18 10M3 17l18-10"></path>
+</svg>
+<span class="absolute inset-0 flex items-center justify-center font-display-lg text-primary text-3xl">8</span>
+</div>
+<h1 class="font-display-lg text-display-lg text-on-surface drop-shadow-[0_2px_10px_rgba(0,0,0,0.8)] tracking-wide uppercase">
+            The Shadow of Aethelgard
+        </h1>
+<p class="font-headline-md text-primary italic mt-2 opacity-80">MythicScribe VTT</p>
+</div>
+<!-- Modular Panels Container -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-8 w-full max-w-6xl">
+<!-- Left Column: Sessions & Details -->
+<div class="space-y-6">
+<!-- Join Game Session Panel -->
+<div class="obsidian-panel rounded-xl p-8">
+<h3 class="panel-header-line font-label-caps text-primary text-lg mb-8 uppercase tracking-[0.2em]">Join Game Session</h3>
+<div class="space-y-4">
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute left-3 text-on-surface-variant">person</span>
+<select class="w-full bg-surface-container border border-outline-variant rounded-lg py-3 pl-10 pr-4 text-on-surface focus:ring-1 focus:ring-primary focus:border-primary appearance-none">
+<option>Select Character...</option>
+<option>Valerius (Paladin)</option>
+<option>Lyra (Druid)</option>
+<option>Malakai (Warlock)</option>
+</select>
+</div>
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute left-3 text-on-surface-variant">key</span>
+<input type="password" placeholder="Session Password" class="w-full bg-surface-container border border-outline-variant rounded-lg py-3 pl-10 pr-4 text-on-surface focus:ring-1 focus:ring-primary focus:border-primary placeholder:text-on-surface-variant/50">
+</div>
+<button class="w-full py-4 bg-primary text-on-primary font-bold rounded-lg shadow-lg gold-glow transition-all active:scale-[0.98] flex items-center justify-center gap-2" id="launchBtn">
+<span class="material-symbols-outlined text-[20px]">check</span>
+                        JOIN GAME SESSION
+                    </button>
+</div>
+</div>
+<!-- Game Details Panel -->
+<div class="obsidian-panel rounded-xl p-8">
+<h3 class="panel-header-line font-label-caps text-primary text-lg mb-6 uppercase tracking-[0.2em]">Game Details</h3>
+<div class="space-y-4 text-on-surface-variant">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary">schedule</span>
+<span class="font-label-caps">Next Session</span>
+</div>
+<span class="text-on-surface font-stats-sm">Today, 8:00 PM EST</span>
+</div>
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary">groups</span>
+<span class="font-label-caps">Current Players</span>
+</div>
+<span class="text-on-surface font-stats-sm">4 / 5</span>
+</div>
+<div class="pt-4 mt-4 border-t border-outline-variant/30 flex gap-4">
+<button class="flex-1 py-2 border border-outline-variant rounded-lg text-sm hover:bg-surface-bright/20 transition-colors font-label-caps">DASHBOARD</button>
+<button class="flex-1 py-2 border border-outline-variant rounded-lg text-sm hover:bg-surface-bright/20 transition-colors font-label-caps">COMPENDIUM</button>
+</div>
+</div>
+</div>
+<!-- Admin / Setup Panel -->
+<div class="obsidian-panel rounded-xl p-8">
+<h3 class="panel-header-line font-label-caps text-primary text-lg mb-6 uppercase tracking-[0.2em]">Return to Setup</h3>
+<div class="space-y-4">
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute left-3 text-on-surface-variant">lock</span>
+<input type="password" placeholder="Administrator Password" class="w-full bg-surface-container border border-outline-variant rounded-lg py-3 pl-10 pr-4 text-on-surface focus:ring-1 focus:ring-primary focus:border-primary placeholder:text-on-surface-variant/50 text-sm">
+</div>
+<button class="w-full py-3 bg-surface-container-high border border-outline-variant text-on-surface font-medium rounded-lg hover:bg-surface-bright/30 transition-all text-sm flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-[18px]">settings</span>
+                        RETURN TO SETUP
+                    </button>
+</div>
+</div>
+</div>
+<!-- Right Column: World Description -->
+<div class="h-full">
+<div class="obsidian-panel rounded-xl p-10 h-full flex flex-col">
+<h3 class="panel-header-line font-label-caps text-primary text-lg mb-8 uppercase tracking-[0.2em]">World Description</h3>
+<div class="flex-1 parchment-bg rounded-lg p-8 text-on-tertiary overflow-y-auto">
+<h4 class="font-headline-md mb-4 border-b border-on-tertiary/20 pb-2">Chapter IV: Whispers from the Void</h4>
+<div class="font-body-lg italic space-y-4 opacity-90 leading-relaxed">
+<p>"The party escaped the crumbling ruins of the Sunken Citadel just as the tide rose. Having recovered the Obsidian Seal, they must now decide whether to return it to the High Council or trade it for their freedom in the black markets of Tortuga Bay..."</p>
+<p>Shadows lengthen across the continent of Aethelgard as the twin moons eclipse. Strange whispers emanate from the void, calling to those who would dare to listen. In the docks of Tortuga Bay, a new contact awaits, promising secrets long forgotten.</p>
+</div>
+<div class="mt-8 grid grid-cols-2 gap-4">
+<div class="bg-black/5 p-4 rounded border border-black/10">
+<span class="font-label-caps block opacity-60 text-[10px]">CURRENT LOCATION</span>
+<span class="font-body-md font-bold">Tortuga Bay Docks</span>
+</div>
+<div class="bg-black/5 p-4 rounded border border-black/10">
+<span class="font-label-caps block opacity-60 text-[10px]">WORLD CALENDAR</span>
+<span class="font-body-md font-bold">14th of Highsun</span>
+</div>
+</div>
+</div>
+<div class="mt-6 flex justify-between items-center px-2">
+<div class="flex items-center gap-2">
+<div class="w-2 h-2 rounded-full bg-primary animate-pulse"></div>
+<span class="text-xs font-label-caps text-on-surface-variant">SERVER ONLINE</span>
+</div>
+<span class="text-[10px] font-stats-sm text-on-surface-variant/40">v2.4.0-build.712</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Footer build info -->
+<footer class="mt-12 opacity-30 text-[10px] font-stats-sm uppercase tracking-widest text-center">
+        MythicScribe VTT © 2024 • Version 11 Build 300
+    </footer>
+</main>
+<!-- Ambient Particles (Visual Flavor) -->
+<div class="fixed inset-0 pointer-events-none z-20" id="particle-container"></div>
+<script>
+    // Simple Ambient Particles
+    function createParticle() {
+        const container = document.getElementById('particle-container');
+        if (!container) return;
+        const p = document.createElement('div');
+        const size = Math.random() * 3 + 1;
+        p.style.width = size + 'px';
+        p.style.height = size + 'px';
+        p.style.backgroundColor = '#e9c176';
+        p.style.position = 'absolute';
+        p.style.left = Math.random() * 100 + 'vw';
+        p.style.top = '100vh';
+        p.style.borderRadius = '50%';
+        p.style.opacity = Math.random() * 0.3;
+        p.style.filter = 'blur(1px)';
+        
+        container.appendChild(p);
+
+        const duration = Math.random() * 8000 + 7000;
+        const animation = p.animate([
+            { transform: `translateY(0) translateX(0)`, opacity: p.style.opacity },
+            { transform: `translateY(-110vh) translateX(${(Math.random() - 0.5) * 150}px)`, opacity: 0 }
+        ], {
+            duration: duration,
+            easing: 'linear'
+        });
+
+        animation.onfinish = () => p.remove();
+    }
+
+    setInterval(createParticle, 800);
+
+    // Launch Button Micro-interaction
+    const launchBtn = document.getElementById('launchBtn');
+    launchBtn.addEventListener('click', () => {
+        const originalText = launchBtn.innerHTML;
+        launchBtn.innerHTML = '<span class="material-symbols-outlined animate-spin">progress_activity</span> ENTERING REALM...';
+        launchBtn.classList.add('opacity-80');
+        setTimeout(() => {
+            alert('Connecting to Aethelgard... Prepare for adventure.');
+            launchBtn.innerHTML = originalText;
+            launchBtn.classList.remove('opacity-80');
+        }, 1500);
+    });
+</script>
+</body></html>
